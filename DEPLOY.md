@@ -1,99 +1,72 @@
 # 璇玑智脑 - Zeabur 部署指南
 
-## 前置准备
+## 快速部署
 
-1. 注册 [Zeabur](https://zeabur.com) 账号
-2. 准备 MySQL 数据库（可在 Zeabur 上创建或自行准备）
-3. 确保 GitHub 仓库已上传代码（不含 `.env`）
-
-## 部署步骤
-
-### 第一步：创建 GitHub 仓库
-
-将代码推送到 GitHub（**不要包含 `.env` 文件**）：
-
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-git remote add origin https://github.com/YOUR_USERNAME/xuanji-brain.git
-git push -u origin main
-```
-
-### 第二步：在 Zeabur 上部署
+### 第一步：在 Zeabur 上创建项目
 
 1. 登录 [Zeabur Dashboard](https://dash.zeabur.com)
 2. 点击 **Create Project**
 3. 选择 **Deploy from GitHub**
-4. 选择你的仓库，Zeabur 会自动识别 `Dockerfile`
-5. 等待构建完成
+4. 选择仓库 `luciferlihaoyu/xuanji11`
+5. Zeabur 会自动识别 `Dockerfile` 并构建
 
-### 第三步：配置环境变量
+### 第二步：配置环境变量
 
-在 Zeabur 项目 → 你的服务 → **Variables** 中添加以下环境变量：
+在 Zeabur 项目 → 你的服务 → **Variables** 中添加：
 
-| 变量名 | 说明 | 示例值 |
-|--------|------|--------|
-| `DATABASE_URL` | MySQL 连接字符串 | `mysql://user:pass@host:3306/dbname` |
-| `APP_ID` | Kimi 应用 ID | `19e86xxx-xxx-xxx` |
-| `APP_SECRET` | Kimi 应用密钥 | `Vp8Hxxx...` |
-| `KIMI_AUTH_URL` | Kimi 认证地址 | `https://auth.kimi.com` |
-| `KIMI_OPEN_URL` | Kimi Open API | `https://open.kimi.com` |
-| `VITE_APP_ID` | 前端 Kimi 应用 ID（同 APP_ID） | `19e86xxx-xxx-xxx` |
-| `VITE_KIMI_AUTH_URL` | 前端认证地址 | `https://auth.kimi.com` |
-| `OWNER_UNION_ID` | 管理员 Union ID | `d4im8se6s4t8dkpp6670` |
+| 变量 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| `ADMIN_USERNAME` | 是 | `admin` | 管理员登录账号 |
+| `ADMIN_PASSWORD` | 是 | `xuanji123456` | 管理员登录密码 |
+| `DATABASE_URL` | 是 | - | MySQL 连接字符串 |
+| `JWT_SECRET` | 否 | 自动生成 | JWT 签名密钥（建议设置随机字符串）|
 
-### 第四步：初始化数据库
+### 第三步：初始化数据库
 
-部署完成后，需要同步数据库 Schema：
-
-1. 在 Zeabur 中找到你的服务
-2. 点击 **Console** 或 **Terminal**
-3. 运行数据库推送命令：
+部署完成后，进入 Console/Terminal：
 
 ```bash
 npx drizzle-kit push
 ```
 
-或者如果你有 Drizzle Studio 访问权限，也可以通过 Studio 管理。
+### 第四步：登录使用
 
-### 第五步：绑定域名（可选）
+访问部署后的域名，使用配置的管理员账号密码登录。
 
-1. 在 Zeabur 服务 → **Domains** 中
-2. 点击 **Generate Domain** 获取 `.zeabur.app` 域名
-3. 或绑定自定义域名
+---
 
-## 验证部署
+## 可选：启用 Kimi OAuth
 
-部署完成后，访问以下地址验证：
+如需支持 Kimi 账号登录（不配置则仅使用管理员账号）：
 
-| 端点 | 说明 |
+| 变量 | 说明 |
 |------|------|
-| `https://your-app.zeabur.app` | 前端页面 |
-| `https://your-app.zeabur.app/api/trpc/ping` | API 健康检查 |
-| `https://your-app.zeabur.app/api/oauth/callback` | OAuth 回调地址 |
+| `APP_ID` | Kimi 应用 ID |
+| `APP_SECRET` | Kimi 应用密钥 |
+| `VITE_APP_ID` | 同 APP_ID |
+| `VITE_KIMI_AUTH_URL` | `https://auth.kimi.com` |
+| `OWNER_UNION_ID` | 管理员 Union ID |
 
-## 更新部署
+在 Kimi 开放平台配置回调地址为 `https://your-app.zeabur.app/api/oauth/callback`
 
-每次推送代码到 GitHub 主分支，Zeabur 会自动重新构建和部署。
-
-```bash
-git add .
-git commit -m "Update features"
-git push
-```
+---
 
 ## 常见问题
 
 ### 数据库连接失败
 - 检查 `DATABASE_URL` 是否正确
 - 确保 MySQL 允许远程连接
-- 检查防火墙设置
 
-### OAuth 登录失败
-- 确认 `APP_ID` 和 `APP_SECRET` 正确
-- 在 Kimi 开放平台配置回调地址为 `https://your-app.zeabur.app/api/oauth/callback`
+### 忘记密码
+- 在 Zeabur Variables 中修改 `ADMIN_PASSWORD`
+- 重新部署即可生效
 
-### 构建失败
-- 检查 Dockerfile 是否存在
-- 查看 Zeabur 构建日志排查错误
+### 更新部署
+
+推送代码到 GitHub 主分支，Zeabur 自动重新构建：
+
+```bash
+git add .
+git commit -m "更新描述"
+git push
+```
