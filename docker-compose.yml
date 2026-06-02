@@ -1,0 +1,37 @@
+# ============================================================
+# 璇玑智脑 - 本地 Docker Compose 测试配置
+# 
+# 使用方法:
+#   1. 复制 .env 为 .env.local 并修改数据库连接
+#   2. docker compose up --build
+#   3. 访问 http://localhost:3000
+# ============================================================
+
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # 以下环境变量请在 Zeabur 面板中配置
+      - DATABASE_URL=${DATABASE_URL}
+      - APP_ID=${APP_ID}
+      - APP_SECRET=${APP_SECRET}
+      - KIMI_AUTH_URL=${KIMI_AUTH_URL}
+      - KIMI_OPEN_URL=${KIMI_OPEN_URL}
+      - VITE_APP_ID=${VITE_APP_ID}
+      - VITE_KIMI_AUTH_URL=${VITE_KIMI_AUTH_URL}
+      - OWNER_UNION_ID=${OWNER_UNION_ID}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/trpc/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
