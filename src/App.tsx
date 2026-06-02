@@ -12,6 +12,8 @@ import UploadPage from '@/pages/UploadPage';
 import SearchResults from '@/pages/SearchResults';
 import DocumentDetail from '@/pages/DocumentDetail';
 import Settings from '@/pages/Settings';
+import Login from "./pages/Login"
+import NotFound from "./pages/NotFound"
 
 function ThemeInit() {
   const theme = useAppStore((s) => s.theme);
@@ -40,6 +42,8 @@ function App() {
           <Route path="/doc/:id" element={<DocumentDetail />} />
           <Route path="/settings/:category" element={<Settings />} />
         </Route>
+        <Route path="/login" element={<Login />} />
+        <Route path="*" element={<NotFound />} />
       </Routes>
     </HashRouter>
   );
