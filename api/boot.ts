@@ -6,18 +6,87 @@ import { appRouter } from "./router";
 import { createContext } from "./context";
 import { env } from "./lib/env";
 import { Paths } from "@contracts/constants";
+import { saveUploadedFile, deleteUploadedFile, getFileStream } from "./upload-handler";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
+// 文件上传路由（50MB 限制）
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 
-// Kimi OAuth callback（可选，仅在配置了 APP_ID 时启用）
+// Kimi OAuth callback（可选）
 if (env.appId && env.appSecret) {
   const { createOAuthCallbackHandler } = await import("./kimi/auth");
   app.get(Paths.oauthCallback, createOAuthCallbackHandler());
 }
 
-// tRPC API
+// ========== 文件上传 API ==========
+
+// 上传文件（multipart/form-data）
+app.post("/api/upload", async (c) => {
+  try {
+    const formData = await c.req.formData();
+    const files = formData.getAll("files") as File[];
+
+    if (!files || files.length === 0) {
+      return c.json({ error: "未选择文件" }, 400);
+    }
+
+    const results = [];
+    for (const file of files) {
+      if (!(file instanceof File)) continue;
+      const result = await saveUploadedFile(file);
+      results.push(result);
+    }
+
+    return c.json({
+      success: true,
+      files: results,
+      count: results.length,
+    });
+  } catch (err) {
+    console.error("[Upload] Error:", err);
+    return c.json({ error: "上传失败: " + (err instanceof Error ? err.message : String(err)) }, 500);
+  }
+});
+
+// 获取文件列表
+app.get("/api/upload/list", async (c) => {
+  try {
+    const { getDb } = await import("./queries/connection");
+    const { uploadedFiles } = await import("@db/schema");
+    const { desc } = await import("drizzle-orm");
+    const db = getDb();
+    const files = await db.select().from(uploadedFiles).orderBy(desc(uploadedFiles.createdAt));
+    return c.json({ success: true, files });
+  } catch (err) {
+    return c.json({ error: String(err) }, 500);
+  }
+});
+
+// 删除上传的文件
+app.delete("/api/upload/:id", async (c) => {
+  try {
+    const id = parseInt(c.req.param("id"));
+    if (isNaN(id)) return c.json({ error: "无效的文件ID" }, 400);
+    const success = await deleteUploadedFile(id);
+    return c.json({ success });
+  } catch (err) {
+    return c.json({ error: String(err) }, 500);
+  }
+});
+
+// 下载/查看上传的文件
+app.get("/api/files/:filename", async (c) => {
+  const filename = c.req.param("filename");
+  const fileInfo = getFileStream(filename);
+  if (!fileInfo) return c.json({ error: "文件不存在" }, 404);
+
+  c.header("Content-Type", fileInfo.mimeType);
+  // 使用 Bun 或 Node 的流式响应
+  return new Response(fileInfo.stream as unknown as ReadableStream);
+});
+
+// ========== tRPC API ==========
 app.use("/api/trpc/*", async (c) => {
   return fetchRequestHandler({
     endpoint: "/api/trpc",
