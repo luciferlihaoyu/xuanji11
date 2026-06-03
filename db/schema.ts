@@ -294,13 +294,7 @@ export const uploadedFiles = mysqlTable("uploaded_files", {
   metadata: json("metadata").$type<Record<string, unknown>>(),
   uploadedBy: bigint("uploadedBy", { mode: "number", unsigned: true }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-}, (table) => [
-  foreignKey({
-    columns: [table.uploadedBy],
-    foreignColumns: [users.id],
-    name: "uploaded_files_user_fk",
-  }),
-]);
+});
 
 export type UploadedFile = typeof uploadedFiles.$inferSelect;
 export type InsertUploadedFile = typeof uploadedFiles.$inferInsert;

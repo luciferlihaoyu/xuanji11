@@ -43,6 +43,7 @@ export async function saveUploadedFile(
     size: file.size,
     storagePath: storagePath,
     metadata: { uploadedAt: new Date().toISOString() },
+    uploadedBy: null,
   });
 
   const id = Number(result[0].insertId);
