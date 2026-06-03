@@ -1,12 +1,12 @@
 import { z } from "zod";
 import { eq, desc, like, or } from "drizzle-orm";
-import { createRouter, publicQuery } from "./middleware";
+import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { agents } from "@db/schema";
 import { clean } from "./lib/clean";
 
 export const agentRouter = createRouter({
-  list: publicQuery
+  list: adminQuery
     .input(
       z.object({
         search: z.string().optional(),
@@ -36,7 +36,7 @@ export const agentRouter = createRouter({
         .orderBy(desc(agents.updatedAt));
     }),
 
-  getById: publicQuery
+  getById: authedQuery
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -44,7 +44,7 @@ export const agentRouter = createRouter({
       return results[0] ?? null;
     }),
 
-  create: publicQuery
+  create: adminQuery
     .input(
       z.object({
         name: z.string().min(1).max(255),
@@ -71,7 +71,7 @@ export const agentRouter = createRouter({
       return { id: Number(result[0].insertId) };
     }),
 
-  update: publicQuery
+  update: adminQuery
     .input(
       z.object({
         id: z.number(),
@@ -91,7 +91,7 @@ export const agentRouter = createRouter({
       return { success: true };
     }),
 
-  delete: publicQuery
+  delete: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();
@@ -99,7 +99,7 @@ export const agentRouter = createRouter({
       return { success: true };
     }),
 
-  updatePermissions: publicQuery
+  updatePermissions: adminQuery
     .input(
       z.object({
         id: z.number(),
