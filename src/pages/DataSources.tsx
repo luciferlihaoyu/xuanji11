@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { Cloud, HardDrive, Link2, FolderOpen, RefreshCw, Plus, X, Check, Trash2, Pencil } from 'lucide-react';
 import { useDataSources } from '@/hooks/useDataSources';
 
-const TYPE_CONFIG: Record<string, { icon: typeof Cloud; color: string; label: string }> = {
+// 平台配置（显示用）
+const PLATFORM_CONFIG: Record<string, { icon: typeof Cloud; color: string; label: string; hint?: string }> = {
+  // 类型
   cloud_drive: { icon: Cloud, color: '#22D3EE', label: '云盘' },
   nas: { icon: HardDrive, color: '#A78BFA', label: 'NAS' },
   api: { icon: Link2, color: '#34D399', label: 'API' },
@@ -11,8 +13,12 @@ const TYPE_CONFIG: Record<string, { icon: typeof Cloud; color: string; label: st
   obsidian: { icon: FolderOpen, color: '#A78BFA', label: 'Obsidian' },
   notion: { icon: FolderOpen, color: '#FBBF24', label: 'Notion' },
   rss: { icon: Link2, color: '#FB923C', label: 'RSS' },
+  // 具体平台
+  '115': { icon: Cloud, color: '#FF6B35', label: '115网盘', hint: '需到 open.115.com 申请开发者' },
+  aliyundrive: { icon: Cloud, color: '#00C6FF', label: '阿里云盘', hint: '需到 alipan.com/developer 申请开发者' },
 };
 
+// 类型选项
 const TYPE_OPTIONS = [
   { value: 'cloud_drive', label: '云盘' },
   { value: 'nas', label: 'NAS' },
@@ -22,6 +28,12 @@ const TYPE_OPTIONS = [
   { value: 'rss', label: 'RSS' },
   { value: 'obsidian', label: 'Obsidian' },
   { value: 'notion', label: 'Notion' },
+];
+
+// 云盘平台选项
+const CLOUD_PLATFORMS = [
+  { value: '115', label: '115网盘' },
+  { value: 'aliyundrive', label: '阿里云盘' },
 ];
 
 export default function DataSources() {
@@ -37,13 +49,13 @@ export default function DataSources() {
 
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [form, setForm] = useState({ name: '', type: 'api' as string, url: '', apiKey: '', syncInterval: 'manual' });
+  const [form, setForm] = useState({ name: '', type: 'api' as string, platform: '' as string, url: '', apiKey: '', refreshToken: '', syncInterval: 'manual' });
   const [syncingIds, setSyncingIds] = useState<Set<number>>(new Set());
   const [testingIds, setTestingIds] = useState<Set<number>>(new Set());
 
   const handleOpenCreate = () => {
     setEditingId(null);
-    setForm({ name: '', type: 'api', url: '', apiKey: '', syncInterval: 'manual' });
+    setForm({ name: '', type: 'api', platform: '', url: '', apiKey: '', refreshToken: '', syncInterval: 'manual' });
     setShowModal(true);
   };
 
@@ -53,8 +65,10 @@ export default function DataSources() {
     setForm({
       name: (ds.name as string) || '',
       type: (ds.type as string) || 'api',
+      platform: (config.platform as string) || '',
       url: (config.url as string) || '',
       apiKey: (config.apiKey as string) || '',
+      refreshToken: (config.refreshToken as string) || '',
       syncInterval: (config.syncInterval as string) || 'manual',
     });
     setShowModal(true);
@@ -63,17 +77,21 @@ export default function DataSources() {
   const handleSave = async () => {
     if (!form.name.trim()) return;
     try {
+      const config: Record<string, unknown> = {
+        url: form.url,
+        apiKey: form.apiKey,
+        refreshToken: form.refreshToken,
+        syncInterval: form.syncInterval,
+      };
+      if (form.platform) config.platform = form.platform;
+
       if (editingId) {
-        await update({
-          id: editingId,
-          name: form.name,
-          config: { url: form.url, apiKey: form.apiKey, syncInterval: form.syncInterval },
-        });
+        await update({ id: editingId, name: form.name, config });
       } else {
         await create({
           name: form.name,
           type: form.type as "cloud_drive" | "nas" | "database" | "api" | "webhook" | "rss" | "notion" | "obsidian",
-          config: { url: form.url, apiKey: form.apiKey, syncInterval: form.syncInterval },
+          config,
         });
       }
       setShowModal(false);
@@ -162,11 +180,13 @@ export default function DataSources() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mb-8">
           {dataSources.map((source) => {
-            const config = TYPE_CONFIG[source.type] || TYPE_CONFIG.api;
+            // 优先使用平台配置，再回退到类型配置
+            const dsConfig: Record<string, string> = (source.config as Record<string, string>) || {};
+            const platform = dsConfig.platform;
+            const config = (platform && PLATFORM_CONFIG[platform]) || PLATFORM_CONFIG[source.type] || PLATFORM_CONFIG.api;
             const Icon = config.icon;
             const isSyncing = syncingIds.has(source.id);
             const isTesting = testingIds.has(source.id);
-            const dsConfig: Record<string, string> = (source.config as Record<string, string>) || {};
             return (
               <div key={source.id} className="card-base group">
                 <div className="flex items-start justify-between mb-3">
@@ -256,7 +276,7 @@ export default function DataSources() {
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>类型 *</label>
                 <select
                   value={form.type}
-                  onChange={(e) => setForm((p) => ({ ...p, type: e.target.value }))}
+                  onChange={(e) => setForm((p) => ({ ...p, type: e.target.value, platform: e.target.value === 'cloud_drive' ? p.platform : '' }))}
                   className="input-base text-xs w-full"
                 >
                   {TYPE_OPTIONS.map((opt) => (
@@ -265,8 +285,32 @@ export default function DataSources() {
                 </select>
               </div>
 
+              {/* 云盘平台选择 */}
+              {form.type === 'cloud_drive' && (
+                <div>
+                  <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>平台 *</label>
+                  <select
+                    value={form.platform}
+                    onChange={(e) => setForm((p) => ({ ...p, platform: e.target.value }))}
+                    className="input-base text-xs w-full"
+                  >
+                    <option value="">请选择平台</option>
+                    {CLOUD_PLATFORMS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                  {form.platform && PLATFORM_CONFIG[form.platform]?.hint && (
+                    <p className="text-[11px] mt-1" style={{ color: '#FB923C' }}>
+                      {PLATFORM_CONFIG[form.platform].hint}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div>
-                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>URL / 路径</label>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>
+                  {form.type === 'cloud_drive' ? 'Access Token' : 'URL / 路径'}
+                </label>
                 <input
                   type="text"
                   value={form.url}
@@ -277,15 +321,36 @@ export default function DataSources() {
               </div>
 
               <div>
-                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>API Key / 密钥</label>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>
+                  {form.platform === '115' ? 'Access Token' : form.platform === 'aliyundrive' ? 'Access Token (可选)' : 'API Key / 密钥'}
+                </label>
                 <input
                   type="password"
                   value={form.apiKey}
                   onChange={(e) => setForm((p) => ({ ...p, apiKey: e.target.value }))}
-                  placeholder="需要时填写"
+                  placeholder={form.platform === '115' ? '115 OAuth 授权后的 access_token' : '需要时填写'}
                   className="input-base text-xs w-full"
                 />
               </div>
+
+              {/* 阿里云盘需要 refreshToken */}
+              {form.platform === 'aliyundrive' && (
+                <div>
+                  <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>
+                    Refresh Token *
+                  </label>
+                  <input
+                    type="password"
+                    value={form.refreshToken}
+                    onChange={(e) => setForm((p) => ({ ...p, refreshToken: e.target.value }))}
+                    placeholder="阿里云盘 refresh_token"
+                    className="input-base text-xs w-full"
+                  />
+                  <p className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                    refresh_token 用于自动刷新 access_token，长期有效
+                  </p>
+                </div>
+              )}
 
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>同步模式</label>

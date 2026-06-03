@@ -7,6 +7,7 @@ import { createContext } from "./context";
 import { env } from "./lib/env";
 import { Paths } from "@contracts/constants";
 import { saveUploadedFile, deleteUploadedFile, getFileStream } from "./upload-handler";
+import "./connectors"; // 注册 115网盘、阿里云盘等连接器
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
