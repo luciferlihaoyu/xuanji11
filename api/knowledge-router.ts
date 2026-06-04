@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { eq, desc, like, or } from "drizzle-orm";
-import { createRouter, authedQuery } from "./middleware";
+import { eq, desc, sql } from "drizzle-orm";
+import { createRouter, publicQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { knowledgeNodes, knowledgeEdges } from "@db/schema";
 import { clean } from "./lib/clean";
@@ -15,11 +15,9 @@ export const knowledgeRouter = createRouter({
     .input(z.object({ query: z.string() }))
     .query(async ({ input }) => {
       const db = getDb();
+      const q = `%${input.query}%`;
       return db.select().from(knowledgeNodes)
-        .where(or(
-          like(knowledgeNodes.title, `%${input.query}%`),
-          like(knowledgeNodes.content, `%${input.query}%`)
-        ))
+        .where(sql`${knowledgeNodes.title} LIKE ${q} OR ${knowledgeNodes.content} LIKE ${q}`)
         .orderBy(desc(knowledgeNodes.updatedAt));
     }),
 
@@ -83,7 +81,7 @@ export const knowledgeRouter = createRouter({
     .mutation(async ({ input }) => {
       const db = getDb();
       await db.delete(knowledgeEdges).where(
-        or(eq(knowledgeEdges.sourceId, input.id), eq(knowledgeEdges.targetId, input.id))
+        sql`${knowledgeEdges.sourceId} = ${input.id} OR ${knowledgeEdges.targetId} = ${input.id}`
       );
       await db.delete(knowledgeNodes).where(eq(knowledgeNodes.id, input.id));
       return { success: true };
