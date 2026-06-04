@@ -6,7 +6,7 @@ import { knowledgeNodes, knowledgeEdges } from "@db/schema";
 import { clean } from "./lib/clean";
 
 export const knowledgeRouter = createRouter({
-  listNodes: authedQuery.query(async () => {
+  listNodes: publicQuery.query(async () => {
     const db = getDb();
     return db.select().from(knowledgeNodes).orderBy(desc(knowledgeNodes.updatedAt));
   }),
@@ -105,7 +105,7 @@ export const knowledgeRouter = createRouter({
       return { success: true };
     }),
 
-  listEdges: authedQuery.query(async () => {
+  listEdges: publicQuery.query(async () => {
     const db = getDb();
     return db.select().from(knowledgeEdges).orderBy(desc(knowledgeEdges.createdAt));
   }),
@@ -141,7 +141,7 @@ export const knowledgeRouter = createRouter({
       return { success: true };
     }),
 
-  getGraph: authedQuery.query(async () => {
+  getGraph: publicQuery.query(async () => {
     const db = getDb();
     const nodes = await db.select().from(knowledgeNodes);
     const edges = await db.select().from(knowledgeEdges);

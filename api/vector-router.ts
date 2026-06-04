@@ -1,12 +1,12 @@
 import { z } from "zod";
 import { eq, desc } from "drizzle-orm";
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, publicQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { vectorCollections } from "@db/schema";
 import { clean } from "./lib/clean";
 
 export const vectorRouter = createRouter({
-  list: authedQuery.query(async () => {
+  list: publicQuery.query(async () => {
     const db = getDb();
     return db.select().from(vectorCollections).orderBy(desc(vectorCollections.updatedAt));
   }),

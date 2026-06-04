@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq, desc, like, or } from "drizzle-orm";
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, publicQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { uploadedFiles } from "@db/schema";
 import { clean } from "./lib/clean";
