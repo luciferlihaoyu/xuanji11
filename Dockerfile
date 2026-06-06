@@ -46,9 +46,9 @@ COPY --from=builder /app/db ./db
 # 暴露端口
 EXPOSE 3000
 
-# 健康检查
+# 健康检查（使用 node fetch 替代 wget，alpine 镜像不包含 wget）
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/trpc/ping || exit 1
+    CMD node -e "fetch('http://localhost:3000/api/trpc/ping').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"
 
 # 启动命令
 CMD ["node", "dist/boot.js"]
