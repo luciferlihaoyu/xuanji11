@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { eq, desc } from "drizzle-orm";
-import { createRouter, publicQuery } from "./middleware";
-import { getDb } from "./queries/connection";
+import { createRouter, publicQuery, authedQuery, adminQuery } from "./middleware";import { getDb } from "./queries/connection";
 import { vectorCollections } from "@db/schema";
 import { clean } from "./lib/clean";
 
@@ -11,7 +10,7 @@ export const vectorRouter = createRouter({
     return db.select().from(vectorCollections).orderBy(desc(vectorCollections.updatedAt));
   }),
 
-  getById: publicQuery
+  getById: authedQuery
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -19,7 +18,7 @@ export const vectorRouter = createRouter({
       return results[0] ?? null;
     }),
 
-  create: publicQuery
+  create: adminQuery
     .input(
       z.object({
         name: z.string().min(1).max(255),
@@ -42,7 +41,7 @@ export const vectorRouter = createRouter({
       return { id: Number(result[0].insertId) };
     }),
 
-  update: publicQuery
+  update: adminQuery
     .input(
       z.object({
         id: z.number(),
@@ -61,7 +60,7 @@ export const vectorRouter = createRouter({
       return { success: true };
     }),
 
-  delete: publicQuery
+  delete: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();
@@ -69,7 +68,7 @@ export const vectorRouter = createRouter({
       return { success: true };
     }),
 
-  updateDocCount: publicQuery
+  updateDocCount: adminQuery
     .input(
       z.object({
         id: z.number(),

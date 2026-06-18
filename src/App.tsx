@@ -1,6 +1,7 @@
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import { useEffect } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import AppLayout from '@/components/AppLayout';
 import KnowledgeGraph from '@/pages/KnowledgeGraph';
 import KnowledgeBase from '@/pages/KnowledgeBase';
@@ -25,6 +26,7 @@ function ThemeInit() {
 
 function App() {
   return (
+    <ErrorBoundary>
     <HashRouter>
       <ThemeInit />
       <Routes>
@@ -46,6 +48,7 @@ function App() {
         <Route path="*" element={<NotFound />} />
       </Routes>
     </HashRouter>
+    </ErrorBoundary>
   );
 }
 

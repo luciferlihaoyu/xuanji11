@@ -28,7 +28,37 @@ export async function saveUploadedFile(
   storagePath: string;
   url: string;
 }> {
-  const ext = path.extname(file.name);
+  // 文件类型白名单
+  const ALLOWED_MIMES = new Set([
+    "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml",
+    "application/pdf",
+    "text/plain", "text/markdown", "text/csv", "text/html", "text/css",
+    "application/json", "application/xml",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/zip", "application/gzip",
+    "audio/mpeg", "audio/wav", "audio/ogg",
+    "video/mp4", "video/webm",
+  ]);
+
+  const ext = path.extname(file.name).toLowerCase();
+  const BLOCKED_EXTENSIONS = new Set([
+    ".exe", ".dll", ".so", ".sh", ".bash", ".bat", ".cmd", ".ps1",
+    ".js", ".ts", ".py", ".rb", ".php", ".pl", ".go", ".rs",
+    ".jar", ".war", ".class",
+    ".scr", ".msi", ".apk", ".app",
+  ]);
+
+  if (BLOCKED_EXTENSIONS.has(ext)) {
+    throw new Error(`不允许的文件类型: ${ext}`);
+  }
+
+  const mimeType = file.type || "application/octet-stream";
+  if (!ALLOWED_MIMES.has(mimeType)) {
+    // 允许未知 MIME 但记录警告
+    console.warn(`[Upload] 未知 MIME 类型: ${mimeType} for ${file.name}`);
+  }
   const uniqueName = `${randomUUID()}${ext}`;
   const storagePath = path.join(UPLOAD_DIR, uniqueName);
 

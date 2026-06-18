@@ -9,6 +9,7 @@ import {
   json,
   float,
   int,
+  index,
   foreignKey,
 } from "drizzle-orm/mysql-core";
 
@@ -53,6 +54,7 @@ export const agents = mysqlTable("agents", {
     .notNull()
     .$onUpdate(() => new Date()),
 }, (table) => [
+  index("agents_created_by_idx").on(table.createdBy),
   foreignKey({
     columns: [table.createdBy],
     foreignColumns: [users.id],
@@ -84,6 +86,7 @@ export const knowledgeNodes = mysqlTable("knowledge_nodes", {
     .notNull()
     .$onUpdate(() => new Date()),
 }, (table) => [
+  index("knowledgeNodes_createdBy_idx").on(table.createdBy),
   foreignKey({
     columns: [table.createdBy],
     foreignColumns: [users.id],
@@ -107,6 +110,8 @@ export const knowledgeEdges = mysqlTable("knowledge_edges", {
   createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (table) => [
+  index("knowledgeEdges_targetId_idx").on(table.targetId),
+  index("knowledgeEdges_sourceId_idx").on(table.sourceId),
   foreignKey({
     columns: [table.sourceId],
     foreignColumns: [knowledgeNodes.id],
@@ -141,6 +146,8 @@ export const kbFolders = mysqlTable("kb_folders", {
     .notNull()
     .$onUpdate(() => new Date()),
 }, (table) => [
+  index("kbFolders_createdBy_idx").on(table.createdBy),
+  index("kbFolders_parentId_idx").on(table.parentId),
   foreignKey({
     columns: [table.parentId],
     foreignColumns: [table.id],
@@ -179,6 +186,8 @@ export const kbDocuments = mysqlTable("kb_documents", {
     .notNull()
     .$onUpdate(() => new Date()),
 }, (table) => [
+  index("kbDocuments_createdBy_idx").on(table.createdBy),
+  index("kbDocuments_folderId_idx").on(table.folderId),
   foreignKey({
     columns: [table.folderId],
     foreignColumns: [kbFolders.id],
@@ -213,6 +222,7 @@ export const workflows = mysqlTable("workflows", {
     .notNull()
     .$onUpdate(() => new Date()),
 }, (table) => [
+  index("workflows_createdBy_idx").on(table.createdBy),
   foreignKey({
     columns: [table.createdBy],
     foreignColumns: [users.id],
@@ -236,6 +246,7 @@ export const workflowNodes = mysqlTable("workflow_nodes", {
   sortOrder: int("sortOrder").default(0),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (table) => [
+  index("workflowNodes_workflowId_idx").on(table.workflowId),
   foreignKey({
     columns: [table.workflowId],
     foreignColumns: [workflows.id],
@@ -273,6 +284,8 @@ export const dataSources = mysqlTable("data_sources", {
     .notNull()
     .$onUpdate(() => new Date()),
 }, (table) => [
+  index("dataSources_type_idx").on(table.type),
+  index("dataSources_createdBy_idx").on(table.createdBy),
   foreignKey({
     columns: [table.createdBy],
     foreignColumns: [users.id],
@@ -294,7 +307,14 @@ export const uploadedFiles = mysqlTable("uploaded_files", {
   metadata: json("metadata").$type<Record<string, unknown>>(),
   uploadedBy: bigint("uploadedBy", { mode: "number", unsigned: true }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, (table) => [
+  index("uploadedFiles_uploadedBy_idx").on(table.uploadedBy),
+  foreignKey({
+    columns: [table.uploadedBy],
+    foreignColumns: [users.id],
+    name: "uploaded_files_uploaded_by_fk",
+  }),
+]);
 
 export type UploadedFile = typeof uploadedFiles.$inferSelect;
 export type InsertUploadedFile = typeof uploadedFiles.$inferInsert;
@@ -317,6 +337,7 @@ export const vectorCollections = mysqlTable("vector_collections", {
     .notNull()
     .$onUpdate(() => new Date()),
 }, (table) => [
+  index("vectorCollections_createdBy_idx").on(table.createdBy),
   foreignKey({
     columns: [table.createdBy],
     foreignColumns: [users.id],
@@ -339,6 +360,8 @@ export const systemSettings = mysqlTable("system_settings", {
     .notNull()
     .$onUpdate(() => new Date()),
 }, (table) => [
+  index("systemSettings_key_idx").on(table.key),
+  index("systemSettings_category_idx").on(table.category),
   foreignKey({
     columns: [table.updatedBy],
     foreignColumns: [users.id],

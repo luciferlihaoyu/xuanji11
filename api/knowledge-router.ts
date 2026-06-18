@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { eq, desc, sql } from "drizzle-orm";
-import { createRouter, publicQuery } from "./middleware";
-import { getDb } from "./queries/connection";
+import { createRouter, publicQuery, authedQuery, adminQuery } from "./middleware";import { getDb } from "./queries/connection";
 import { knowledgeNodes, knowledgeEdges } from "@db/schema";
 import { clean } from "./lib/clean";
 
@@ -11,7 +10,7 @@ export const knowledgeRouter = createRouter({
     return db.select().from(knowledgeNodes).orderBy(desc(knowledgeNodes.updatedAt));
   }),
 
-  searchNodes: publicQuery
+  searchNodes: authedQuery
     .input(z.object({ query: z.string() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -21,7 +20,7 @@ export const knowledgeRouter = createRouter({
         .orderBy(desc(knowledgeNodes.updatedAt));
     }),
 
-  getNode: publicQuery
+  getNode: authedQuery
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -29,7 +28,7 @@ export const knowledgeRouter = createRouter({
       return results[0] ?? null;
     }),
 
-  createNode: publicQuery
+  createNode: adminQuery
     .input(
       z.object({
         title: z.string().min(1).max(500),
@@ -56,7 +55,7 @@ export const knowledgeRouter = createRouter({
       return { id: Number(result[0].insertId) };
     }),
 
-  updateNode: publicQuery
+  updateNode: adminQuery
     .input(
       z.object({
         id: z.number(),
@@ -76,7 +75,7 @@ export const knowledgeRouter = createRouter({
       return { success: true };
     }),
 
-  deleteNode: publicQuery
+  deleteNode: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();
@@ -87,7 +86,7 @@ export const knowledgeRouter = createRouter({
       return { success: true };
     }),
 
-  updateNodePositions: publicQuery
+  updateNodePositions: adminQuery
     .input(
       z.array(z.object({
         id: z.number(),
@@ -110,7 +109,7 @@ export const knowledgeRouter = createRouter({
     return db.select().from(knowledgeEdges).orderBy(desc(knowledgeEdges.createdAt));
   }),
 
-  createEdge: publicQuery
+  createEdge: adminQuery
     .input(
       z.object({
         sourceId: z.number(),
@@ -133,7 +132,7 @@ export const knowledgeRouter = createRouter({
       return { id: Number(result[0].insertId) };
     }),
 
-  deleteEdge: publicQuery
+  deleteEdge: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();

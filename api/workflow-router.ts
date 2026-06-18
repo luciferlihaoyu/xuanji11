@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { eq, desc } from "drizzle-orm";
-import { createRouter, publicQuery } from "./middleware";
-import { getDb } from "./queries/connection";
+import { createRouter, publicQuery, authedQuery, adminQuery } from "./middleware";import { getDb } from "./queries/connection";
 import { workflows, workflowNodes } from "@db/schema";
 import { clean } from "./lib/clean";
 
@@ -11,7 +10,7 @@ export const workflowRouter = createRouter({
     return db.select().from(workflows).orderBy(desc(workflows.updatedAt));
   }),
 
-  getById: publicQuery
+  getById: authedQuery
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -22,7 +21,7 @@ export const workflowRouter = createRouter({
       return { ...workflow, nodes };
     }),
 
-  create: publicQuery
+  create: adminQuery
     .input(
       z.object({
         name: z.string().min(1).max(255),
@@ -45,7 +44,7 @@ export const workflowRouter = createRouter({
       return { id: Number(result[0].insertId) };
     }),
 
-  update: publicQuery
+  update: adminQuery
     .input(
       z.object({
         id: z.number(),
@@ -63,7 +62,7 @@ export const workflowRouter = createRouter({
       return { success: true };
     }),
 
-  delete: publicQuery
+  delete: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();
@@ -72,7 +71,7 @@ export const workflowRouter = createRouter({
       return { success: true };
     }),
 
-  setStatus: publicQuery
+  setStatus: authedQuery
     .input(
       z.object({
         id: z.number(),
@@ -87,7 +86,7 @@ export const workflowRouter = createRouter({
       return { success: true };
     }),
 
-  listNodes: publicQuery
+  listNodes: authedQuery
     .input(z.object({ workflowId: z.number() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -96,7 +95,7 @@ export const workflowRouter = createRouter({
         .orderBy(workflowNodes.sortOrder);
     }),
 
-  createNode: publicQuery
+  createNode: adminQuery
     .input(
       z.object({
         workflowId: z.number(),
@@ -125,7 +124,7 @@ export const workflowRouter = createRouter({
       return { id: Number(result[0].insertId) };
     }),
 
-  updateNode: publicQuery
+  updateNode: adminQuery
     .input(
       z.object({
         id: z.number(),
@@ -144,7 +143,7 @@ export const workflowRouter = createRouter({
       return { success: true };
     }),
 
-  deleteNode: publicQuery
+  deleteNode: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();
@@ -152,7 +151,7 @@ export const workflowRouter = createRouter({
       return { success: true };
     }),
 
-  saveFull: publicQuery
+  saveFull: adminQuery
     .input(
       z.object({
         workflow: z.object({

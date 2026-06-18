@@ -1,7 +1,6 @@
 import { z } from "zod";
-import { eq, desc, isNull, like } from "drizzle-orm";
-import { createRouter, publicQuery } from "./middleware";
-import { getDb } from "./queries/connection";
+import { eq, desc, like, isNull } from "drizzle-orm";
+import { createRouter, publicQuery, authedQuery, adminQuery } from "./middleware";import { getDb } from "./queries/connection";
 import { kbFolders, kbDocuments } from "@db/schema";
 import { clean } from "./lib/clean";
 
@@ -18,7 +17,7 @@ export const kbRouter = createRouter({
       .orderBy(kbFolders.sortOrder);
   }),
 
-  listSubFolders: publicQuery
+  listSubFolders: authedQuery
     .input(z.object({ parentId: z.number() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -27,7 +26,7 @@ export const kbRouter = createRouter({
         .orderBy(kbFolders.sortOrder);
     }),
 
-  createFolder: publicQuery
+  createFolder: adminQuery
     .input(
       z.object({
         name: z.string().min(1).max(255),
@@ -48,7 +47,7 @@ export const kbRouter = createRouter({
       return { id: Number(result[0].insertId) };
     }),
 
-  updateFolder: publicQuery
+  updateFolder: adminQuery
     .input(
       z.object({
         id: z.number(),
@@ -65,7 +64,7 @@ export const kbRouter = createRouter({
       return { success: true };
     }),
 
-  deleteFolder: publicQuery
+  deleteFolder: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();
@@ -75,7 +74,7 @@ export const kbRouter = createRouter({
       return { success: true };
     }),
 
-  listDocuments: publicQuery
+  listDocuments: authedQuery
     .input(z.object({ folderId: z.number().nullable().optional() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -87,7 +86,7 @@ export const kbRouter = createRouter({
       return db.select().from(kbDocuments).orderBy(desc(kbDocuments.updatedAt));
     }),
 
-  searchDocuments: publicQuery
+  searchDocuments: authedQuery
     .input(z.object({ query: z.string() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -96,7 +95,7 @@ export const kbRouter = createRouter({
         .orderBy(desc(kbDocuments.updatedAt));
     }),
 
-  getDocument: publicQuery
+  getDocument: authedQuery
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -104,7 +103,7 @@ export const kbRouter = createRouter({
       return results[0] ?? null;
     }),
 
-  createDocument: publicQuery
+  createDocument: adminQuery
     .input(
       z.object({
         folderId: z.number().nullable().optional(),
@@ -129,7 +128,7 @@ export const kbRouter = createRouter({
       return { id: Number(result[0].insertId) };
     }),
 
-  updateDocument: publicQuery
+  updateDocument: adminQuery
     .input(
       z.object({
         id: z.number(),
@@ -148,7 +147,7 @@ export const kbRouter = createRouter({
       return { success: true };
     }),
 
-  deleteDocument: publicQuery
+  deleteDocument: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();

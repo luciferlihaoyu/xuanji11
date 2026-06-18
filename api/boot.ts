@@ -7,6 +7,7 @@ import { createContext } from "./context";
 import { env } from "./lib/env";
 import { Paths } from "@contracts/constants";
 import { saveUploadedFile, deleteUploadedFile, getFileStream } from "./upload-handler";
+import { getDb } from "./queries/connection";
 import "./connectors"; // 注册 115网盘、阿里云盘等连接器
 
 const app = new Hono<{ Bindings: HttpBindings }>();
@@ -97,6 +98,17 @@ app.use("/api/trpc/*", async (c) => {
   });
 });
 
+// ========== 健康检查 ==========
+const startTime = Date.now();
+app.get("/health", (c) => {
+  try {
+    const db = getDb();
+    return c.json({ ok: true, uptime: Math.floor((Date.now() - startTime) / 1000), dbConnected: true });
+  } catch {
+    return c.json({ ok: true, uptime: Math.floor((Date.now() - startTime) / 1000), dbConnected: false }, 503);
+  }
+});
+
 app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
 
 export default app;
@@ -107,7 +119,23 @@ if (env.isProduction) {
   serveStaticFiles(app);
 
   const port = parseInt(process.env.PORT || "3000");
-  serve({ fetch: app.fetch, port }, () => {
+  const server = serve({ fetch: app.fetch, port }, () => {
     console.log(`璇玑智脑 running on http://localhost:${port}/`);
   });
+
+  // 优雅关闭
+  const shutdown = (signal: string) => {
+    console.log(`\n收到 ${signal}，正在优雅关闭...`);
+    server.close(() => {
+      console.log("HTTP 服务已关闭");
+      process.exit(0);
+    });
+    // 5 秒后强制退出
+    setTimeout(() => {
+      console.error("强制退出");
+      process.exit(1);
+    }, 5000);
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }

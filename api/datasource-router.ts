@@ -1,18 +1,18 @@
 import { z } from "zod";
 import { eq, desc } from "drizzle-orm";
-import { createRouter, publicQuery } from "./middleware";
+import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { dataSources } from "@db/schema";
 import { clean } from "./lib/clean";
 import { getConnector } from "./connectors";
 
 export const datasourceRouter = createRouter({
-  list: publicQuery.query(async () => {
+  list: authedQuery.query(async () => {
     const db = getDb();
     return db.select().from(dataSources).orderBy(desc(dataSources.updatedAt));
   }),
 
-  listByType: publicQuery
+  listByType: authedQuery
     .input(z.object({ type: z.string() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -21,7 +21,7 @@ export const datasourceRouter = createRouter({
         .orderBy(desc(dataSources.updatedAt));
     }),
 
-  getById: publicQuery
+  getById: authedQuery
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -29,7 +29,7 @@ export const datasourceRouter = createRouter({
       return results[0] ?? null;
     }),
 
-  create: publicQuery
+  create: adminQuery
     .input(
       z.object({
         name: z.string().min(1).max(255),
@@ -50,7 +50,7 @@ export const datasourceRouter = createRouter({
       return { id: Number(result[0].insertId) };
     }),
 
-  update: publicQuery
+  update: adminQuery
     .input(
       z.object({
         id: z.number(),
@@ -67,7 +67,7 @@ export const datasourceRouter = createRouter({
       return { success: true };
     }),
 
-  delete: publicQuery
+  delete: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();
@@ -76,7 +76,7 @@ export const datasourceRouter = createRouter({
     }),
 
   // 测试连接 — 如果配置了平台连接器则使用连接器测试
-  testConnection: publicQuery
+  testConnection: authedQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();
@@ -118,7 +118,7 @@ export const datasourceRouter = createRouter({
     }),
 
   // 同步文件 — 使用连接器获取文件列表
-  sync: publicQuery
+  sync: authedQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();

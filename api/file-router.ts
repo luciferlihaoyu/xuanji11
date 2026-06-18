@@ -1,12 +1,11 @@
 import { z } from "zod";
-import { eq, desc, like, or } from "drizzle-orm";
-import { createRouter, publicQuery } from "./middleware";
-import { getDb } from "./queries/connection";
+import { eq, desc, or, like } from "drizzle-orm";
+import { createRouter, authedQuery, adminQuery } from "./middleware";import { getDb } from "./queries/connection";
 import { uploadedFiles } from "@db/schema";
 import { clean } from "./lib/clean";
 
 export const fileRouter = createRouter({
-  list: publicQuery
+  list: authedQuery
     .input(
       z.object({
         search: z.string().optional(),
@@ -32,7 +31,7 @@ export const fileRouter = createRouter({
         .orderBy(desc(uploadedFiles.createdAt));
     }),
 
-  getById: publicQuery
+  getById: authedQuery
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -40,7 +39,7 @@ export const fileRouter = createRouter({
       return results[0] ?? null;
     }),
 
-  register: publicQuery
+  register: adminQuery
     .input(
       z.object({
         filename: z.string().min(1).max(500),
@@ -65,7 +64,7 @@ export const fileRouter = createRouter({
       return { id: Number(result[0].insertId) };
     }),
 
-  update: publicQuery
+  update: adminQuery
     .input(
       z.object({
         id: z.number(),
@@ -80,7 +79,7 @@ export const fileRouter = createRouter({
       return { success: true };
     }),
 
-  delete: publicQuery
+  delete: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();

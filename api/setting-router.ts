@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { createRouter, publicQuery } from "./middleware";
-import { getDb } from "./queries/connection";
+import { createRouter, publicQuery, authedQuery, adminQuery } from "./middleware";import { getDb } from "./queries/connection";
 import { systemSettings } from "@db/schema";
 import { clean } from "./lib/clean";
 
@@ -11,7 +10,7 @@ export const settingRouter = createRouter({
     return db.select().from(systemSettings);
   }),
 
-  listByCategory: publicQuery
+  listByCategory: authedQuery
     .input(z.object({ category: z.string() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -19,7 +18,7 @@ export const settingRouter = createRouter({
         .where(eq(systemSettings.category, input.category));
     }),
 
-  getByKey: publicQuery
+  getByKey: authedQuery
     .input(z.object({ key: z.string() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -28,7 +27,7 @@ export const settingRouter = createRouter({
       return results[0] ?? null;
     }),
 
-  set: publicQuery
+  set: adminQuery
     .input(
       z.object({
         key: z.string().min(1).max(255),
@@ -60,7 +59,7 @@ export const settingRouter = createRouter({
       return { success: true };
     }),
 
-  setMany: publicQuery
+  setMany: adminQuery
     .input(
       z.array(z.object({
         key: z.string().min(1).max(255),
@@ -94,7 +93,7 @@ export const settingRouter = createRouter({
       return { success: true };
     }),
 
-  delete: publicQuery
+  delete: adminQuery
     .input(z.object({ key: z.string() }))
     .mutation(async ({ input }) => {
       const db = getDb();

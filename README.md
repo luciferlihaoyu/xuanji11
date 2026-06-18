@@ -30,6 +30,9 @@
 - Drizzle ORM + MySQL（数据库）
 - OAuth 2.0（Kimi 认证）
 - JWT 会话管理
+- 结构化日志系统
+- 优雅关闭（SIGTERM/SIGINT）
+- Docker HEALTHCHECK（curl /health）
 
 ### 部署
 - Docker 多阶段构建
@@ -82,6 +85,37 @@ docker run -p 3000:3000 --env-file .env xuanji-brain
 3. 运行 `npx drizzle-kit push` 同步数据库
 4. 完成部署
 
+## 认证与安全
+
+### 认证方式
+
+| 方式 | 说明 |
+|------|------|
+| OAuth 2.0 (Kimi) | 用户通过 Kimi 平台授权登录，获取 JWT 会话 |
+| 本地管理员登录 | 备选：用户名/密码 → JWT Token |
+| Agent Token | API 调用使用 Agent Token 认证（Bearer Token） |
+
+### API 鉴权层级
+
+所有 tRPC API 根据敏感度分为三级：
+
+| 级别 | 说明 | 示例路由 |
+|------|------|----------|
+| `publicQuery` | 无需认证，仅健康检查和认证端点 | `ping`, `auth.*` |
+| `authedQuery` | 需登录（JWT 会话），读操作 | `knowledge.listNodes`, `kb.getDocument`, `file.list` |
+| `adminQuery` | 需管理员角色，写操作 | `agent.create`, `knowledge.deleteNode`, `workflow.saveFull` |
+
+未认证访问受保护路由返回 `UNAUTHORIZED`，非管理员执行管理操作返回 `FORBIDDEN`。
+
+### 健康检查
+
+```
+GET /health
+→ { "ok": true, "uptime": 123, "dbConnected": true }
+```
+
+Docker 容器内置 `HEALTHCHECK`，每 30 秒通过 `curl -f http://localhost:3000/health` 检测。
+
 ## 环境变量
 
 | 变量 | 必填 | 说明 |
@@ -91,6 +125,9 @@ docker run -p 3000:3000 --env-file .env xuanji-brain
 | `APP_SECRET` | 是 | Kimi 应用密钥 |
 | `VITE_APP_ID` | 是 | 前端应用 ID（同 APP_ID）|
 | `OWNER_UNION_ID` | 否 | 管理员 Union ID |
+| `NODE_ENV` | 否 | `production` 时日志级别为 `info`，否则 `debug` |
+| `PORT` | 否 | 服务端口，默认 `3000` |
+| `UPLOAD_DIR` | 否 | 文件上传目录，默认 `./uploads` |
 
 ## 项目结构
 
