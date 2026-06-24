@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { eq, desc, sql } from "drizzle-orm";
-import { createRouter, publicQuery, authedQuery, adminQuery } from "./middleware";import { getDb } from "./queries/connection";
+import { createRouter, authedQuery } from "./middleware";
+import { getDb } from "./queries/connection";
 import { knowledgeNodes, knowledgeEdges } from "@db/schema";
 import { clean } from "./lib/clean";
 
 export const knowledgeRouter = createRouter({
-  listNodes: publicQuery.query(async () => {
+  listNodes: authedQuery.query(async () => {
     const db = getDb();
     return db.select().from(knowledgeNodes).orderBy(desc(knowledgeNodes.updatedAt));
   }),
@@ -104,7 +105,7 @@ export const knowledgeRouter = createRouter({
       return { success: true };
     }),
 
-  listEdges: publicQuery.query(async () => {
+  listEdges: authedQuery.query(async () => {
     const db = getDb();
     return db.select().from(knowledgeEdges).orderBy(desc(knowledgeEdges.createdAt));
   }),
@@ -140,7 +141,7 @@ export const knowledgeRouter = createRouter({
       return { success: true };
     }),
 
-  getGraph: publicQuery.query(async () => {
+  getGraph: authedQuery.query(async () => {
     const db = getDb();
     const nodes = await db.select().from(knowledgeNodes);
     const edges = await db.select().from(knowledgeEdges);
