@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { eq, desc } from "drizzle-orm";
-import { createRouter, publicQuery, authedQuery, adminQuery } from "./middleware";import { getDb } from "./queries/connection";
+import { createRouter, authedQuery, adminQuery } from "./middleware";
+import { getDb } from "./queries/connection";
 import { workflows, workflowNodes } from "@db/schema";
 import { clean } from "./lib/clean";
 
 export const workflowRouter = createRouter({
-  list: publicQuery.query(async () => {
+  list: authedQuery.query(async () => {
     const db = getDb();
     return db.select().from(workflows).orderBy(desc(workflows.updatedAt));
   }),
