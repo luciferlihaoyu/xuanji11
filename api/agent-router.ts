@@ -6,7 +6,7 @@ import { agents } from "@db/schema";
 import { clean } from "./lib/clean";
 
 export const agentRouter = createRouter({
-  list: adminQuery
+  list: authedQuery
     .input(
       z.object({
         search: z.string().optional(),
