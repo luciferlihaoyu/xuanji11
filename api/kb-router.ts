@@ -1,16 +1,17 @@
 import { z } from "zod";
 import { eq, desc, like, isNull } from "drizzle-orm";
-import { createRouter, publicQuery, authedQuery, adminQuery } from "./middleware";import { getDb } from "./queries/connection";
+import { createRouter, authedQuery, adminQuery } from "./middleware";
+import { getDb } from "./queries/connection";
 import { kbFolders, kbDocuments } from "@db/schema";
 import { clean } from "./lib/clean";
 
 export const kbRouter = createRouter({
-  listFolders: publicQuery.query(async () => {
+  listFolders: authedQuery.query(async () => {
     const db = getDb();
     return db.select().from(kbFolders).orderBy(kbFolders.sortOrder);
   }),
 
-  listRootFolders: publicQuery.query(async () => {
+  listRootFolders: authedQuery.query(async () => {
     const db = getDb();
     return db.select().from(kbFolders)
       .where(isNull(kbFolders.parentId))
@@ -155,7 +156,7 @@ export const kbRouter = createRouter({
       return { success: true };
     }),
 
-  getTree: publicQuery.query(async () => {
+  getTree: authedQuery.query(async () => {
     const db = getDb();
     const folders = await db.select().from(kbFolders).orderBy(kbFolders.sortOrder);
     const docs = await db.select().from(kbDocuments).orderBy(desc(kbDocuments.updatedAt));
