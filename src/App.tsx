@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import AppLayout from '@/components/AppLayout';
+import CommandPalette from '@/components/CommandPalette';
 import KnowledgeGraph from '@/pages/KnowledgeGraph';
 import KnowledgeBase from '@/pages/KnowledgeBase';
 import WorkflowBuilder from '@/pages/WorkflowBuilder';
@@ -29,6 +30,7 @@ function App() {
     <ErrorBoundary>
     <HashRouter>
       <ThemeInit />
+      <CommandPalette />
       <Routes>
         <Route element={<AppLayout />}>
           <Route path="/" element={<KnowledgeGraph />} />
