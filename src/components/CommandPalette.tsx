@@ -1,197 +1,178 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Search, FileText, Bot, Workflow, Settings, Database, Upload, Globe, FolderOpen, Map } from 'lucide-react';
-import { useAppStore } from '@/store/useAppStore';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router';
+import { Search, ArrowRight, X } from 'lucide-react';
 
-interface CommandItem {
+interface Command {
   id: string;
   label: string;
-  description?: string;
-  icon: React.ElementType;
-  action: () => void;
-  category: string;
+  description: string;
+  icon?: string;
+  path: string;
+  category: 'page' | 'action';
 }
 
-interface CommandPaletteProps {
-  open: boolean;
-  onClose: () => void;
-}
+const COMMANDS: Command[] = [
+  { id: 'knowledge-graph', label: '鐭ヨ瘑鑴戝浘', description: 'D3.js 鍔涘鍚戠煡璇嗗浘璋?, icon: '鈽?, path: '/', category: 'page' },
+  { id: 'knowledge-base', label: '鐭ヨ瘑搴?, description: '鏂囨。绠＄悊涓庣紪杈戝櫒', icon: '馃摎', path: '/kb', category: 'page' },
+  { id: 'workflow', label: '宸ヤ綔娴佺紪鎺?, description: '鍙鍖栬妭鐐圭紪绋?, icon: '鈿?, path: '/workflows', category: 'page' },
+  { id: 'agents', label: 'Agent 绠＄悊', description: '鏅鸿兘鍔╂墜绠＄悊', icon: '馃', path: '/agents', category: 'page' },
+  { id: 'datasources', label: '鏁版嵁婧?, description: '浜戠洏 / NAS 鏁版嵁鎺ュ叆', icon: '馃敆', path: '/sources', category: 'page' },
+  { id: 'upload', label: '鏂囦欢涓婁紶', description: '涓婁紶鏂囦欢骞跺悜閲忓寲', icon: '馃摛', path: '/upload', category: 'page' },
+  { id: 'api-center', label: 'API 涓績', description: '鎺ュ彛鏂囨。涓庤皟璇?, icon: '馃攲', path: '/api', category: 'page' },
+  { id: 'settings', label: '绯荤粺璁剧疆', description: '涓婚銆佸亸濂借缃?, icon: '鈿?, path: '/settings/theme', category: 'page' },
+  { id: 'search', label: '鍏ㄥ眬鎼滅储', description: '鍏ㄦ枃 + 鍚戦噺璇箟鎼滅储', icon: '馃攳', path: '/search', category: 'page' },
+  { id: 'login', label: '閫€鍑虹櫥褰?, description: '杩斿洖鐧诲綍椤?, icon: '馃毆', path: '/login', category: 'action' },
+];
 
-export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
-  const navigate = useNavigate();
-  const { kbTree, agents } = useAppStore();
+export default function CommandPalette() {
+  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
 
-  // Collect all KB files recursively
-  const collectFiles = (nodes: any[]): { id: string; name: string; type: string }[] => {
-    const files: { id: string; name: string; type: string }[] = [];
-    for (const n of nodes) {
-      if (n.type === 'file') files.push({ id: n.id, name: n.name, type: n.fileType || 'md' });
-      if (n.children) files.push(...collectFiles(n.children));
-    }
-    return files;
-  };
-  const kbFiles = collectFiles(kbTree);
+  const filtered = query.trim()
+    ? COMMANDS.filter(
+        (c) =>
+          c.label.toLowerCase().includes(query.toLowerCase()) ||
+          c.description.toLowerCase().includes(query.toLowerCase())
+      )
+    : COMMANDS;
 
-  const allCommands = useMemo<CommandItem[]>(() => {
-    const commands: CommandItem[] = [
-      // Pages
-      { id: 'nav-graph', label: '知识脑图', description: '3D/2D 知识星图', icon: Map, action: () => { navigate('/'); onClose(); }, category: '页面' },
-      { id: 'nav-kb', label: '知识库', description: 'Obsidian 风格编辑器', icon: FolderOpen, action: () => { navigate('/kb'); onClose(); }, category: '页面' },
-      { id: 'nav-workflow', label: '工作流编排器', description: '可视化流程编排', icon: Workflow, action: () => { navigate('/workflows'); onClose(); }, category: '页面' },
-      { id: 'nav-agents', label: 'Agent 管理', description: '管理 AI Agent', icon: Bot, action: () => { navigate('/agents'); onClose(); }, category: '页面' },
-      { id: 'nav-api', label: 'API 中心', description: '接口文档与调试', icon: Globe, action: () => { navigate('/api'); onClose(); }, category: '页面' },
-      { id: 'nav-sources', label: '数据源', description: '外部数据连接', icon: Database, action: () => { navigate('/sources'); onClose(); }, category: '页面' },
-      { id: 'nav-upload', label: '文件上传', description: '上传与处理', icon: Upload, action: () => { navigate('/upload'); onClose(); }, category: '页面' },
-      { id: 'nav-settings', label: '设置', description: '系统配置', icon: Settings, action: () => { navigate('/settings/appearance'); onClose(); }, category: '页面' },
-      // KB Files
-      ...kbFiles.map((f) => ({
-        id: `kb-${f.id}`,
-        label: f.name,
-        description: '知识库文件',
-        icon: FileText,
-        action: () => { navigate('/kb'); onClose(); },
-        category: '知识库文件',
-      })),
-      // Agents
-      ...agents.map((a) => ({
-        id: `agent-${a.id}`,
-        label: `${a.name} — ${a.role}`,
-        description: `${a.department} · ${a.status === 'online' ? '在线' : '离线'}`,
-        icon: Bot,
-        action: () => { navigate('/agents'); onClose(); },
-        category: 'Agent',
-      })),
-    ];
-    return commands;
-  }, [navigate, onClose, kbFiles, agents]);
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setOpen((prev) => !prev);
+      }
+      if (e.key === 'Escape' && open) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [open]);
 
-  // Filter
-  const filtered = useMemo(() => {
-    if (!query.trim()) return allCommands.slice(0, 10);
-    const q = query.toLowerCase();
-    return allCommands.filter((c) =>
-      c.label.toLowerCase().includes(q) ||
-      c.description?.toLowerCase().includes(q) ||
-      c.category.toLowerCase().includes(q)
-    );
-  }, [allCommands, query]);
-
-  // Reset on open
   useEffect(() => {
     if (open) {
       setQuery('');
-      setSelectedIndex(0);
+      setActiveIndex(0);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [open]);
 
-  // Keyboard navigation
   useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
+    setActiveIndex(0);
+  }, [query]);
+
+  const handleSelect = useCallback(
+    (cmd: Command) => {
+      setOpen(false);
+      navigate(cmd.path);
+    },
+    [navigate]
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setSelectedIndex((i) => Math.min(i + 1, filtered.length - 1));
+        setActiveIndex((i) => Math.min(i + 1, filtered.length - 1));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setSelectedIndex((i) => Math.max(i - 1, 0));
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        filtered[selectedIndex]?.action();
-      } else if (e.key === 'Escape') {
-        onClose();
+        setActiveIndex((i) => Math.max(i - 1, 0));
+      } else if (e.key === 'Enter' && filtered[activeIndex]) {
+        handleSelect(filtered[activeIndex]);
       }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [open, filtered, selectedIndex, onClose]);
-
-  // Scroll selected into view
-  useEffect(() => {
-    const el = listRef.current?.children[selectedIndex] as HTMLElement;
-    if (el) el.scrollIntoView({ block: 'nearest' });
-  }, [selectedIndex]);
+    },
+    [filtered, activeIndex, handleSelect]
+  );
 
   if (!open) return null;
 
-  // Group by category
-  const grouped: Record<string, typeof filtered> = {};
-  for (const item of filtered) {
-    if (!grouped[item.category]) grouped[item.category] = [];
-    grouped[item.category].push(item);
-  }
-
   return (
-    <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[15vh]" style={{ backgroundColor: 'rgba(6,10,20,0.75)', backdropFilter: 'blur(8px)' }}>
-      <div className="w-full max-w-[640px] mx-4 rounded-xl border overflow-hidden animate-scale-in" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)', boxShadow: '0 24px 64px rgba(0,0,0,0.5), 0 0 1px var(--accent-cyan)' }}>
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
+      onClick={() => setOpen(false)}
+      style={{ backgroundColor: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }}
+    >
+      <div
+        className="w-full max-w-lg rounded-xl overflow-hidden shadow-2xl border"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          backgroundColor: 'var(--bg-secondary, #1a1a2e)',
+          borderColor: 'var(--border-subtle, rgba(255,255,255,0.06))',
+        }}
+      >
         {/* Search input */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
-          <Search className="w-5 h-5 shrink-0" style={{ color: 'var(--accent-cyan)' }} />
+        <div
+          className="flex items-center gap-3 px-4 py-3 border-b"
+          style={{ borderColor: 'var(--border-subtle, rgba(255,255,255,0.06))' }}
+        >
+          <Search className="w-4 h-4 shrink-0" style={{ color: 'var(--text-muted, #666)' }} />
           <input
             ref={inputRef}
-            type="text"
             value={query}
-            onChange={(e) => { setQuery(e.target.value); setSelectedIndex(0); }}
-            placeholder="搜索页面、文件、Agent、命令..."
-            className="flex-1 bg-transparent text-base outline-none"
-            style={{ color: 'var(--text-primary)' }}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="鎼滅储椤甸潰..."
+            className="flex-1 bg-transparent text-sm outline-none"
+            style={{ color: 'var(--text-primary, #fff)' }}
           />
-          <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono border" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', backgroundColor: 'var(--bg-tertiary)' }}>
-            ESC
-          </kbd>
+          <button
+            onClick={() => setOpen(false)}
+            className="p-1 rounded hover:bg-white/5"
+            style={{ color: 'var(--text-muted, #666)' }}
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
 
         {/* Results */}
-        <div ref={listRef} className="max-h-[400px] overflow-y-auto py-2">
+        <div className="max-h-72 overflow-y-auto p-2">
           {filtered.length === 0 ? (
-            <div className="flex flex-col items-center py-8">
-              <Search className="w-8 h-8 mb-2" style={{ color: 'var(--text-dim)' }} />
-              <span className="text-sm" style={{ color: 'var(--text-muted)' }}>未找到匹配结果</span>
-            </div>
+            <div className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-muted, #666)' }}>
+              鏃犲尮閰嶇粨鏋?            </div>
           ) : (
-            Object.entries(grouped).map(([category, items]) => (
-              <div key={category}>
-                <div className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--accent-cyan)' }}>
-                  {category}
+            filtered.map((cmd, i) => (
+              <button
+                key={cmd.id}
+                onClick={() => handleSelect(cmd)}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${
+                  i === activeIndex ? 'bg-white/10' : 'hover:bg-white/5'
+                }`}
+              >
+                <span className="text-lg shrink-0">{cmd.icon}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm" style={{ color: 'var(--text-primary, #fff)' }}>
+                    {cmd.label}
+                  </div>
+                  <div
+                    className="text-xs truncate"
+                    style={{ color: 'var(--text-muted, #666)' }}
+                  >
+                    {cmd.description}
+                  </div>
                 </div>
-                {items.map((item) => {
-                  const globalIdx = filtered.indexOf(item);
-                  const isSelected = globalIdx === selectedIndex;
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => item.action()}
-                      onMouseEnter={() => setSelectedIndex(globalIdx)}
-                      className="flex items-center gap-3 w-full px-4 py-2.5 text-left transition-colors"
-                      style={{
-                        backgroundColor: isSelected ? 'var(--accent-cyan-dim)' : 'transparent',
-                      }}
-                    >
-                      <item.icon className="w-4 h-4 shrink-0" style={{ color: isSelected ? 'var(--accent-cyan)' : 'var(--text-muted)' }} />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm truncate" style={{ color: isSelected ? 'var(--accent-cyan)' : 'var(--text-primary)' }}>{item.label}</div>
-                        {item.description && <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>{item.description}</div>}
-                      </div>
-                      {isSelected && <kbd className="text-[10px] px-1 rounded border hidden sm:block" style={{ borderColor: 'var(--border-active)', color: 'var(--text-muted)' }}>↵</kbd>}
-                    </button>
-                  );
-                })}
-              </div>
+                <ArrowRight
+                  className="w-4 h-4 shrink-0 opacity-0 group-hover:opacity-100"
+                  style={{ color: 'var(--text-muted, #666)' }}
+                />
+              </button>
             ))
           )}
         </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-2 border-t text-[10px]" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-dim)' }}>
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1"><kbd className="px-1 rounded border" style={{ borderColor: 'var(--border-subtle)' }}>↑↓</kbd> 选择</span>
-            <span className="flex items-center gap-1"><kbd className="px-1 rounded border" style={{ borderColor: 'var(--border-subtle)' }}>↵</kbd> 确认</span>
-          </div>
-          <span>{filtered.length} 个结果</span>
+        {/* Footer hint */}
+        <div
+          className="flex items-center justify-between px-4 py-2 text-[10px] border-t"
+          style={{
+            borderColor: 'var(--border-subtle, rgba(255,255,255,0.06))',
+            color: 'var(--text-muted, #666)',
+          }}
+        >
+          <span>鈫戔啌 瀵艰埅  路  鈫?閫夋嫨  路  Esc 鍏抽棴</span>
+          <span>鈱楰 鎵撳紑</span>
         </div>
       </div>
     </div>
