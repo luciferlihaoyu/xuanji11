@@ -1,5 +1,6 @@
 /**
- * 鏈湴绠＄悊鍛樿璇佹ā鍧? * 鏇夸唬 Kimi OAuth锛岄€氳繃鐜鍙橀噺閰嶇疆鐨勭鐞嗗憳璐﹀彿瀵嗙爜鐧诲綍
+ * Local admin authentication module
+ * Replaces Kimi OAuth with env-based admin login
  */
 import * as jose from "jose";
 import * as cookie from "cookie";
@@ -28,7 +29,6 @@ function getAdminPasswordHash(): Buffer {
   return adminPasswordHash;
 }
 
-/** 楠岃瘉绠＄悊鍛樿处鍙峰瘑鐮?*/
 export async function verifyAdminCredentials(
   username: string,
   password: string,
@@ -44,7 +44,6 @@ export async function verifyAdminCredentials(
   }
 }
 
-/** 绛惧彂鏈湴璁よ瘉 JWT */
 export async function signLocalToken(username: string): Promise<string> {
   return new jose.SignJWT({
     username,
@@ -57,7 +56,6 @@ export async function signLocalToken(username: string): Promise<string> {
     .sign(getSecret());
 }
 
-/** 楠岃瘉鏈湴璁よ瘉 JWT */
 export async function verifyLocalToken(
   token: string,
 ): Promise<{ username: string } | null> {
@@ -74,7 +72,6 @@ export async function verifyLocalToken(
   }
 }
 
-/** 浠庤姹傚ご/Cookie涓В鏋愭湰鍦拌璇?*/
 export async function authenticateLocalRequest(
   headers: Headers,
 ): Promise<User | undefined> {
@@ -85,7 +82,7 @@ export async function authenticateLocalRequest(
   const claim = await verifyLocalToken(token);
   if (!claim) return undefined;
 
-  // 鏋勫缓涓€涓鍚?User 绫诲瀷鐨勮櫄鎷熺敤鎴?  const user: User = {
+  const user: User = {
     id: 1,
     unionId: LOCAL_ADMIN_UNION_ID,
     name: claim.username,
@@ -100,7 +97,6 @@ export async function authenticateLocalRequest(
   return user;
 }
 
-/** 鍒涘缓鏈湴鐧诲綍澶勭悊鍑芥暟 */
 export function createLocalLoginHandler() {
   return async (c: Context) => {
     try {
@@ -108,12 +104,12 @@ export function createLocalLoginHandler() {
       const { username, password } = body;
 
       if (!username || !password) {
-        return c.json({ error: "璐﹀彿鍜屽瘑鐮佷笉鑳戒负绌? }, 400);
+        return c.json({ error: "Login required" }, 400);
       }
 
       const valid = await verifyAdminCredentials(username, password);
       if (!valid) {
-        return c.json({ error: "璐﹀彿鎴栧瘑鐮侀敊璇? }, 401);
+        return c.json({ error: "Invalid credentials" }, 401);
       }
 
       const token = await signLocalToken(username);
@@ -126,12 +122,11 @@ export function createLocalLoginHandler() {
       return c.json({ success: true, name: username });
     } catch (err) {
       console.error("[Local Auth] Login failed:", err);
-      return c.json({ error: "鐧诲綍澶辫触" }, 500);
+      return c.json({ error: "Login failed" }, 500);
     }
   };
 }
 
-/** 鍒涘缓鐧诲嚭澶勭悊鍑芥暟 */
 export function createLocalLogoutHandler() {
   return async (c: Context) => {
     const cookieOpts = getSessionCookieOptions(c.req.raw.headers);
