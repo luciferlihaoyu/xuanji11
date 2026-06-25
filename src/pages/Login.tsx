@@ -18,7 +18,8 @@ export default function Login() {
       navigate("/");
     },
     onError: (err) => {
-      setError(err.message || "登录失败");
+      console.error("Login error:", err);
+      setError("账号或密码错误");
       setLoading(false);
     },
   });
