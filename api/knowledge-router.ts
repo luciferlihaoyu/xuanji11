@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq, desc, sql } from "drizzle-orm";
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { knowledgeNodes, knowledgeEdges } from "@db/schema";
 import { clean } from "./lib/clean";
