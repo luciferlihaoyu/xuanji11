@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, desc, or, like } from "drizzle-orm";
+import { eq, desc, or, like, and } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";import { getDb } from "./queries/connection";
 import { uploadedFiles } from "@db/schema";
 import { clean } from "./lib/clean";
@@ -27,7 +27,7 @@ export const fileRouter = createRouter({
       }
 
       return db.select().from(uploadedFiles)
-        .where(conditions.length > 0 ? conditions[0] : undefined)
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(desc(uploadedFiles.createdAt));
     }),
 

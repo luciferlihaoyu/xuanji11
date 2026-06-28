@@ -7,6 +7,7 @@ import { datasourceRouter } from "./datasource-router";
 import { fileRouter } from "./file-router";
 import { vectorRouter } from "./vector-router";
 import { settingRouter } from "./setting-router";
+import { backupRouter } from "./backup-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -20,6 +21,7 @@ export const appRouter = createRouter({
   file: fileRouter,
   vector: vectorRouter,
   setting: settingRouter,
+  backup: backupRouter,
 });
 
 export type AppRouter = typeof appRouter;

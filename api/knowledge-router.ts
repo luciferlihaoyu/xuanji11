@@ -4,6 +4,7 @@ import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { knowledgeNodes, knowledgeEdges } from "@db/schema";
 import { clean } from "./lib/clean";
+import { vectorEngine } from "./lib/vector";
 
 export const knowledgeRouter = createRouter({
   listNodes: authedQuery.query(async () => {
@@ -146,5 +147,50 @@ export const knowledgeRouter = createRouter({
     const nodes = await db.select().from(knowledgeNodes);
     const edges = await db.select().from(knowledgeEdges);
     return { nodes, edges };
+  }),
+
+  /** 语义搜索 — 使用向量引擎 */
+  semanticSearch: authedQuery
+    .input(z.object({ query: z.string().min(1), topK: z.number().min(1).max(50).default(10) }))
+    .query(async ({ input }) => {
+      const results = await vectorEngine.searchByText(input.query, input.topK);
+
+      // 回退：向量库为空时回退到 LIKE 搜索
+      if (results.length === 0) {
+        const db = getDb();
+        const q = `%${input.query}%`;
+        const dbResults = await db.select().from(knowledgeNodes)
+          .where(sql`${knowledgeNodes.title} LIKE ${q} OR ${knowledgeNodes.content} LIKE ${q}`)
+          .orderBy(desc(knowledgeNodes.updatedAt))
+          .limit(input.topK);
+        return {
+          mode: "fallback" as const,
+          engine: "mysql-like",
+          results: dbResults.map((n) => ({
+            id: String(n.id),
+            score: 1,
+            title: n.title,
+            snippet: (n.content ?? "").slice(0, 200),
+            type: n.type,
+          })),
+        };
+      }
+
+      return {
+        mode: "semantic" as const,
+        engine: "cosine",
+        results: results.map((r) => ({
+          id: r.id,
+          score: Math.round(r.score * 100) / 100,
+          title: (r.metadata.title as string) ?? r.id,
+          snippet: (r.metadata.content as string)?.slice(0, 200) ?? "",
+          type: r.metadata.type as string ?? "note",
+        })),
+      };
+    }),
+
+  /** 向量健康检查 */
+  vectorHealth: authedQuery.query(async () => {
+    return vectorEngine.healthCheck();
   }),
 });

@@ -12,16 +12,16 @@ interface Command {
 }
 
 const COMMANDS: Command[] = [
-  { id: 'knowledge-graph', label: '鐭ヨ瘑鑴戝浘', description: 'D3.js 鍔涘鍚戠煡璇嗗浘璋?, icon: '鈽?, path: '/', category: 'page' },
-  { id: 'knowledge-base', label: '鐭ヨ瘑搴?, description: '鏂囨。绠＄悊涓庣紪杈戝櫒', icon: '馃摎', path: '/kb', category: 'page' },
-  { id: 'workflow', label: '宸ヤ綔娴佺紪鎺?, description: '鍙鍖栬妭鐐圭紪绋?, icon: '鈿?, path: '/workflows', category: 'page' },
-  { id: 'agents', label: 'Agent 绠＄悊', description: '鏅鸿兘鍔╂墜绠＄悊', icon: '馃', path: '/agents', category: 'page' },
-  { id: 'datasources', label: '鏁版嵁婧?, description: '浜戠洏 / NAS 鏁版嵁鎺ュ叆', icon: '馃敆', path: '/sources', category: 'page' },
-  { id: 'upload', label: '鏂囦欢涓婁紶', description: '涓婁紶鏂囦欢骞跺悜閲忓寲', icon: '馃摛', path: '/upload', category: 'page' },
-  { id: 'api-center', label: 'API 涓績', description: '鎺ュ彛鏂囨。涓庤皟璇?, icon: '馃攲', path: '/api', category: 'page' },
-  { id: 'settings', label: '绯荤粺璁剧疆', description: '涓婚銆佸亸濂借缃?, icon: '鈿?, path: '/settings/theme', category: 'page' },
-  { id: 'search', label: '鍏ㄥ眬鎼滅储', description: '鍏ㄦ枃 + 鍚戦噺璇箟鎼滅储', icon: '馃攳', path: '/search', category: 'page' },
-  { id: 'login', label: '閫€鍑虹櫥褰?, description: '杩斿洖鐧诲綍椤?, icon: '馃毆', path: '/login', category: 'action' },
+  { id: 'knowledge-graph', label: '知识脑图', description: 'D3.js 力导向知识图谱', icon: '\u{1F310}', path: '/', category: 'page' },
+  { id: 'knowledge-base', label: '知识库', description: '文档管理与编辑器', icon: '\u{1F4CE}', path: '/kb', category: 'page' },
+  { id: 'workflow', label: '工作流编排', description: '可视化节点编程', icon: '\u26A1', path: '/workflows', category: 'page' },
+  { id: 'agents', label: 'Agent 管理', description: '智能助手管理', icon: '\u{1F916}', path: '/agents', category: 'page' },
+  { id: 'datasources', label: '数据源', description: '云盘 / NAS 数据接入', icon: '\u{1F4E6}', path: '/sources', category: 'page' },
+  { id: 'upload', label: '文件上传', description: '上传文件并向量化', icon: '\u{1F4E4}', path: '/upload', category: 'page' },
+  { id: 'api-center', label: 'API 中心', description: '接口文档与调试', icon: '\u{1F527}', path: '/api', category: 'page' },
+  { id: 'settings', label: '系统设置', description: '主题、偏好设置', icon: '\u2699\uFE0F', path: '/settings/theme', category: 'page' },
+  { id: 'search', label: '全局搜索', description: '全文 + 向量语义搜索', icon: '\u{1F50D}', path: '/search', category: 'page' },
+  { id: 'login', label: '退出登录', description: '返回登录页', icon: '\u{1F6AA}', path: '/login', category: 'action' },
 ];
 
 export default function CommandPalette() {
@@ -115,7 +115,7 @@ export default function CommandPalette() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="鎼滅储椤甸潰..."
+            placeholder="搜索页面..."
             className="flex-1 bg-transparent text-sm outline-none"
             style={{ color: 'var(--text-primary, #fff)' }}
           />
@@ -132,7 +132,8 @@ export default function CommandPalette() {
         <div className="max-h-72 overflow-y-auto p-2">
           {filtered.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-muted, #666)' }}>
-              鏃犲尮閰嶇粨鏋?            </div>
+              无匹配结果
+            </div>
           ) : (
             filtered.map((cmd, i) => (
               <button
@@ -171,8 +172,8 @@ export default function CommandPalette() {
             color: 'var(--text-muted, #666)',
           }}
         >
-          <span>鈫戔啌 瀵艰埅  路  鈫?閫夋嫨  路  Esc 鍏抽棴</span>
-          <span>鈱楰 鎵撳紑</span>
+          <span>\u2191\u2193 导航  \u00B7  \u21B5 选择  \u00B7  Esc 关闭</span>
+          <span>\u2318K 打开</span>
         </div>
       </div>
     </div>

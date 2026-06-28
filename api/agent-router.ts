@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, desc, like, or } from "drizzle-orm";
+import { eq, desc, like, or, and } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { agents } from "@db/schema";
@@ -32,7 +32,7 @@ export const agentRouter = createRouter({
       }
 
       return db.select().from(agents)
-        .where(conditions.length > 0 ? conditions[0] : undefined)
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(desc(agents.updatedAt));
     }),
 
