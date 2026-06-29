@@ -36,3 +36,27 @@ export function useWorkflows() {
 export function useWorkflow(id: number) {
   return trpc.workflow.getById.useQuery({ id });
 }
+
+export function useWorkflowRuns(workflowId: number) {
+  return trpc.workflow.listRuns.useQuery({ workflowId });
+}
+
+export function useWorkflowRun(id: number | null) {
+  return trpc.workflow.getRun.useQuery(
+    { id: id ?? 0 },
+    { enabled: id !== null, refetchInterval: (query) => {
+      const state = query.state.data;
+      if (!state) return 1000;
+      return state.status === "running" || state.status === "pending" ? 1000 : false;
+    }}
+  );
+}
+
+export function useRunWorkflow() {
+  const utils = trpc.useUtils();
+  return trpc.workflow.run.useMutation({
+    onSuccess: (_, vars) => {
+      utils.workflow.listRuns.invalidate({ workflowId: vars.id });
+    },
+  });
+}

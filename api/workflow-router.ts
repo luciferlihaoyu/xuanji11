@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, notInArray } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { workflows, workflowNodes, workflowRuns, workflowRunNodes } from "@db/schema";
@@ -164,12 +164,12 @@ export const workflowRouter = createRouter({
         }),
         nodes: z.array(z.object({
           id: z.number().optional(),
-          type: z.string(),
+          clientId: z.string().min(1),
+          type: z.string().min(1),
           label: z.string().optional(),
           positionX: z.number(),
           positionY: z.number(),
           config: z.record(z.string(), z.unknown()).optional(),
-          connections: z.array(z.record(z.string(), z.unknown())).optional(),
         })),
       })
     )
@@ -179,22 +179,54 @@ export const workflowRouter = createRouter({
       const { id, ...wfData } = workflow;
 
       await db.update(workflows).set(clean(wfData as Record<string, unknown>)).where(eq(workflows.id, id));
-      await db.delete(workflowNodes).where(eq(workflowNodes.workflowId, id));
 
-      for (const node of nodes) {
-        const nodeValues: Record<string, unknown> = {
-          workflowId: id,
-          type: node.type,
-          positionX: node.positionX,
-          positionY: node.positionY,
-        };
-        if (node.label !== undefined) nodeValues.label = node.label;
-        if (node.config !== undefined) nodeValues.config = node.config;
-        if (node.connections !== undefined) nodeValues.connections = node.connections;
-        await db.insert(workflowNodes).values(nodeValues as typeof workflowNodes.$inferInsert);
+      const canvas = (workflow.canvas ?? {}) as Record<string, unknown>;
+      const edges = (canvas.edges as Array<{ sourceClientId: string; targetClientId: string }> | undefined) ?? [];
+
+      const existingIds = nodes.map((n) => n.id).filter((n): n is number => n !== undefined);
+      if (existingIds.length > 0) {
+        await db.delete(workflowNodes)
+          .where(and(eq(workflowNodes.workflowId, id), notInArray(workflowNodes.id, existingIds)));
+      } else {
+        await db.delete(workflowNodes).where(eq(workflowNodes.workflowId, id));
       }
 
-      return { success: true };
+      const clientIdToDbId = new Map<string, number>();
+
+      for (const node of nodes) {
+        const baseValues = {
+          workflowId: id,
+          type: node.type,
+          label: node.label,
+          positionX: node.positionX,
+          positionY: node.positionY,
+          config: node.config as Record<string, unknown>,
+          connections: [] as unknown[],
+        };
+        if (node.id) {
+          await db.update(workflowNodes).set(clean(baseValues as Record<string, unknown>)).where(eq(workflowNodes.id, node.id));
+          clientIdToDbId.set(node.clientId, node.id);
+        } else {
+          const result = await db.insert(workflowNodes).values(baseValues as typeof workflowNodes.$inferInsert);
+          const newId = Number(result[0].insertId);
+          clientIdToDbId.set(node.clientId, newId);
+        }
+      }
+
+      for (const node of nodes) {
+        const dbId = clientIdToDbId.get(node.clientId);
+        if (!dbId) continue;
+        const outgoing = edges
+          .filter((e) => e.sourceClientId === node.clientId)
+          .map((e) => ({ targetId: clientIdToDbId.get(e.targetClientId) }))
+          .filter((e): e is { targetId: number } => e.targetId !== undefined);
+        await db.update(workflowNodes)
+          .set({ connections: outgoing as unknown[] })
+          .where(eq(workflowNodes.id, dbId));
+      }
+
+      const updatedNodes = await db.select().from(workflowNodes).where(eq(workflowNodes.workflowId, id));
+      return { success: true, nodes: updatedNodes };
     }),
 
   run: adminQuery

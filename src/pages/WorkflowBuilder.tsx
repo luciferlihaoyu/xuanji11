@@ -1,9 +1,12 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAppStore } from '@/store/useAppStore';
-import { Play, Pause, ZoomIn, ZoomOut, Maximize2, Undo2, Redo2, Save, ChevronDown, Copy, Trash2, Power, Plus, X, Check, GripVertical } from 'lucide-react';
+import { useWorkflows, useWorkflow, useWorkflowRuns, useWorkflowRun, useRunWorkflow } from '@/hooks/useWorkflows';
+import { Play, ZoomIn, ZoomOut, Maximize2, Undo2, Redo2, Save, ChevronDown, Copy, Trash2, Power, Plus, X, Check, GripVertical, Loader2, History, ArrowLeft, Clock, AlertCircle } from 'lucide-react';
 
 interface WFNode {
   id: string;
+  clientId: string;
   type: string;
   category: string;
   label: string;
@@ -20,6 +23,11 @@ interface WFEdge {
   target: string;
 }
 
+interface CanvasEdge {
+  sourceClientId: string;
+  targetClientId: string;
+}
+
 const NODE_CATEGORIES: Record<string, { label: string; color: string; bg: string }> = {
   trigger: { label: '触发器', color: '#00e5ff', bg: 'rgba(0,229,255,0.1)' },
   processing: { label: '知识处理', color: '#a78bfa', bg: 'rgba(167,139,250,0.1)' },
@@ -28,28 +36,6 @@ const NODE_CATEGORIES: Record<string, { label: string; color: string; bg: string
   output: { label: '输出', color: '#ff6b81', bg: 'rgba(255,107,129,0.1)' },
   logic: { label: '逻辑', color: '#60a5fa', bg: 'rgba(96,165,250,0.1)' },
 };
-
-const SAMPLE_NODES: WFNode[] = [
-  { id: 'n1', type: 'file-upload', category: 'trigger', label: '文件上传触发', x: 80, y: 200, description: '当有新文件上传时触发', config: {}, status: 'idle' },
-  { id: 'n2', type: 'text-extract', category: 'processing', label: '文本提取', x: 320, y: 160, description: 'OCR/文本解析', config: {}, status: 'idle' },
-  { id: 'n3', type: 'vectorize', category: 'processing', label: '向量化', x: 560, y: 160, description: 'Embedding 转换', config: { model: 'text-embedding-3-large' }, status: 'idle' },
-  { id: 'n4', type: 'keywords', category: 'processing', label: '关键词提取', x: 320, y: 340, description: '自动提取关键词', config: {}, status: 'idle' },
-  { id: 'n5', type: 'find-similar', category: 'connection', label: '查找相似知识', x: 800, y: 120, description: '语义相似度搜索', config: {}, status: 'idle' },
-  { id: 'n6', type: 'create-link', category: 'connection', label: '建立关联', x: 800, y: 260, description: '创建知识链接', config: {}, status: 'idle' },
-  { id: 'n7', type: 'notify-agent', category: 'agent', label: '通知 Agent', x: 1040, y: 160, description: '通知相关 Agent', config: {}, status: 'idle' },
-  { id: 'n8', type: 'save-result', category: 'output', label: '保存结果', x: 1040, y: 360, description: '保存到知识库', config: {}, status: 'idle' },
-];
-
-const SAMPLE_EDGES: WFEdge[] = [
-  { id: 'e1', source: 'n1', target: 'n2' },
-  { id: 'e2', source: 'n2', target: 'n3' },
-  { id: 'e3', source: 'n2', target: 'n4' },
-  { id: 'e4', source: 'n3', target: 'n5' },
-  { id: 'e5', source: 'n3', target: 'n6' },
-  { id: 'e6', source: 'n5', target: 'n7' },
-  { id: 'e7', source: 'n6', target: 'n7' },
-  { id: 'e8', source: 'n4', target: 'n8' },
-];
 
 const COMPONENT_LIBRARY = [
   { category: 'trigger', items: [
@@ -81,10 +67,76 @@ const COMPONENT_LIBRARY = [
   ]},
 ];
 
+function generateClientId() {
+  return `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getNodeMeta(type: string) {
+  for (const group of COMPONENT_LIBRARY) {
+    const item = group.items.find((i) => i.type === type);
+    if (item) return { ...item, category: group.category };
+  }
+  return { type, label: '未知节点', desc: '', category: 'processing' };
+}
+
+function toFrontendNode(dbNode: any): WFNode {
+  const config = (dbNode.config as Record<string, any> | null) ?? {};
+  const clientId = (config.clientId as string) || `legacy-${dbNode.id}`;
+  const meta = getNodeMeta(dbNode.type);
+  const { clientId: _, ...restConfig } = config;
+  return {
+    id: String(dbNode.id),
+    clientId,
+    type: dbNode.type,
+    category: meta.category,
+    label: dbNode.label || meta.label,
+    x: dbNode.positionX,
+    y: dbNode.positionY,
+    description: meta.desc,
+    config: restConfig,
+    status: 'idle',
+  };
+}
+
+function toBackendNode(node: WFNode) {
+  const { clientId: _, ...restConfig } = node.config;
+  return {
+    id: /^tmp-/.test(node.id) ? undefined : Number(node.id),
+    clientId: node.clientId,
+    type: node.type,
+    label: node.label,
+    positionX: node.x,
+    positionY: node.y,
+    config: { ...restConfig, clientId: node.clientId },
+  };
+}
+
+function formatDuration(startedAt: string | Date | null, completedAt: string | Date | null) {
+  const start = startedAt ? new Date(startedAt).getTime() : 0;
+  const end = completedAt ? new Date(completedAt).getTime() : Date.now();
+  if (!start || !end || end <= start) return '-';
+  const ms = end - start;
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 export default function WorkflowBuilder() {
+  const { id: idParam } = useParams<{ id?: string }>();
+  const navigate = useNavigate();
   const { addToast } = useAppStore();
-  const [nodes, setNodes] = useState<WFNode[]>(SAMPLE_NODES);
-  const [edges, setEdges] = useState<WFEdge[]>(SAMPLE_EDGES);
+
+  const workflowId = idParam && !isNaN(Number(idParam)) ? Number(idParam) : null;
+
+  const { workflows, isLoading: listLoading, create, saveFull } = useWorkflows();
+  const { data: workflowData, isLoading: wfLoading } = useWorkflow(workflowId ?? 0);
+  const { data: runsData, refetch: refetchRuns } = useWorkflowRuns(workflowId ?? 0);
+  const runMutation = useRunWorkflow();
+
+  const [activeRunId, setActiveRunId] = useState<number | null>(null);
+  const { data: activeRun } = useWorkflowRun(activeRunId);
+
+  const [nodes, setNodes] = useState<WFNode[]>([]);
+  const [edges, setEdges] = useState<WFEdge[]>([]);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -94,7 +146,61 @@ export default function WorkflowBuilder() {
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['trigger', 'processing', 'connection']));
   const [connectingFrom, setConnectingFrom] = useState<string | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const [showRuns, setShowRuns] = useState(false);
+  const [workflowName, setWorkflowName] = useState('新工作流');
+  const [workflowDescription, setWorkflowDescription] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
+
+  const isLoading = listLoading || (workflowId !== null && wfLoading);
+
+  useEffect(() => {
+    if (!workflowData) return;
+    setWorkflowName(workflowData.name || '未命名工作流');
+    setWorkflowDescription(workflowData.description || '');
+
+    const loadedNodes = workflowData.nodes.map(toFrontendNode);
+    setNodes(loadedNodes);
+
+    const canvas = (workflowData.canvas as Record<string, any> | null) ?? {};
+    const canvasEdges = (canvas.edges as CanvasEdge[] | undefined) ?? [];
+    const clientIdToId = new Map(loadedNodes.map((n) => [n.clientId, n.id]));
+    setEdges(canvasEdges
+      .filter((e) => clientIdToId.has(e.sourceClientId) && clientIdToId.has(e.targetClientId))
+      .map((e, i) => ({
+        id: `e-${clientIdToId.get(e.sourceClientId)}-${clientIdToId.get(e.targetClientId)}-${i}`,
+        source: clientIdToId.get(e.sourceClientId)!,
+        target: clientIdToId.get(e.targetClientId)!,
+      })));
+
+    const viewport = (canvas.viewport as { x?: number; y?: number; zoom?: number } | undefined) ?? {};
+    if (viewport.x !== undefined) setPan((p) => ({ ...p, x: viewport.x! }));
+    if (viewport.y !== undefined) setPan((p) => ({ ...p, y: viewport.y! }));
+    if (viewport.zoom !== undefined) setZoom(viewport.zoom);
+
+    setSelectedNode(null);
+  }, [workflowData]);
+
+  useEffect(() => {
+    if (!activeRun) {
+      setNodes((prev) => prev.map((n) => ({ ...n, status: 'idle' })));
+      setIsRunning(false);
+      return;
+    }
+    const runFinished = activeRun.status === 'completed' || activeRun.status === 'failed' || activeRun.status === 'cancelled';
+    setIsRunning(!runFinished);
+    const nodeStatusMap = new Map<string, WFNode['status']>();
+    if (activeRun.nodes) {
+      for (const runNode of activeRun.nodes) {
+        const dbNodeId = String(runNode.nodeId);
+        const frontendNode = nodes.find((n) => n.id === dbNodeId);
+        if (frontendNode) {
+          nodeStatusMap.set(frontendNode.id, runNode.status === 'completed' ? 'success' : runNode.status === 'failed' ? 'error' : runNode.status === 'running' ? 'running' : 'idle');
+        }
+      }
+    }
+    setNodes((prev) => prev.map((n) => ({ ...n, status: nodeStatusMap.get(n.id) || 'idle' })));
+  }, [activeRun, nodes]);
 
   const toggleCategory = (cat: string) => {
     setExpandedCategories((prev) => {
@@ -104,7 +210,6 @@ export default function WorkflowBuilder() {
     });
   };
 
-  // Drag node
   const handleMouseDown = useCallback((e: React.MouseEvent, nodeId: string) => {
     e.stopPropagation();
     const node = nodes.find((n) => n.id === nodeId);
@@ -128,7 +233,6 @@ export default function WorkflowBuilder() {
 
   const handleMouseUp = useCallback(() => setDraggingNode(null), []);
 
-  // Pan canvas
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
       const startX = e.clientX - pan.x;
@@ -145,14 +249,16 @@ export default function WorkflowBuilder() {
     }
   };
 
-  // Create connection
   const handlePortClick = (nodeId: string, isOutput: boolean) => {
     if (isOutput) {
       if (connectingFrom === nodeId) { setConnectingFrom(null); return; }
       setConnectingFrom(nodeId);
     } else {
       if (connectingFrom && connectingFrom !== nodeId) {
-        const edgeId = `e-${connectingFrom}-${nodeId}`;
+        const sourceNode = nodes.find((n) => n.id === connectingFrom);
+        const targetNode = nodes.find((n) => n.id === nodeId);
+        if (!sourceNode || !targetNode) { setConnectingFrom(null); return; }
+        const edgeId = `e-${sourceNode.clientId}-${targetNode.clientId}`;
         if (!edges.find((e) => e.source === connectingFrom && e.target === nodeId)) {
           setEdges((prev) => [...prev, { id: edgeId, source: connectingFrom, target: nodeId }]);
           addToast({ type: 'success', title: '连线已创建' });
@@ -162,16 +268,18 @@ export default function WorkflowBuilder() {
     }
   };
 
-  // Add node from palette
   const addNode = (type: string, category: string, label: string) => {
+    const clientId = generateClientId();
+    const meta = getNodeMeta(type);
     const newNode: WFNode = {
-      id: `n-${Date.now()}`,
+      id: `tmp-${clientId}`,
+      clientId,
       type,
       category,
       label,
       x: 200 + Math.random() * 200,
       y: 200 + Math.random() * 100,
-      description: '',
+      description: meta.desc,
       config: {},
       status: 'idle',
     };
@@ -180,45 +288,121 @@ export default function WorkflowBuilder() {
     addToast({ type: 'success', title: `已添加「${label}」节点` });
   };
 
-  // Delete node
   const deleteNode = (id: string) => {
     setNodes((prev) => prev.filter((n) => n.id !== id));
     setEdges((prev) => prev.filter((e) => e.source !== id && e.target !== id));
     setSelectedNode(null);
   };
 
-  // Duplicate node
   const duplicateNode = (node: WFNode) => {
-    const newNode: WFNode = { ...node, id: `n-${Date.now()}`, x: node.x + 30, y: node.y + 30, status: 'idle' };
+    const clientId = generateClientId();
+    const newNode: WFNode = { ...node, id: `tmp-${clientId}`, clientId, x: node.x + 30, y: node.y + 30, status: 'idle' };
     setNodes((prev) => [...prev, newNode]);
   };
 
-  // Run workflow
-  const runWorkflow = () => {
-    setIsRunning(true);
-    setNodes((prev) => prev.map((n) => ({ ...n, status: 'idle' })));
+  const updateNodeConfig = (id: string, patch: Partial<WFNode> | ((prev: WFNode) => Partial<WFNode>)) => {
+    setNodes((prev) => prev.map((n) => {
+      if (n.id !== id) return n;
+      const updates = typeof patch === 'function' ? patch(n) : patch;
+      return { ...n, ...updates };
+    }));
+  };
 
-    let step = 0;
-    const interval = setInterval(() => {
-      setNodes((prev) => {
-        const next = [...prev];
-        if (step < next.length) {
-          next[step] = { ...next[step], status: 'running' };
-          if (step > 0) next[step - 1] = { ...next[step - 1], status: 'success' };
-        } else if (step === next.length) {
-          next[next.length - 1] = { ...next[next.length - 1], status: 'success' };
-        }
-        return next;
+  const buildCanvasEdges = (): CanvasEdge[] => {
+    const clientIdById = new Map(nodes.map((n) => [n.id, n.clientId]));
+    return edges
+      .map((e) => ({ sourceClientId: clientIdById.get(e.source), targetClientId: clientIdById.get(e.target) }))
+      .filter((e): e is CanvasEdge => !!e.sourceClientId && !!e.targetClientId);
+  };
+
+  const saveWorkflow = async () => {
+    if (!workflowId) {
+      try {
+        const { id } = await create({ name: workflowName, description: workflowDescription, status: 'draft' });
+        await saveFull({
+          workflow: {
+            id,
+            name: workflowName,
+            description: workflowDescription,
+            canvas: {
+              edges: buildCanvasEdges(),
+              viewport: { x: pan.x, y: pan.y, zoom },
+            },
+          },
+          nodes: nodes.map(toBackendNode),
+        });
+        addToast({ type: 'success', title: '工作流已创建并保存' });
+        navigate(`/workflows/${id}`, { replace: true });
+      } catch (err) {
+        addToast({ type: 'error', title: '保存失败', description: err instanceof Error ? err.message : String(err) });
+      }
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const result = await saveFull({
+        workflow: {
+          id: workflowId,
+          name: workflowName,
+          description: workflowDescription,
+          canvas: {
+            edges: buildCanvasEdges(),
+            viewport: { x: pan.x, y: pan.y, zoom },
+          },
+        },
+        nodes: nodes.map(toBackendNode),
       });
-      step++;
-      if (step > nodes.length) { clearInterval(interval); setIsRunning(false); addToast({ type: 'success', title: '工作流执行完成' }); }
-    }, 600);
+      addToast({ type: 'success', title: '工作流已保存' });
+      if (result.nodes) {
+        const idMap = new Map<string, string>();
+        for (const n of result.nodes) {
+          const config = (n.config as Record<string, any> | null) ?? {};
+          const clientId = config.clientId as string | undefined;
+          if (clientId) idMap.set(clientId, String(n.id));
+        }
+        setNodes((prev) => prev.map((n) => idMap.has(n.clientId) ? { ...n, id: idMap.get(n.clientId)! } : n));
+        setEdges((prev) => prev.map((e, i) => {
+          const sourceNode = nodes.find((n) => n.id === e.source);
+          const targetNode = nodes.find((n) => n.id === e.target);
+          if (!sourceNode || !targetNode) return e;
+          const newSource = idMap.get(sourceNode.clientId) || e.source;
+          const newTarget = idMap.get(targetNode.clientId) || e.target;
+          return { ...e, id: `e-${newSource}-${newTarget}-${i}`, source: newSource, target: newTarget };
+        }));
+      }
+    } catch (err) {
+      addToast({ type: 'error', title: '保存失败', description: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const runWorkflow = async () => {
+    if (!workflowId) {
+      addToast({ type: 'error', title: '请先保存工作流' });
+      return;
+    }
+    if (nodes.length === 0) {
+      addToast({ type: 'error', title: '工作流为空，无法运行' });
+      return;
+    }
+    setIsRunning(true);
+    try {
+      const { runId } = await runMutation.mutateAsync({ id: workflowId, input: {} });
+      setActiveRunId(runId);
+      setShowRuns(true);
+      addToast({ type: 'success', title: '工作流运行已启动' });
+      refetchRuns();
+    } catch (err) {
+      setIsRunning(false);
+      addToast({ type: 'error', title: '运行失败', description: err instanceof Error ? err.message : String(err) });
+    }
   };
 
   const selectedNodeData = nodes.find((n) => n.id === selectedNode);
   const connectingFromNode = connectingFrom ? nodes.find((n) => n.id === connectingFrom) : null;
 
-  // Edge path
   const getEdgePath = (edge: WFEdge) => {
     const s = nodes.find((n) => n.id === edge.source);
     const t = nodes.find((n) => n.id === edge.target);
@@ -227,6 +411,8 @@ export default function WorkflowBuilder() {
     const dr = Math.sqrt(dx * dx + dy * dy) * 1.2;
     return `M${s.x},${s.y}A${dr},${dr} 0 0,1 ${t.x},${t.y}`;
   };
+
+  const runs = runsData ?? [];
 
   return (
     <div className="flex" style={{ height: 'calc(100vh - 48px)', backgroundColor: 'var(--bg-primary)' }}>
@@ -267,9 +453,35 @@ export default function WorkflowBuilder() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
         {/* Toolbar */}
         <div className="flex items-center justify-between px-4 py-2 border-b shrink-0 h-11" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
-          <div className="flex items-center gap-2">
-            <input type="text" defaultValue="新人上手工作流" className="bg-transparent text-sm font-semibold outline-none sci-corner px-2 py-0.5" style={{ color: 'var(--text-primary)' }} />
-            <span className="chip chip-amber text-[10px] py-0.5 px-2">草稿</span>
+          <div className="flex items-center gap-2 min-w-0">
+            <Link to="/workflows" className="p-1.5 rounded hover:bg-white/5 shrink-0" style={{ color: 'var(--text-muted)' }} title="返回列表"><ArrowLeft className="w-4 h-4" /></Link>
+            <input
+              type="text"
+              value={workflowName}
+              onChange={(e) => setWorkflowName(e.target.value)}
+              placeholder="工作流名称"
+              className="bg-transparent text-sm font-semibold outline-none sci-corner px-2 py-0.5 min-w-[120px] max-w-[240px]"
+              style={{ color: 'var(--text-primary)' }}
+            />
+            <span className="chip chip-amber text-[10px] py-0.5 px-2 shrink-0">{workflowId ? '草稿' : '未保存'}</span>
+            <div className="relative shrink-0">
+              <select
+                value={workflowId ?? 'new'}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === 'new') navigate('/workflows');
+                  else navigate(`/workflows/${val}`);
+                }}
+                className="bg-transparent text-xs outline-none sci-corner px-2 py-1 cursor-pointer"
+                style={{ color: 'var(--text-secondary)' }}
+                disabled={listLoading}
+              >
+                <option value="new">+ 新建工作流</option>
+                {workflows.map((w) => (
+                  <option key={w.id} value={String(w.id)}>{w.name}</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="flex items-center gap-1">
             <button className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-secondary)' }} title="撤销"><Undo2 className="w-4 h-4" /></button>
@@ -281,10 +493,18 @@ export default function WorkflowBuilder() {
             <button className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-secondary)' }}><Maximize2 className="w-4 h-4" /></button>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={runWorkflow} disabled={isRunning} className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50">
-              {isRunning ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}{isRunning ? '运行中' : '调试运行'}
+            <button
+              onClick={() => setShowRuns((s) => !s)}
+              className={`btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 ${showRuns ? 'bg-white/10' : ''}`}
+            >
+              <History className="w-3.5 h-3.5" />运行记录
             </button>
-            <button className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5"><Save className="w-3.5 h-3.5" />保存</button>
+            <button onClick={runWorkflow} disabled={isRunning} className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50">
+              {isRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}{isRunning ? '运行中' : '调试运行'}
+            </button>
+            <button onClick={saveWorkflow} disabled={isSaving} className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50">
+              {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}{isSaving ? '保存中' : '保存'}
+            </button>
           </div>
         </div>
 
@@ -294,6 +514,16 @@ export default function WorkflowBuilder() {
           onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseDown={handleCanvasMouseDown}>
           {/* Grid */}
           <div className="absolute inset-0 opacity-30 bg-grid" style={{ backgroundSize: `${20 * zoom}px ${20 * zoom}px`, transform: `translate(${pan.x % (20 * zoom)}px, ${pan.y % (20 * zoom)}px)` }} />
+
+          {/* Loading overlay */}
+          {isLoading && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.3)' }}>
+              <div className="flex items-center gap-2 px-4 py-2 rounded-lg" style={{ backgroundColor: 'var(--bg-panel)' }}>
+                <Loader2 className="w-4 h-4 animate-spin" style={{ color: 'var(--accent-cyan)' }} />
+                <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>加载中...</span>
+              </div>
+            </div>
+          )}
 
           {/* SVG Layer */}
           <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
@@ -308,7 +538,6 @@ export default function WorkflowBuilder() {
                 {isRunning && <circle r="2.5" fill="var(--accent-cyan)"><animateMotion dur="1.5s" repeatCount="indefinite" path={getEdgePath(edge)} /></circle>}
               </g>
             ))}
-            {/* Connecting line */}
             {connectingFromNode && (
               <line x1={connectingFromNode.x} y1={connectingFromNode.y} x2={(mousePos.x - pan.x) / zoom} y2={(mousePos.y - pan.y) / zoom} stroke="var(--accent-cyan)" strokeWidth="1.5" strokeDasharray="4,4" opacity="0.7" />
             )}
@@ -331,10 +560,10 @@ export default function WorkflowBuilder() {
                         <span className="text-xs font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{node.label}</span>
                         {node.status === 'running' && <div className="animate-rotate w-3 h-3 border-2 border-t-transparent rounded-full ml-auto" style={{ borderColor: catInfo.color, borderTopColor: 'transparent' }} />}
                         {node.status === 'success' && <Check className="w-3 h-3 ml-auto" style={{ color: 'var(--accent-emerald)' }} />}
+                        {node.status === 'error' && <AlertCircle className="w-3 h-3 ml-auto" style={{ color: 'var(--accent-rose)' }} />}
                       </div>
                       <p className="text-[9px] mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>{node.description}</p>
                     </div>
-                    {/* Ports */}
                     <div className="relative h-4">
                       <button onClick={(e) => { e.stopPropagation(); handlePortClick(node.id, false); }} className="absolute left-1 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 transition-all hover:scale-125" style={{ borderColor: catInfo.color, backgroundColor: connectingFrom && connectingFrom !== node.id ? `${catInfo.color}40` : 'var(--bg-panel)' }} title="输入" />
                       <button onClick={(e) => { e.stopPropagation(); handlePortClick(node.id, true); }} className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 transition-all hover:scale-125" style={{ borderColor: catInfo.color, backgroundColor: isConnecting ? catInfo.color : 'var(--bg-panel)', boxShadow: isConnecting ? `0 0 6px ${catInfo.color}` : 'none' }} title="输出" />
@@ -345,7 +574,6 @@ export default function WorkflowBuilder() {
             })}
           </div>
 
-          {/* Status bar */}
           {connectingFrom && (
             <div className="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full text-xs font-medium animate-fade-in" style={{ backgroundColor: 'var(--accent-cyan-dim)', border: '1px solid var(--accent-cyan)', color: 'var(--accent-cyan)' }}>
               点击目标节点的输入端口完成连线，按 ESC 取消
@@ -355,7 +583,7 @@ export default function WorkflowBuilder() {
       </div>
 
       {/* Right Config Panel */}
-      {selectedNodeData && (
+      {selectedNodeData && !showRuns && (
         <div className="w-[300px] shrink-0 border-l overflow-y-auto" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
           <div className="p-4">
             <div className="flex items-center gap-2 mb-4">
@@ -369,17 +597,190 @@ export default function WorkflowBuilder() {
             </div>
             <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>{selectedNodeData.description}</p>
             <div className="space-y-3">
-              <div><label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>节点名称</label><input type="text" defaultValue={selectedNodeData.label} className="input-base text-xs" /></div>
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>节点名称</label>
+                <input
+                  type="text"
+                  value={selectedNodeData.label}
+                  onChange={(e) => updateNodeConfig(selectedNodeData.id, { label: e.target.value })}
+                  className="input-base text-xs"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>节点说明</label>
+                <input
+                  type="text"
+                  value={selectedNodeData.description}
+                  onChange={(e) => updateNodeConfig(selectedNodeData.id, { description: e.target.value })}
+                  className="input-base text-xs"
+                />
+              </div>
               {selectedNodeData.type === 'vectorize' && (
-                <><div><label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>向量化模型</label><select className="input-base text-xs"><option>OpenAI text-embedding-3-large</option><option>BGE-large-zh</option><option>M3E-base</option></select></div><div><label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>向量维度</label><input type="number" defaultValue={3072} className="input-base text-xs" /></div></>
+                <>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>向量化模型</label>
+                    <select
+                      className="input-base text-xs"
+                      value={(selectedNodeData.config.model as string) || 'text-embedding-3-small'}
+                      onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, model: e.target.value } }))}
+                    >
+                      <option value="text-embedding-3-large">OpenAI text-embedding-3-large</option>
+                      <option value="text-embedding-3-small">OpenAI text-embedding-3-small</option>
+                      <option value="bge-large-zh">BGE-large-zh</option>
+                      <option value="m3e-base">M3E-base</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>向量维度</label>
+                    <input
+                      type="number"
+                      value={(selectedNodeData.config.dimension as number) || 1536}
+                      onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, dimension: Number(e.target.value) } }))}
+                      className="input-base text-xs"
+                    />
+                  </div>
+                </>
               )}
               {selectedNodeData.type === 'notify-agent' && (
-                <><div><label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>目标 Agent</label><select className="input-base text-xs"><option>女娲（美智子）</option><option>后土</option><option>上官婉儿</option><option>全部在线 Agent</option></select></div><div><label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>通知内容</label><textarea className="input-base text-xs h-16 resize-none" defaultValue="新的知识已上传并向量化完成，请审核。" /></div></>
+                <>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>目标 Agent</label>
+                    <select
+                      className="input-base text-xs"
+                      value={(selectedNodeData.config.agentName as string) || ''}
+                      onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, agentName: e.target.value } }))}
+                    >
+                      <option value="">选择 Agent</option>
+                      <option value="女娲">女娲（美智子）</option>
+                      <option value="后土">后土</option>
+                      <option value="上官婉儿">上官婉儿</option>
+                      <option value="全部">全部在线 Agent</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>通知内容</label>
+                    <textarea
+                      className="input-base text-xs h-16 resize-none"
+                      value={(selectedNodeData.config.message as string) || ''}
+                      onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, message: e.target.value } }))}
+                    />
+                  </div>
+                </>
+              )}
+              {(selectedNodeData.type === 'text-extract' || selectedNodeData.type === 'keywords' || selectedNodeData.type === 'summarize') && (
+                <div>
+                  <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>输入文本</label>
+                  <textarea
+                    className="input-base text-xs h-20 resize-none"
+                    value={(selectedNodeData.config.text as string) || ''}
+                    onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, text: e.target.value } }))}
+                    placeholder="运行时可覆盖"
+                  />
+                </div>
+              )}
+              {selectedNodeData.type === 'find-similar' && (
+                <div>
+                  <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>查询内容</label>
+                  <input
+                    type="text"
+                    className="input-base text-xs"
+                    value={(selectedNodeData.config.query as string) || ''}
+                    onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, query: e.target.value } }))}
+                    placeholder="运行时可覆盖"
+                  />
+                </div>
+              )}
+              {selectedNodeData.type === 'delay' && (
+                <div>
+                  <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>延迟毫秒</label>
+                  <input
+                    type="number"
+                    className="input-base text-xs"
+                    value={(selectedNodeData.config.ms as number) || 1000}
+                    onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, ms: Number(e.target.value) } }))}
+                  />
+                </div>
+              )}
+              {selectedNodeData.type === 'condition' && (
+                <div>
+                  <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>条件表达式</label>
+                  <input
+                    type="text"
+                    className="input-base text-xs"
+                    value={(selectedNodeData.config.expression as string) || 'true'}
+                    onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, expression: e.target.value } }))}
+                  />
+                </div>
               )}
               <div className="flex items-center gap-2 pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
                 <button className="btn-ghost text-xs py-1.5 flex items-center gap-1"><Power className="w-3.5 h-3.5" />禁用</button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Runs Panel */}
+      {showRuns && (
+        <div className="w-[320px] shrink-0 border-l overflow-y-auto" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+          <div className="p-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>运行记录</h3>
+              <button onClick={() => setShowRuns(false)} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+            </div>
+            {runs.length === 0 ? (
+              <div className="text-center py-8 rounded-lg border border-dashed" style={{ borderColor: 'var(--border-subtle)' }}>
+                <History className="w-8 h-8 mx-auto mb-2" style={{ color: 'var(--text-muted)' }} />
+                <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>暂无运行记录</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {runs.map((run) => (
+                  <div
+                    key={run.id}
+                    onClick={() => setActiveRunId(run.id)}
+                    className={`p-3 rounded-lg border cursor-pointer transition-colors ${activeRunId === run.id ? 'border-[var(--accent-cyan)] bg-[var(--accent-cyan-dim)]' : 'border-[var(--border-subtle)] hover:border-[var(--border-active)]'}`}
+                    style={{ backgroundColor: activeRunId === run.id ? 'var(--accent-cyan-dim)' : 'var(--bg-panel)' }}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>Run #{run.id}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${run.status === 'completed' ? 'bg-emerald-500/15 text-emerald-400' : run.status === 'failed' ? 'bg-rose-500/15 text-rose-400' : run.status === 'running' ? 'bg-cyan-500/15 text-cyan-400' : 'bg-amber-500/15 text-amber-400'}`}>
+                        {run.status}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{formatDuration(run.startedAt, run.completedAt)}</span>
+                      <span>{new Date(run.createdAt).toLocaleString()}</span>
+                    </div>
+                    {run.error && <p className="text-[10px] mt-1 truncate" style={{ color: 'var(--accent-rose)' }}>{run.error}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {activeRun && (
+              <div className="mt-6 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                <h4 className="text-xs font-bold mb-2" style={{ color: 'var(--text-primary)' }}>Run #{activeRun.id} 节点详情</h4>
+                {activeRun.nodes && activeRun.nodes.length > 0 ? (
+                  <div className="space-y-2">
+                    {activeRun.nodes.map((runNode) => {
+                      const frontendNode = nodes.find((n) => n.id === String(runNode.nodeId));
+                      return (
+                        <div key={runNode.id} className="p-2 rounded border text-xs" style={{ backgroundColor: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
+                          <div className="flex items-center justify-between">
+                            <span style={{ color: 'var(--text-primary)' }}>{frontendNode?.label || `节点 #${runNode.nodeId}`}</span>
+                            <span className={`text-[10px] ${runNode.status === 'completed' ? 'text-emerald-400' : runNode.status === 'failed' ? 'text-rose-400' : runNode.status === 'running' ? 'text-cyan-400' : 'text-amber-400'}`}>{runNode.status}</span>
+                          </div>
+                          {runNode.error && <p className="text-[10px] mt-1" style={{ color: 'var(--accent-rose)' }}>{runNode.error}</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>暂无节点详情</p>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
