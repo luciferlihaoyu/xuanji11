@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1782723162664,
+      "tag": "0000_minor_vertigo",
+      "breakpoints": true
+    }
+  ]
+}
