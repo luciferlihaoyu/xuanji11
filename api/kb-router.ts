@@ -2,8 +2,36 @@ import { z } from "zod";
 import { eq, desc, like, isNull } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { kbFolders, kbDocuments } from "@db/schema";
+import { kbFolders, kbDocuments, documentChunks } from "@db/schema";
 import { clean } from "./lib/clean";
+import { logAudit } from "./lib/audit";
+import { vectorEngine } from "./lib/vector";
+
+function chunkText(text: string, maxChars = 800, overlap = 100): string[] {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  if (normalized.length <= maxChars) return normalized ? [normalized] : [];
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < normalized.length) {
+    const end = Math.min(start + maxChars, normalized.length);
+    let slice = normalized.slice(start, end);
+    if (end < normalized.length) {
+      const lastBreak = Math.max(slice.lastIndexOf("\n"), slice.lastIndexOf("。"), slice.lastIndexOf(". "));
+      if (lastBreak > overlap) {
+        slice = slice.slice(0, lastBreak + 1);
+      }
+    }
+    chunks.push(slice.trim());
+    start += Math.max(slice.length - overlap, 1);
+  }
+  return chunks.filter((c) => c.length > 0);
+}
+
+async function deleteDocumentVectors(documentId: number): Promise<void> {
+  const db = getDb();
+  await db.delete(documentChunks).where(eq(documentChunks.documentId, documentId));
+  await vectorEngine.deleteByDocumentId(documentId);
+}
 
 export const kbRouter = createRouter({
   listFolders: authedQuery.query(async () => {
@@ -45,7 +73,9 @@ export const kbRouter = createRouter({
         sortOrder: input.sortOrder,
         createdBy: ctx.user?.id ?? null,
       });
-      return { id: Number(result[0].insertId) };
+      const id = Number(result[0].insertId);
+      await logAudit(ctx, "kb_folder", "create", id, input as Record<string, unknown>);
+      return { id };
     }),
 
   updateFolder: adminQuery
@@ -58,20 +88,38 @@ export const kbRouter = createRouter({
         sortOrder: z.number().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const { id, ...data } = input;
       await db.update(kbFolders).set(clean(data as Record<string, unknown>)).where(eq(kbFolders.id, id));
+      await logAudit(ctx, "kb_folder", "update", id, input as Record<string, unknown>);
       return { success: true };
     }),
 
   deleteFolder: adminQuery
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
+      // 清理该文件夹及子文件夹下所有文档的向量和分块
+      const docs = await db.select({ id: kbDocuments.id }).from(kbDocuments)
+        .where(eq(kbDocuments.folderId, input.id));
+      for (const doc of docs) {
+        await deleteDocumentVectors(doc.id);
+      }
       await db.delete(kbDocuments).where(eq(kbDocuments.folderId, input.id));
+      const subFolders = await db.select({ id: kbFolders.id }).from(kbFolders)
+        .where(eq(kbFolders.parentId, input.id));
+      for (const folder of subFolders) {
+        const subDocs = await db.select({ id: kbDocuments.id }).from(kbDocuments)
+          .where(eq(kbDocuments.folderId, folder.id));
+        for (const doc of subDocs) {
+          await deleteDocumentVectors(doc.id);
+        }
+        await db.delete(kbDocuments).where(eq(kbDocuments.folderId, folder.id));
+      }
       await db.delete(kbFolders).where(eq(kbFolders.parentId, input.id));
       await db.delete(kbFolders).where(eq(kbFolders.id, input.id));
+      await logAudit(ctx, "kb_folder", "delete", input.id, input as Record<string, unknown>);
       return { success: true };
     }),
 
@@ -126,7 +174,9 @@ export const kbRouter = createRouter({
         metadata: input.metadata as Record<string, unknown>,
         createdBy: ctx.user?.id ?? null,
       }));
-      return { id: Number(result[0].insertId) };
+      const id = Number(result[0].insertId);
+      await logAudit(ctx, "kb_document", "create", id, input as Record<string, unknown>);
+      return { id };
     }),
 
   updateDocument: adminQuery
@@ -141,19 +191,72 @@ export const kbRouter = createRouter({
         metadata: z.record(z.string(), z.unknown()).optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const { id, ...data } = input;
       await db.update(kbDocuments).set(clean(data as Record<string, unknown>)).where(eq(kbDocuments.id, id));
+      await logAudit(ctx, "kb_document", "update", id, input as Record<string, unknown>);
       return { success: true };
     }),
 
   deleteDocument: adminQuery
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      await deleteDocumentVectors(input.id);
       const db = getDb();
       await db.delete(kbDocuments).where(eq(kbDocuments.id, input.id));
+      await logAudit(ctx, "kb_document", "delete", input.id, input as Record<string, unknown>);
       return { success: true };
+    }),
+
+  moveDocument: adminQuery
+    .input(
+      z.object({
+        id: z.number(),
+        folderId: z.number().nullable(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      await db.update(kbDocuments)
+        .set({ folderId: input.folderId ?? null })
+        .where(eq(kbDocuments.id, input.id));
+      await logAudit(ctx, "kb_document", "update", input.id, input as Record<string, unknown>);
+      return { success: true };
+    }),
+
+  reindexDocument: adminQuery
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      const [doc] = await db.select().from(kbDocuments).where(eq(kbDocuments.id, input.id));
+      if (!doc) throw new Error("文档不存在");
+      if (!doc.content) return { success: true, chunks: 0 };
+
+      // 删除旧分块和向量
+      await deleteDocumentVectors(input.id);
+
+      const chunks = chunkText(doc.content).map((content, index) => ({ content, index }));
+      if (chunks.length === 0) return { success: true, chunks: 0 };
+
+      await db.insert(documentChunks).values(chunks.map((chunk) => ({
+        documentId: input.id,
+        content: chunk.content,
+        chunkIndex: chunk.index,
+      })));
+
+      await vectorEngine.indexDocumentChunks(
+        input.id,
+        chunks,
+        { title: doc.title, format: doc.format }
+      );
+
+      await db.update(kbDocuments)
+        .set({ metadata: { ...(doc.metadata ?? {}), vectorized: true } })
+        .where(eq(kbDocuments.id, input.id));
+
+      await logAudit(ctx, "kb_document", "update", input.id, { action: "reindex" } as Record<string, unknown>);
+      return { success: true, chunks: chunks.length };
     }),
 
   getTree: authedQuery.query(async () => {

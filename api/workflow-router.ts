@@ -6,6 +6,7 @@ import { workflows, workflowNodes, workflowRuns, workflowRunNodes } from "@db/sc
 import { clean } from "./lib/clean";
 import { executeWorkflow } from "./lib/workflow-runtime";
 import { getWebhookUrl } from "./lib/workflow-scheduler";
+import { logAudit } from "./lib/audit";
 
 export const workflowRouter = createRouter({
   list: authedQuery.query(async () => {
@@ -44,7 +45,9 @@ export const workflowRouter = createRouter({
         triggers: input.triggers as unknown[],
         createdBy: ctx.user?.id ?? null,
       }));
-      return { id: Number(result[0].insertId) };
+      const id = Number(result[0].insertId);
+      await logAudit(ctx, "workflow", "create", id, input as Record<string, unknown>);
+      return { id };
     }),
 
   update: adminQuery
@@ -58,19 +61,21 @@ export const workflowRouter = createRouter({
         triggers: z.array(z.record(z.string(), z.unknown())).optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const { id, ...data } = input;
       await db.update(workflows).set(clean(data as Record<string, unknown>)).where(eq(workflows.id, id));
+      await logAudit(ctx, "workflow", "update", id, input as Record<string, unknown>);
       return { success: true };
     }),
 
   delete: adminQuery
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       await db.delete(workflowNodes).where(eq(workflowNodes.workflowId, input.id));
       await db.delete(workflows).where(eq(workflows.id, input.id));
+      await logAudit(ctx, "workflow", "delete", input.id, input as Record<string, unknown>);
       return { success: true };
     }),
 
@@ -111,7 +116,7 @@ export const workflowRouter = createRouter({
         sortOrder: z.number().default(0),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const values: Record<string, unknown> = {
         workflowId: input.workflowId,
@@ -124,7 +129,9 @@ export const workflowRouter = createRouter({
       if (input.config !== undefined) values.config = input.config;
       if (input.connections !== undefined) values.connections = input.connections;
       const result = await db.insert(workflowNodes).values(values as typeof workflowNodes.$inferInsert);
-      return { id: Number(result[0].insertId) };
+      const id = Number(result[0].insertId);
+      await logAudit(ctx, "workflow_node", "create", id, input as Record<string, unknown>);
+      return { id };
     }),
 
   updateNode: adminQuery
@@ -139,18 +146,20 @@ export const workflowRouter = createRouter({
         connections: z.array(z.record(z.string(), z.unknown())).optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const { id, ...data } = input;
       await db.update(workflowNodes).set(clean(data as Record<string, unknown>)).where(eq(workflowNodes.id, id));
+      await logAudit(ctx, "workflow_node", "update", id, input as Record<string, unknown>);
       return { success: true };
     }),
 
   deleteNode: adminQuery
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       await db.delete(workflowNodes).where(eq(workflowNodes.id, input.id));
+      await logAudit(ctx, "workflow_node", "delete", input.id, input as Record<string, unknown>);
       return { success: true };
     }),
 
@@ -176,7 +185,7 @@ export const workflowRouter = createRouter({
         })),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const { workflow, nodes } = input;
       const { id, ...wfData } = workflow;
@@ -229,6 +238,7 @@ export const workflowRouter = createRouter({
       }
 
       const updatedNodes = await db.select().from(workflowNodes).where(eq(workflowNodes.workflowId, id));
+      await logAudit(ctx, "workflow", "update", id, input as Record<string, unknown>);
       return { success: true, nodes: updatedNodes };
     }),
 
@@ -236,6 +246,7 @@ export const workflowRouter = createRouter({
     .input(z.object({ id: z.number(), input: z.record(z.string(), z.unknown()).optional() }))
     .mutation(async ({ input, ctx }) => {
       const runId = await executeWorkflow(input.id, input.input ?? {}, ctx.user?.id ?? null);
+      await logAudit(ctx, "workflow", "run", runId, input as Record<string, unknown>);
       return { runId };
     }),
 

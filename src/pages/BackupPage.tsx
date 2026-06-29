@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useBackups, useBackup } from '@/hooks/useBackups';
 import { useAppStore } from '@/store/useAppStore';
-import { Archive, RotateCcw, Plus, Loader2, CheckCircle2, AlertCircle, Clock, ChevronDown, ChevronUp, X, HardDrive, FolderOpen, Server } from 'lucide-react';
+import { Archive, RotateCcw, Plus, Loader2, CheckCircle2, AlertCircle, Clock, ChevronDown, ChevronUp, X, HardDrive, FolderOpen, Server, Trash2, Calendar } from 'lucide-react';
 
 const TARGET_ICONS: Record<string, typeof HardDrive> = {
   local: HardDrive,
@@ -58,9 +58,20 @@ function progressBar(progress: number, status: string) {
   );
 }
 
+function parseCron(schedule: string): string {
+  if (!schedule) return '仅一次';
+  const parts = schedule.trim().split(/\s+/);
+  if (parts.length !== 5) return schedule;
+  const [min, hour, day, month, weekday] = parts;
+  if (min === '0' && hour === '3' && day === '*' && month === '*' && weekday === '*') return '每天 03:00';
+  if (min === '0' && hour === '3' && day === '*' && month === '*' && weekday === '0') return '每周日 03:00';
+  if (min === '0' && hour === '3' && day === '1' && month === '*' && weekday === '*') return '每月 1 日 03:00';
+  return schedule;
+}
+
 export default function BackupPage() {
   const { addToast } = useAppStore();
-  const { backups, targets, restores, isLoading, create, createRestore } = useBackups();
+  const { backups, targets, restores, isLoading, create, updateSchedule, deleteBackup, createRestore } = useBackups();
 
   const [showCreate, setShowCreate] = useState(false);
   const [selectedBackupId, setSelectedBackupId] = useState<number | null>(null);
@@ -71,11 +82,20 @@ export default function BackupPage() {
   const [restoreTargetPath, setRestoreTargetPath] = useState('/data/restore');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Schedule fields
+  const [mode, setMode] = useState<'immediate' | 'scheduled'>('immediate');
+  const [cron, setCron] = useState('0 3 * * *');
+  const [scheduleEnabled, setScheduleEnabled] = useState(true);
+  const [keepLastN, setKeepLastN] = useState(7);
+
   const { data: selectedBackup } = useBackup(selectedBackupId ?? 0);
 
   const availableTargets = targets.filter((t) => t.available);
 
   const isCloudDrive = target === '115' || target === 'aliyundrive';
+
+  const schedules = backups.filter((b) => b.cron);
+  const runJobs = backups.filter((b) => !b.cron);
 
   const handleCreateBackup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -86,13 +106,40 @@ export default function BackupPage() {
         config.accessToken = accessToken;
         if (refreshToken) config.refreshToken = refreshToken;
       }
-      await create({ target, sourcePath, config });
-      addToast({ type: 'success', title: '备份任务已创建' });
+      const payload: Record<string, unknown> = { target, sourcePath, config };
+      if (mode === 'scheduled') {
+        payload.cron = cron;
+        payload.enabled = scheduleEnabled;
+        payload.keepLastN = keepLastN;
+      }
+      await create(payload as { target: typeof target; sourcePath: string; config?: Record<string, string>; cron?: string; enabled?: boolean; keepLastN?: number });
+      addToast({ type: 'success', title: mode === 'scheduled' ? '备份策略已创建' : '备份任务已创建' });
       setShowCreate(false);
+      setAccessToken('');
+      setRefreshToken('');
     } catch (err) {
-      addToast({ type: 'error', title: '创建备份失败', description: err instanceof Error ? err.message : String(err) });
+      addToast({ type: 'error', title: '创建失败', description: err instanceof Error ? err.message : String(err) });
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleToggleSchedule = async (job: typeof backups[number]) => {
+    try {
+      await updateSchedule({ id: job.id, enabled: job.enabled !== 'true' });
+      addToast({ type: 'success', title: '策略已更新' });
+    } catch (err) {
+      addToast({ type: 'error', title: '更新失败', description: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    try {
+      await deleteBackup({ id });
+      addToast({ type: 'success', title: '已删除' });
+      if (selectedBackupId === id) setSelectedBackupId(null);
+    } catch (err) {
+      addToast({ type: 'error', title: '删除失败', description: err instanceof Error ? err.message : String(err) });
     }
   };
 
@@ -133,6 +180,24 @@ export default function BackupPage() {
             <button onClick={() => setShowCreate(false)} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
           </div>
           <form onSubmit={handleCreateBackup} className="space-y-3">
+            <div className="flex gap-2 mb-2">
+              <button
+                type="button"
+                onClick={() => setMode('immediate')}
+                className={`text-xs px-3 py-1.5 rounded ${mode === 'immediate' ? 'bg-cyan-500/20 text-cyan-400' : 'hover:bg-white/5'}`}
+                style={{ color: mode === 'immediate' ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
+              >
+                立即备份
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('scheduled')}
+                className={`text-xs px-3 py-1.5 rounded ${mode === 'scheduled' ? 'bg-cyan-500/20 text-cyan-400' : 'hover:bg-white/5'}`}
+                style={{ color: mode === 'scheduled' ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
+              >
+                定时策略
+              </button>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>备份目标</label>
@@ -159,6 +224,43 @@ export default function BackupPage() {
                 />
               </div>
             </div>
+            {mode === 'scheduled' && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                <div>
+                  <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>Cron 表达式</label>
+                  <input
+                    type="text"
+                    value={cron}
+                    onChange={(e) => setCron(e.target.value)}
+                    placeholder="0 3 * * *"
+                    className="input-base text-xs w-full"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>保留份数</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={keepLastN}
+                    onChange={(e) => setKeepLastN(Number(e.target.value))}
+                    className="input-base text-xs w-full"
+                    required
+                  />
+                </div>
+                <div className="flex items-end">
+                  <label className="flex items-center gap-2 text-xs cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={scheduleEnabled}
+                      onChange={(e) => setScheduleEnabled(e.target.checked)}
+                      className="rounded border-gray-600"
+                    />
+                    <span style={{ color: 'var(--text-primary)' }}>启用策略</span>
+                  </label>
+                </div>
+              </div>
+            )}
             {isCloudDrive && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
                 <div>
@@ -187,7 +289,7 @@ export default function BackupPage() {
             <div className="flex justify-end">
               <button type="submit" disabled={isSubmitting} className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50">
                 {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Archive className="w-3.5 h-3.5" />}
-                开始备份
+                {mode === 'scheduled' ? '创建策略' : '开始备份'}
               </button>
             </div>
           </form>
@@ -205,13 +307,56 @@ export default function BackupPage() {
             <h2 className="text-sm font-bold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
               <Archive className="w-4 h-4" style={{ color: 'var(--accent-cyan)' }} />备份任务
             </h2>
-            {backups.length === 0 ? (
+
+            {schedules.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>定时策略</h3>
+                {schedules.map((job) => (
+                  <div key={job.id} className="card-base p-3">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-2">
+                        {(() => {
+                          const Icon = TARGET_ICONS[job.target] || HardDrive;
+                          return <Icon className="w-4 h-4" style={{ color: 'var(--accent-cyan)' }} />;
+                        })()}
+                        <div>
+                          <div className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>{TARGET_NAMES[job.target] || job.target}</div>
+                          <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{job.sourcePath} · {parseCron(job.cron ?? '')}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleToggleSchedule(job)}
+                          className={`text-[10px] px-2 py-1 rounded ${job.enabled === 'true' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-500/15 text-slate-400'}`}
+                        >
+                          {job.enabled === 'true' ? '已启用' : '已禁用'}
+                        </button>
+                        <button
+                          onClick={() => handleDelete(job.id)}
+                          className="p-1 rounded hover:bg-white/5"
+                          style={{ color: 'var(--accent-rose)' }}
+                          title="删除"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />保留 {job.keepLastN ?? 7} 份</span>
+                      <span>下次运行: {formatTime(job.nextRunAt)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {runJobs.length === 0 ? (
               <div className="card-base p-6 text-center">
                 <Archive className="w-8 h-8 mx-auto mb-2" style={{ color: 'var(--text-muted)' }} />
                 <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>暂无备份任务</p>
               </div>
             ) : (
-              backups.map((job) => (
+              runJobs.map((job) => (
                 <div key={job.id} className="card-base p-4">
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex items-center gap-2">
@@ -224,7 +369,17 @@ export default function BackupPage() {
                         <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{job.sourcePath}</div>
                       </div>
                     </div>
-                    {statusBadge(job.status)}
+                    <div className="flex items-center gap-2">
+                      {statusBadge(job.status)}
+                      <button
+                        onClick={() => handleDelete(job.id)}
+                        className="p-1 rounded hover:bg-white/5"
+                        style={{ color: 'var(--accent-rose)' }}
+                        title="删除"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                   <div className="mb-2">{progressBar(job.progress ?? 0, job.status)}</div>
                   <div className="flex items-center gap-3 text-[10px] mb-3" style={{ color: 'var(--text-muted)' }}>

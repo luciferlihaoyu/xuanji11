@@ -4,6 +4,7 @@ import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { systemSettings } from "@db/schema";
 import { clean } from "./lib/clean";
+import { logAudit } from "./lib/audit";
 
 export const settingRouter = createRouter({
   list: authedQuery.query(async () => {
@@ -57,6 +58,7 @@ export const settingRouter = createRouter({
           updatedBy: ctx.user?.id ?? null,
         });
       }
+      await logAudit(ctx, "system_setting", "update", null, input as Record<string, unknown>);
       return { success: true };
     }),
 
@@ -91,14 +93,16 @@ export const settingRouter = createRouter({
           });
         }
       }
+      await logAudit(ctx, "system_setting", "update", null, { items: input } as Record<string, unknown>);
       return { success: true };
     }),
 
   delete: adminQuery
     .input(z.object({ key: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       await db.delete(systemSettings).where(eq(systemSettings.key, input.key));
+      await logAudit(ctx, "system_setting", "delete", null, input as Record<string, unknown>);
       return { success: true };
     }),
 });

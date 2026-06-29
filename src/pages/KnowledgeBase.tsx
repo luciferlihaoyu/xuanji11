@@ -1,7 +1,8 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useKbTree, useDocument } from '@/hooks/useKb';
 import { useAppStore } from '@/store/useAppStore';
-import type { KBNode } from '@/store/useAppStore';
-import { Search, Folder, FolderOpen, FileText, ChevronRight, ChevronDown, Plus, Pencil, Trash2, X, Check, FileCode, Image, File } from 'lucide-react';
+import { Search, Folder, FolderOpen, FileText, ChevronRight, ChevronDown, Plus, Pencil, Trash2, X, Check, FileCode, Image, File, Save, RotateCcw, Tag, MoreHorizontal } from 'lucide-react';
+import type { KbFolder, KbDocument } from '@db/schema';
 
 const FileIcon = ({ type, size = 16 }: { type?: string; size?: number }) => {
   const props = { size, className: 'shrink-0' };
@@ -12,56 +13,6 @@ const FileIcon = ({ type, size = 16 }: { type?: string; size?: number }) => {
     default: return <File {...props} style={{ color: 'var(--text-muted)' }} />;
   }
 };
-
-const sampleContent = `# OpenClaw 系统架构
-
-## 概述
-
-OpenClaw 是一套**多 Agent 协作系统**，旨在通过人工智能技术实现高效的知识管理和团队协作。
-
-## 核心组件
-
-### 1. 天庭 Hub（协作中心）
-
-- **MAAP 协议**：Multi-Agent Application Protocol
-- **心跳保活**：30秒间隔
-- **消息通信**：WebSocket 实时推送
-
-### 2. Wiki 知识库
-
-基于 [[Obsidian 架构]] 的知识管理系统：
-
-- 双向链接：\\[\\[知识节点名\\]\\]
-- 标签系统：#系统架构 #OpenClaw
-- 图谱视图：3D/2D 可视化
-
-### 3. 技能系统
-
-已安装 **141 个技能**，覆盖：
-
-| 类别 | 技能数 | 代表技能 |
-|------|--------|----------|
-| 前端设计 | 12 | taste-skill |
-| 编程工作流 | 18 | coding-workflow |
-| 内容创作 | 24 | webnovel-master |
-
-## Agent 记忆机制
-
-\`\`\`
-每日日志 → Dreaming 整合 → MEMORY.md（长期记忆）
-              ↓
-        Wiki 知识库（共享知识）
-\`\`\`
-
-## 外部集成
-
-- [x] 天宫 Hub — Agent 协作通信
-- [x] EntroCamp — AI 学习平台
-- [x] 飞书 — 团队通信
-- [x] Telegram — 用户通信渠道
-
-> 💡 **提示**：可以通过 API 中心管理向量化模型配置，支持多模型切换。
-`;
 
 function renderMarkdown(md: string): string {
   return md
@@ -77,26 +28,89 @@ function renderMarkdown(md: string): string {
     .replace(/^(?!<[hl]|<li|<tr|<td|<th|<pre|<blockquote|<a|<span|<strong)(.*$)/gim, '<p class="mb-3 text-sm leading-relaxed" style="color:var(--text-secondary)">$1</p>');
 }
 
-// Find node by ID in tree
-function findNode(nodes: KBNode[], id: string): KBNode | null {
+interface TreeNode {
+  id: string;
+  name: string;
+  type: 'folder' | 'file';
+  fileType?: 'md' | 'code' | 'image' | 'other';
+  content?: string;
+  folderId?: number | null;
+  children: TreeNode[];
+}
+
+function buildTree(folders: KbFolder[], documents: KbDocument[]): TreeNode[] {
+  const folderMap = new Map<number, TreeNode>();
+  const root: TreeNode[] = [];
+
+  for (const folder of folders) {
+    const node: TreeNode = {
+      id: `folder-${folder.id}`,
+      name: folder.name,
+      type: 'folder',
+      children: [],
+    };
+    folderMap.set(folder.id, node);
+  }
+
+  for (const folder of folders) {
+    const node = folderMap.get(folder.id);
+    if (!node) continue;
+    if (folder.parentId && folderMap.has(folder.parentId)) {
+      folderMap.get(folder.parentId)!.children.push(node);
+    } else {
+      root.push(node);
+    }
+  }
+
+  for (const doc of documents) {
+    const fileType = doc.title.endsWith('.md') ? 'md' : doc.format === 'code' ? 'code' : 'other';
+    const node: TreeNode = {
+      id: `doc-${doc.id}`,
+      name: doc.title,
+      type: 'file',
+      fileType,
+      content: doc.content ?? undefined,
+      folderId: doc.folderId ?? null,
+      children: [],
+    };
+    if (doc.folderId && folderMap.has(doc.folderId)) {
+      folderMap.get(doc.folderId)!.children.push(node);
+    } else {
+      root.push(node);
+    }
+  }
+
+  return root;
+}
+
+function findNode(nodes: TreeNode[], id: string): TreeNode | null {
   for (const n of nodes) {
     if (n.id === id) return n;
-    if (n.children) { const f = findNode(n.children, id); if (f) return f; }
+    if (n.children.length > 0) {
+      const f = findNode(n.children, id);
+      if (f) return f;
+    }
   }
   return null;
 }
 
-// Collect all file IDs under a folder
-function collectFileIds(node: KBNode): string[] {
-  if (node.type === 'file') return [node.id];
-  if (node.children) return node.children.flatMap(collectFileIds);
-  return [];
+function parseDocId(id: string): number | null {
+  if (!id.startsWith('doc-')) return null;
+  const n = Number(id.slice(4));
+  return isNaN(n) ? null : n;
+}
+
+function parseFolderId(id: string): number | null {
+  if (!id.startsWith('folder-')) return null;
+  const n = Number(id.slice(7));
+  return isNaN(n) ? null : n;
 }
 
 // ===================== Tree Item Component =====================
-function TreeItem({ node, depth = 0, activeFile, onSelect, onRename, onDelete, onAdd }: {
-  node: KBNode; depth?: number; activeFile: string | null; onSelect: (id: string) => void;
-  onRename: (id: string, name: string) => void; onDelete: (id: string) => void; onAdd: (parentId: string, type: 'folder' | 'file') => void;
+function TreeItem({ node, depth = 0, activeFile, onSelect, onRename, onDelete, onAdd, onMove }: {
+  node: TreeNode; depth?: number; activeFile: string | null; onSelect: (id: string) => void;
+  onRename: (id: string, name: string) => void; onDelete: (id: string) => void; onAdd: (parentId: string | null, type: 'folder' | 'file') => void;
+  onMove?: (docId: string, folderId: number | null) => void;
 }) {
   const [expanded, setExpanded] = useState(depth < 1);
   const [isRenaming, setIsRenaming] = useState(false);
@@ -141,7 +155,6 @@ function TreeItem({ node, depth = 0, activeFile, onSelect, onRename, onDelete, o
           ) : (<span className="truncate">{node.name}</span>)}
         </button>
 
-        {/* Hover actions */}
         {!isRenaming && (
           <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
             {isFolder && (
@@ -155,8 +168,8 @@ function TreeItem({ node, depth = 0, activeFile, onSelect, onRename, onDelete, o
           </div>
         )}
       </div>
-      {isFolder && expanded && node.children && (
-        <div>{node.children.map((child) => (<TreeItem key={child.id} node={child} depth={depth + 1} activeFile={activeFile} onSelect={onSelect} onRename={onRename} onDelete={onDelete} onAdd={onAdd} />))}</div>
+      {isFolder && expanded && node.children.length > 0 && (
+        <div>{node.children.map((child) => (<TreeItem key={child.id} node={child} depth={depth + 1} activeFile={activeFile} onSelect={onSelect} onRename={onRename} onDelete={onDelete} onAdd={onAdd} onMove={onMove} />))}</div>
       )}
     </div>
   );
@@ -164,28 +177,62 @@ function TreeItem({ node, depth = 0, activeFile, onSelect, onRename, onDelete, o
 
 // ===================== Main Page =====================
 export default function KnowledgeBase() {
-  const { kbTree, activeKbFile, setActiveKbFile, addKbNode, renameKbNode, deleteKbNode, addToast } = useAppStore();
+  const { addToast } = useAppStore();
+  const { folders, documents, isLoading, createFolder, updateFolder, deleteFolder, createDocument, updateDocument, deleteDocument } = useKbTree();
+
+  const [activeFile, setActiveFile] = useState<string | null>(null);
   const [editMode, setEditMode] = useState<'edit' | 'preview' | 'split'>('preview');
   const [rightPanel, setRightPanel] = useState<'outline' | 'links' | 'tags'>('outline');
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
-  const [content, setContent] = useState(sampleContent);
+  const [localContent, setLocalContent] = useState('');
   const [addingTo, setAddingTo] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<'folder' | 'file'>('file');
   const [newName, setNewName] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<KbDocument[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
 
-  const activeNode = activeKbFile ? findNode(kbTree, activeKbFile) : null;
+  const activeDocId = activeFile ? parseDocId(activeFile) : null;
+  const { data: activeDoc } = useDocument(activeDocId ?? 0);
+
+  const tree = useMemo(() => buildTree(folders, documents), [folders, documents]);
+  const activeNode = activeFile ? findNode(tree, activeFile) : null;
+
+  useEffect(() => {
+    if (activeDoc?.content !== undefined) {
+      setLocalContent(activeDoc.content ?? '');
+    }
+  }, [activeDoc?.content, activeDoc?.id]);
 
   const extractOutline = useCallback(() => {
-    const lines = content.split('\n');
+    const lines = localContent.split('\n');
     return lines.map((line, i) => {
       const match = line.match(/^(#{1,3})\s+(.+)/);
       if (match) return { level: match[1].length, text: match[2], line: i };
       return null;
     }).filter(Boolean) as { level: number; text: string; line: number }[];
-  }, [content]);
+  }, [localContent]);
 
   const outline = extractOutline();
+
+  const handleSearch = async (query: string) => {
+    setSearchQuery(query);
+    if (!query.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    setIsSearching(true);
+    try {
+      const res = await fetch(`/api/trpc/kb.searchDocuments?input=${encodeURIComponent(JSON.stringify({ query }))}`);
+      const json = await res.json();
+      setSearchResults(json.result?.data?.json ?? []);
+    } catch (err) {
+      console.error('Search failed:', err);
+    } finally {
+      setIsSearching(false);
+    }
+  };
 
   const handleAddNode = (parentId: string | null, type: 'folder' | 'file') => {
     setAddingTo(parentId);
@@ -193,36 +240,125 @@ export default function KnowledgeBase() {
     setNewName(type === 'folder' ? '新建文件夹' : '未命名文档.md');
   };
 
-  const confirmAdd = () => {
+  const confirmAdd = async () => {
     if (!newName.trim()) return;
-    const ext = addingType === 'file' && !newName.includes('.') ? '.md' : '';
-    addKbNode(addingTo, {
-      name: newName.trim() + ext,
-      type: addingType,
-      fileType: addingType === 'file' ? (newName.endsWith('.md') ? 'md' : 'other') : undefined,
-      content: addingType === 'file' ? '# ' + newName.replace(/\.md$/, '') + '\n\n' : undefined,
-    });
-    addToast({ type: 'success', title: addingType === 'folder' ? '文件夹已创建' : '文件已创建' });
-    setAddingTo(null);
-    setNewName('');
+    try {
+      const parentFolderId = addingTo ? parseFolderId(addingTo) : null;
+      if (addingType === 'folder') {
+        await createFolder({ name: newName.trim(), parentId: parentFolderId });
+        addToast({ type: 'success', title: '文件夹已创建' });
+      } else {
+        const title = newName.trim();
+        const ext = title.endsWith('.md') ? '' : '.md';
+        await createDocument({ folderId: parentFolderId, title: title + ext, content: '# ' + title.replace(/\.md$/, '') + '\n\n' });
+        addToast({ type: 'success', title: '文档已创建' });
+      }
+      setAddingTo(null);
+      setNewName('');
+    } catch (err) {
+      addToast({ type: 'error', title: '创建失败', description: err instanceof Error ? err.message : String(err) });
+    }
   };
 
-  const handleRename = (id: string, name: string) => {
-    renameKbNode(id, name);
-    addToast({ type: 'success', title: '已重命名' });
+  const handleRename = async (id: string, name: string) => {
+    try {
+      if (id.startsWith('folder-')) {
+        const fid = parseFolderId(id);
+        if (fid) await updateFolder({ id: fid, name });
+      } else {
+        const did = parseDocId(id);
+        if (did) await updateDocument({ id: did, title: name });
+      }
+      addToast({ type: 'success', title: '已重命名' });
+    } catch (err) {
+      addToast({ type: 'error', title: '重命名失败', description: err instanceof Error ? err.message : String(err) });
+    }
   };
 
-  const handleDelete = (id: string) => {
-    const node = findNode(kbTree, id);
-    if (!node) return;
-    const fileCount = node.type === 'folder' ? collectFileIds(node).length : 1;
-    deleteKbNode(id);
-    addToast({ type: 'info', title: `已删除${node.type === 'folder' ? '文件夹及其 ' + fileCount + ' 个文件' : '文件'}` });
+  const handleDelete = async (id: string) => {
+    try {
+      const node = findNode(tree, id);
+      if (!node) return;
+      if (id.startsWith('folder-')) {
+        const fid = parseFolderId(id);
+        if (fid) await deleteFolder({ id: fid });
+      } else {
+        const did = parseDocId(id);
+        if (did) await deleteDocument({ id: did });
+      }
+      if (activeFile === id) setActiveFile(null);
+      addToast({ type: 'info', title: '已删除' });
+    } catch (err) {
+      addToast({ type: 'error', title: '删除失败', description: err instanceof Error ? err.message : String(err) });
+    }
   };
+
+  const handleSaveContent = async () => {
+    if (!activeDocId) return;
+    try {
+      await updateDocument({ id: activeDocId, content: localContent });
+      addToast({ type: 'success', title: '已保存' });
+    } catch (err) {
+      addToast({ type: 'error', title: '保存失败', description: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const handleReindex = async () => {
+    if (!activeDocId) return;
+    try {
+      const res = await fetch('/api/trpc/kb.reindexDocument', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: activeDocId }),
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error.message);
+      addToast({ type: 'success', title: `重建索引完成 (${json.result?.data?.json?.chunks ?? 0} 分块)` });
+    } catch (err) {
+      addToast({ type: 'error', title: '重建索引失败', description: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const handleTagsChange = async (tags: string[]) => {
+    if (!activeDocId) return;
+    try {
+      await updateDocument({ id: activeDocId, tags });
+      addToast({ type: 'success', title: '标签已更新' });
+    } catch (err) {
+      addToast({ type: 'error', title: '标签更新失败', description: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const handleMove = async (docId: string, folderId: number | null) => {
+    const did = parseDocId(docId);
+    if (!did) return;
+    try {
+      await fetch('/api/trpc/kb.moveDocument', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: did, folderId }),
+      });
+      addToast({ type: 'success', title: '已移动' });
+    } catch (err) {
+      addToast({ type: 'error', title: '移动失败', description: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const recentDocs = useMemo(() => {
+    return [...documents].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 5);
+  }, [documents]);
+
+  if (isLoading) {
+    return (
+      <div className="flex h-[calc(100vh-48px)] items-center justify-center" style={{ backgroundColor: 'var(--bg-primary)' }}>
+        <div className="text-sm" style={{ color: 'var(--text-muted)' }}>加载知识库...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-[calc(100vh-48px)]" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      {/* Left Sidebar - File Tree */}
+      {/* Left Sidebar */}
       {sidebarVisible && (
         <div className="w-[260px] shrink-0 border-r flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
           <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -235,36 +371,74 @@ export default function KnowledgeBase() {
             </div>
             <div className="flex items-center h-7 px-2 rounded border" style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)' }}>
               <Search className="w-3.5 h-3.5 mr-1.5" style={{ color: 'var(--text-muted)' }} />
-              <input type="text" placeholder="搜索文件..." className="bg-transparent text-xs outline-none w-full" style={{ color: 'var(--text-primary)' }} />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => handleSearch(e.target.value)}
+                placeholder="搜索文档..."
+                className="bg-transparent text-xs outline-none w-full"
+                style={{ color: 'var(--text-primary)' }}
+              />
             </div>
           </div>
 
-          {/* Inline add form */}
-          {addingTo !== null && (
-            <div className="px-3 py-2 flex items-center gap-1" style={{ backgroundColor: 'rgba(34,211,238,0.05)' }}>
-              <input value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') confirmAdd(); if (e.key === 'Escape') setAddingTo(null); }} autoFocus className="input-base text-xs h-7 py-0.5 px-1.5 flex-1" placeholder={addingType === 'folder' ? '文件夹名' : '文件名.md'} />
-              <button onClick={confirmAdd} className="p-1"><Check className="w-3.5 h-3.5" style={{ color: 'var(--accent-emerald)' }} /></button>
-              <button onClick={() => setAddingTo(null)} className="p-1"><X className="w-3.5 h-3.5" style={{ color: 'var(--accent-rose)' }} /></button>
+          {searchQuery ? (
+            <div className="flex-1 overflow-y-auto p-1">
+              {isSearching ? (
+                <div className="text-xs p-2" style={{ color: 'var(--text-muted)' }}>搜索中...</div>
+              ) : searchResults.length === 0 ? (
+                <div className="text-xs p-2" style={{ color: 'var(--text-muted)' }}>无结果</div>
+              ) : (
+                searchResults.map((doc) => (
+                  <button
+                    key={doc.id}
+                    onClick={() => setActiveFile(`doc-${doc.id}`)}
+                    className="w-full text-left px-2 py-1 text-xs rounded hover:bg-white/5"
+                    style={{ color: activeFile === `doc-${doc.id}` ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
+                  >
+                    {doc.title}
+                  </button>
+                ))
+              )}
             </div>
+          ) : (
+            <>
+              {addingTo !== null && (
+                <div className="px-3 py-2 flex items-center gap-1" style={{ backgroundColor: 'rgba(34,211,238,0.05)' }}>
+                  <input value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') confirmAdd(); if (e.key === 'Escape') setAddingTo(null); }} autoFocus className="input-base text-xs h-7 py-0.5 px-1.5 flex-1" placeholder={addingType === 'folder' ? '文件夹名' : '文件名.md'} />
+                  <button onClick={confirmAdd} className="p-1"><Check className="w-3.5 h-3.5" style={{ color: 'var(--accent-emerald)' }} /></button>
+                  <button onClick={() => setAddingTo(null)} className="p-1"><X className="w-3.5 h-3.5" style={{ color: 'var(--accent-rose)' }} /></button>
+                </div>
+              )}
+
+              <div className="flex-1 overflow-y-auto p-1">
+                {tree.map((node) => (
+                  <TreeItem key={node.id} node={node} activeFile={activeFile} onSelect={setActiveFile} onRename={handleRename} onDelete={handleDelete} onAdd={handleAddNode} onMove={handleMove} />
+                ))}
+              </div>
+
+              <div className="p-3 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px] font-semibold mb-1.5" style={{ color: 'var(--text-muted)' }}>最近编辑</div>
+                <div className="space-y-1">
+                  {recentDocs.map((doc) => (
+                    <button
+                      key={doc.id}
+                      onClick={() => setActiveFile(`doc-${doc.id}`)}
+                      className="w-full text-left text-[10px] truncate hover:text-[var(--accent-cyan)]"
+                      style={{ color: activeFile === `doc-${doc.id}` ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
+                    >
+                      {doc.title}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
           )}
-
-          <div className="flex-1 overflow-y-auto p-1">
-            {kbTree.map((node) => (
-              <TreeItem key={node.id} node={node} activeFile={activeKbFile} onSelect={setActiveKbFile} onRename={handleRename} onDelete={handleDelete} onAdd={handleAddNode} />
-            ))}
-          </div>
-
-          {/* Storage usage */}
-          <div className="p-3 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
-            <div className="flex items-center justify-between text-[10px] mb-1.5" style={{ color: 'var(--text-muted)' }}><span>存储用量</span><span>12.4GB / 50GB</span></div>
-            <div className="h-1 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--bg-tertiary)' }}><div className="h-full rounded-full gradient-bar" style={{ width: '25%' }} /></div>
-          </div>
         </div>
       )}
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Toolbar */}
         <div className="flex items-center justify-between px-4 py-2 border-b shrink-0" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
           <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
             <button onClick={() => setSidebarVisible(!sidebarVisible)} className="p-1 rounded hover:bg-white/5"><ChevronRight className={`w-4 h-4 transition-transform ${!sidebarVisible ? 'rotate-180' : ''}`} /></button>
@@ -279,24 +453,51 @@ export default function KnowledgeBase() {
           </div>
         </div>
 
-        {/* Editor / Preview */}
-        <div className="flex-1 flex overflow-hidden">
-          {(editMode === 'edit' || editMode === 'split') && (
-            <div className={`${editMode === 'split' ? 'w-1/2 border-r' : 'w-full'} overflow-auto`} style={{ borderColor: 'var(--border-subtle)' }}>
-              <textarea value={content} onChange={(e) => setContent(e.target.value)} className="w-full h-full p-6 bg-transparent text-sm leading-relaxed resize-none outline-none font-mono" style={{ color: 'var(--text-primary)' }} spellCheck={false} />
+        {activeDoc ? (
+          <>
+            <div className="flex items-center justify-between px-4 py-2 border-b shrink-0" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+              <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                <Tag className="w-3.5 h-3.5" />
+                {(activeDoc.tags ?? []).length === 0 ? '无标签' : (activeDoc.tags ?? []).map((tag) => (
+                  <span key={tag} className="chip chip-violet text-[10px] py-0.5 px-1.5">{tag}</span>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <TagEditor tags={activeDoc.tags ?? []} onChange={handleTagsChange} />
+                <MoveButton docId={activeFile} folders={folders} currentFolderId={activeDoc.folderId ?? null} onMove={handleMove} />
+                <button onClick={handleReindex} className="btn-ghost text-[10px] py-1 px-2 flex items-center gap-1" title="重建向量索引">
+                  <RotateCcw className="w-3 h-3" />重建索引
+                </button>
+                <button onClick={handleSaveContent} className="btn-primary text-[10px] py-1 px-2 flex items-center gap-1">
+                  <Save className="w-3 h-3" />保存
+                </button>
+              </div>
             </div>
-          )}
-          {(editMode === 'preview' || editMode === 'split') && (
-            <div className={`${editMode === 'split' ? 'w-1/2' : 'w-full'} overflow-auto`}>
-              <div className="p-6 max-w-3xl mx-auto" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />
+            <div className="flex-1 flex overflow-hidden">
+              {(editMode === 'edit' || editMode === 'split') && (
+                <div className={`${editMode === 'split' ? 'w-1/2 border-r' : 'w-full'} overflow-auto`} style={{ borderColor: 'var(--border-subtle)' }}>
+                  <textarea value={localContent} onChange={(e) => setLocalContent(e.target.value)} className="w-full h-full p-6 bg-transparent text-sm leading-relaxed resize-none outline-none font-mono" style={{ color: 'var(--text-primary)' }} spellCheck={false} />
+                </div>
+              )}
+              {(editMode === 'preview' || editMode === 'split') && (
+                <div className={`${editMode === 'split' ? 'w-1/2' : 'w-full'} overflow-auto`}>
+                  <div className="p-6 max-w-3xl mx-auto" dangerouslySetInnerHTML={{ __html: renderMarkdown(localContent) }} />
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </>
+        ) : (
+          <div className="flex-1 flex items-center justify-center" style={{ color: 'var(--text-muted)' }}>
+            <div className="text-center">
+              <FileText className="w-12 h-12 mx-auto mb-3" />
+              <p className="text-sm">选择一个文档开始编辑</p>
+            </div>
+          </div>
+        )}
 
-        {/* Status Bar */}
         <div className="flex items-center justify-between px-4 py-1 border-t text-[11px] shrink-0" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-          <div className="flex items-center gap-4"><span>{content.length.toLocaleString()} 字符</span><span>约 {Math.ceil(content.length / 400)} 分钟阅读</span></div>
-          <div className="flex items-center gap-4"><span>已保存</span><span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full status-dot-online" />已同步</span></div>
+          <div className="flex items-center gap-4"><span>{localContent.length.toLocaleString()} 字符</span><span>约 {Math.ceil(localContent.length / 400)} 分钟阅读</span></div>
+          <div className="flex items-center gap-4"><span>{activeDoc ? new Date(activeDoc.updatedAt).toLocaleString() : '-'}</span></div>
         </div>
       </div>
 
@@ -321,24 +522,85 @@ export default function KnowledgeBase() {
               </div>
             )}
             {rightPanel === 'links' && (
-              <div>
-                <h4 className="text-xs font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>链接到此处</h4>
-                <div className="space-y-2">
-                  {[{ id: 'b1', fileName: 'MAAP 通信协议.md', context: '...通过 [[OpenClaw 系统架构]] 定义的规范...' }, { id: 'b2', fileName: 'Agent 记忆机制.md', context: '...作为 OpenClaw 的核心组件...' }].map((link) => (
-                    <div key={link.id} className="p-2 rounded" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-                      <div className="text-xs font-medium mb-1" style={{ color: 'var(--accent-cyan)' }}>{link.fileName}</div>
-                      <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{link.context}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>链接功能即将上线</div>
             )}
             {rightPanel === 'tags' && (
               <div className="flex flex-wrap gap-1.5">
-                {['系统架构', 'OpenClaw', '基础设施'].map((tag) => (<span key={tag} className="chip chip-violet cursor-pointer">{tag}</span>))}
+                {(activeDoc?.tags ?? []).length === 0 ? <span className="text-xs" style={{ color: 'var(--text-muted)' }}>无标签</span> : (activeDoc?.tags ?? []).map((tag) => (
+                  <span key={tag} className="chip chip-violet cursor-pointer">{tag}</span>
+                ))}
               </div>
             )}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TagEditor({ tags, onChange }: { tags: string[]; onChange: (tags: string[]) => void }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [value, setValue] = useState(tags.join(', '));
+
+  const handleSave = () => {
+    const newTags = value.split(',').map((t) => t.trim()).filter(Boolean);
+    onChange(newTags);
+    setIsEditing(false);
+  };
+
+  if (!isEditing) {
+    return (
+      <button onClick={() => setIsEditing(true)} className="btn-ghost text-[10px] py-1 px-2 flex items-center gap-1">
+        <Tag className="w-3 h-3" />编辑标签
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setIsEditing(false); }}
+        placeholder="用逗号分隔"
+        className="input-base text-[10px] h-6 w-32"
+        autoFocus
+      />
+      <button onClick={handleSave} className="p-0.5"><Check className="w-3 h-3" style={{ color: 'var(--accent-emerald)' }} /></button>
+      <button onClick={() => setIsEditing(false)} className="p-0.5"><X className="w-3 h-3" style={{ color: 'var(--accent-rose)' }} /></button>
+    </div>
+  );
+}
+
+function MoveButton({ docId, folders, currentFolderId, onMove }: { docId: string | null; folders: KbFolder[]; currentFolderId: number | null; onMove: (docId: string, folderId: number | null) => void }) {
+  const [open, setOpen] = useState(false);
+  if (!docId) return null;
+
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen(!open)} className="btn-ghost text-[10px] py-1 px-2 flex items-center gap-1">
+        <MoreHorizontal className="w-3 h-3" />移动到
+      </button>
+      {open && (
+        <div className="absolute right-0 top-8 w-40 rounded border shadow-lg z-20" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+          <button
+            onClick={() => { onMove(docId, null); setOpen(false); }}
+            className="w-full text-left px-3 py-1.5 text-xs hover:bg-white/5"
+            style={{ color: currentFolderId === null ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
+          >
+            根目录
+          </button>
+          {folders.map((folder) => (
+            <button
+              key={folder.id}
+              onClick={() => { onMove(docId, folder.id); setOpen(false); }}
+              className="w-full text-left px-3 py-1.5 text-xs hover:bg-white/5"
+              style={{ color: currentFolderId === folder.id ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
+            >
+              {folder.name}
+            </button>
+          ))}
         </div>
       )}
     </div>

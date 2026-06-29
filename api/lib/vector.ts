@@ -158,6 +158,18 @@ export const vectorEngine = {
     return entries.length;
   },
 
+  async deleteByDocumentId(documentId: number | string): Promise<number> {
+    const docKey = String(documentId);
+    let removed = 0;
+    for (let i = fallbackStore.length - 1; i >= 0; i--) {
+      if (String(fallbackStore[i].metadata.documentId) === docKey) {
+        fallbackStore.splice(i, 1);
+        removed++;
+      }
+    }
+    return removed;
+  },
+
   async search(queryVector: number[], topK: number = 10): Promise<SearchResult[]> {
     if (fallbackStore.length === 0) return [];
     const scored = fallbackStore.map((entry) => ({

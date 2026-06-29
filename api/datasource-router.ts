@@ -6,6 +6,7 @@ import { dataSources, ingestionJobs, ingestionItems } from "@db/schema";
 import { clean } from "./lib/clean";
 import { getConnector } from "./connectors";
 import { ingestFile } from "./lib/ingestion";
+import { logAudit } from "./lib/audit";
 
 export const datasourceRouter = createRouter({
   list: authedQuery.query(async () => {
@@ -48,7 +49,9 @@ export const datasourceRouter = createRouter({
         status: input.status,
         createdBy: ctx.user?.id ?? null,
       }));
-      return { id: Number(result[0].insertId) };
+      const id = Number(result[0].insertId);
+      await logAudit(ctx, "datasource", "create", id, input as Record<string, unknown>);
+      return { id };
     }),
 
   update: adminQuery
@@ -61,18 +64,20 @@ export const datasourceRouter = createRouter({
         lastError: z.string().nullable().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const { id, ...data } = input;
       await db.update(dataSources).set(clean(data as Record<string, unknown>)).where(eq(dataSources.id, id));
+      await logAudit(ctx, "datasource", "update", id, input as Record<string, unknown>);
       return { success: true };
     }),
 
   delete: adminQuery
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       await db.delete(dataSources).where(eq(dataSources.id, input.id));
+      await logAudit(ctx, "datasource", "delete", input.id, input as Record<string, unknown>);
       return { success: true };
     }),
 
@@ -178,8 +183,8 @@ export const datasourceRouter = createRouter({
               and(
                 eq(ingestionItems.externalId, file.id),
                 eq(ingestionItems.sourceUrl, file.downloadUrl ?? ""),
-                sql`${ingestionItems.metadata}->>'$.dataSourceId' = ${String(ds.id)}`,
-                sql`${ingestionItems.metadata}->>'$.platform' = ${platform}`
+                sql`${ingestionItems.metadata}-\u003e\u003e'$.dataSourceId' = ${String(ds.id)}`,
+                sql`${ingestionItems.metadata}-\u003e\u003e'$.platform' = ${platform}`
               )
             )
             .orderBy(desc(ingestionItems.createdAt))

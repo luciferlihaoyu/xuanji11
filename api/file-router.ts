@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { eq, desc, or, like, and } from "drizzle-orm";
-import { createRouter, authedQuery, adminQuery } from "./middleware";import { getDb } from "./queries/connection";
+import { createRouter, authedQuery, adminQuery } from "./middleware";
+import { getDb } from "./queries/connection";
 import { uploadedFiles } from "@db/schema";
 import { clean } from "./lib/clean";
+import { logAudit } from "./lib/audit";
 
 export const fileRouter = createRouter({
   list: authedQuery
@@ -61,7 +63,9 @@ export const fileRouter = createRouter({
         metadata: input.metadata as Record<string, unknown>,
         uploadedBy: ctx.user?.id ?? null,
       }));
-      return { id: Number(result[0].insertId) };
+      const id = Number(result[0].insertId);
+      await logAudit(ctx, "uploaded_file", "create", id, input as Record<string, unknown>);
+      return { id };
     }),
 
   update: adminQuery
@@ -72,18 +76,20 @@ export const fileRouter = createRouter({
         metadata: z.record(z.string(), z.unknown()).optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const { id, ...data } = input;
       await db.update(uploadedFiles).set(clean(data as Record<string, unknown>)).where(eq(uploadedFiles.id, id));
+      await logAudit(ctx, "uploaded_file", "update", id, input as Record<string, unknown>);
       return { success: true };
     }),
 
   delete: adminQuery
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       await db.delete(uploadedFiles).where(eq(uploadedFiles.id, input.id));
+      await logAudit(ctx, "uploaded_file", "delete", input.id, input as Record<string, unknown>);
       return { success: true };
     }),
 });

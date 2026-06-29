@@ -2,9 +2,10 @@ import { z } from "zod";
 import { eq, desc, sql } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { knowledgeNodes, knowledgeEdges } from "@db/schema";
+import { knowledgeNodes, knowledgeEdges, documentChunks } from "@db/schema";
 import { clean } from "./lib/clean";
 import { vectorEngine } from "./lib/vector";
+import { logAudit } from "./lib/audit";
 
 export const knowledgeRouter = createRouter({
   listNodes: authedQuery.query(async () => {
@@ -54,7 +55,9 @@ export const knowledgeRouter = createRouter({
         metadata: input.metadata as Record<string, unknown>,
         createdBy: ctx.user?.id ?? null,
       }));
-      return { id: Number(result[0].insertId) };
+      const id = Number(result[0].insertId);
+      await logAudit(ctx, "knowledge_node", "create", id, input as Record<string, unknown>);
+      return { id };
     }),
 
   updateNode: adminQuery
@@ -70,21 +73,35 @@ export const knowledgeRouter = createRouter({
         metadata: z.record(z.string(), z.unknown()).optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const { id, ...data } = input;
       await db.update(knowledgeNodes).set(clean(data as Record<string, unknown>)).where(eq(knowledgeNodes.id, id));
+      await logAudit(ctx, "knowledge_node", "update", id, input as Record<string, unknown>);
       return { success: true };
     }),
 
   deleteNode: adminQuery
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
+      const [node] = await db.select().from(knowledgeNodes).where(eq(knowledgeNodes.id, input.id));
+      const linkedDocId = node?.metadata && typeof node.metadata === "object"
+        ? (node.metadata as Record<string, unknown>).documentId
+        : undefined;
+      if (typeof linkedDocId === "number") {
+        const [doc] = await db.select({ id: knowledgeNodes.id }).from(knowledgeNodes)
+          .where(eq(knowledgeNodes.id, linkedDocId));
+        if (doc) {
+          await db.delete(documentChunks).where(eq(documentChunks.documentId, linkedDocId));
+          await vectorEngine.deleteByDocumentId(linkedDocId);
+        }
+      }
       await db.delete(knowledgeEdges).where(
         sql`${knowledgeEdges.sourceId} = ${input.id} OR ${knowledgeEdges.targetId} = ${input.id}`
       );
       await db.delete(knowledgeNodes).where(eq(knowledgeNodes.id, input.id));
+      await logAudit(ctx, "knowledge_node", "delete", input.id, input as Record<string, unknown>);
       return { success: true };
     }),
 
@@ -96,13 +113,14 @@ export const knowledgeRouter = createRouter({
         posY: z.number(),
       }))
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       for (const node of input) {
         await db.update(knowledgeNodes)
           .set({ posX: node.posX, posY: node.posY })
           .where(eq(knowledgeNodes.id, node.id));
       }
+      await logAudit(ctx, "knowledge_node", "update", null, { nodes: input } as Record<string, unknown>);
       return { success: true };
     }),
 
@@ -131,14 +149,17 @@ export const knowledgeRouter = createRouter({
         weight: input.weight,
         createdBy: ctx.user?.id ?? null,
       }));
-      return { id: Number(result[0].insertId) };
+      const id = Number(result[0].insertId);
+      await logAudit(ctx, "knowledge_edge", "create", id, input as Record<string, unknown>);
+      return { id };
     }),
 
   deleteEdge: adminQuery
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       await db.delete(knowledgeEdges).where(eq(knowledgeEdges.id, input.id));
+      await logAudit(ctx, "knowledge_edge", "delete", input.id, input as Record<string, unknown>);
       return { success: true };
     }),
 

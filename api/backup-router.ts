@@ -9,6 +9,8 @@ import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
 import { promises as fsp } from "fs";
+import { logAudit } from "./lib/audit";
+import { clean } from "./lib/clean";
 
 const BACKUP_TARGETS = ["aliyundrive", "115", "nas", "local"] as const;
 
@@ -221,6 +223,10 @@ export const backupRouter = createRouter({
         target: z.enum(["aliyundrive", "115", "nas", "local"]),
         sourcePath: z.string().min(1),
         config: z.record(z.string(), z.unknown()).optional(),
+        cron: z.string().max(100).optional(),
+        enabled: z.boolean().default(false),
+        keepLastN: z.number().int().min(1).default(7),
+        maxRetries: z.number().int().min(0).default(3),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -236,7 +242,8 @@ export const backupRouter = createRouter({
         throw new Error(`连接测试失败: ${testResult.message}`);
       }
 
-      const result = await db.insert(backupJobs).values({
+      const isScheduled = Boolean(input.cron);
+      const values: typeof backupJobs.$inferInsert = {
         target: input.target,
         sourcePath: input.sourcePath,
         status: "pending",
@@ -244,14 +251,63 @@ export const backupRouter = createRouter({
         filesTotal: 0,
         filesDone: 0,
         filesFailed: 0,
+        config: connConfig,
         createdBy: ctx.user?.id ?? null,
-      });
+      };
+
+      if (isScheduled) {
+        values.cron = input.cron;
+        values.enabled = input.enabled ? "true" : "false";
+        values.keepLastN = input.keepLastN;
+        values.maxRetries = input.maxRetries;
+        values.retryCount = 0;
+      }
+
+      const result = await db.insert(backupJobs).values(values);
       const jobId = Number(result[0].insertId);
 
-      executeBackup(jobId, connConfig).catch(console.error);
+      if (!isScheduled) {
+        executeBackup(jobId, connConfig).catch(console.error);
+      }
 
       const [job] = await db.select().from(backupJobs).where(eq(backupJobs.id, jobId));
+      await logAudit(ctx, "backup_job", isScheduled ? "create" : "run", jobId, input as Record<string, unknown>);
       return job;
+    }),
+
+  updateSchedule: adminQuery
+    .input(
+      z.object({
+        id: z.number(),
+        cron: z.string().max(100).optional(),
+        enabled: z.boolean().optional(),
+        keepLastN: z.number().int().min(1).optional(),
+        maxRetries: z.number().int().min(0).optional(),
+        config: z.record(z.string(), z.unknown()).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      const { id, ...data } = input;
+      const setData: Record<string, unknown> = {};
+      if (data.cron !== undefined) setData.cron = data.cron;
+      if (data.enabled !== undefined) setData.enabled = data.enabled ? "true" : "false";
+      if (data.keepLastN !== undefined) setData.keepLastN = data.keepLastN;
+      if (data.maxRetries !== undefined) setData.maxRetries = data.maxRetries;
+      if (data.config !== undefined) setData.config = data.config;
+      await db.update(backupJobs).set(clean(setData)).where(eq(backupJobs.id, id));
+      await logAudit(ctx, "backup_job", "update", id, input as Record<string, unknown>);
+      return { success: true };
+    }),
+
+  delete: adminQuery
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      await db.delete(backupJobFiles).where(eq(backupJobFiles.jobId, input.id));
+      await db.delete(backupJobs).where(eq(backupJobs.id, input.id));
+      await logAudit(ctx, "backup_job", "delete", input.id, input as Record<string, unknown>);
+      return { success: true };
     }),
 
   status: authedQuery
@@ -297,6 +353,7 @@ export const backupRouter = createRouter({
       executeRestore(restoreJobId).catch(console.error);
 
       const [job] = await db.select().from(restoreJobs).where(eq(restoreJobs.id, restoreJobId));
+      await logAudit(ctx, "restore_job", "create", restoreJobId, input as Record<string, unknown>);
       return job;
     }),
 

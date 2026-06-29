@@ -4,6 +4,7 @@ import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { vectorCollections } from "@db/schema";
 import { clean } from "./lib/clean";
+import { logAudit } from "./lib/audit";
 
 export const vectorRouter = createRouter({
   list: authedQuery.query(async () => {
@@ -39,7 +40,9 @@ export const vectorRouter = createRouter({
         status: input.status,
         createdBy: ctx.user?.id ?? null,
       }));
-      return { id: Number(result[0].insertId) };
+      const id = Number(result[0].insertId);
+      await logAudit(ctx, "vector_collection", "create", id, input as Record<string, unknown>);
+      return { id };
     }),
 
   update: adminQuery
@@ -54,18 +57,20 @@ export const vectorRouter = createRouter({
         documentCount: z.number().int().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const { id, ...data } = input;
       await db.update(vectorCollections).set(clean(data as Record<string, unknown>)).where(eq(vectorCollections.id, id));
+      await logAudit(ctx, "vector_collection", "update", id, input as Record<string, unknown>);
       return { success: true };
     }),
 
   delete: adminQuery
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       await db.delete(vectorCollections).where(eq(vectorCollections.id, input.id));
+      await logAudit(ctx, "vector_collection", "delete", input.id, input as Record<string, unknown>);
       return { success: true };
     }),
 
@@ -76,11 +81,12 @@ export const vectorRouter = createRouter({
         count: z.number().int(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       await db.update(vectorCollections)
         .set({ documentCount: input.count })
         .where(eq(vectorCollections.id, input.id));
+      await logAudit(ctx, "vector_collection", "update", input.id, input as Record<string, unknown>);
       return { success: true };
     }),
 });

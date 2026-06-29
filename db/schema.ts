@@ -466,6 +466,13 @@ export const backupJobs = mysqlTable("backup_jobs", {
   filesDone: int("filesDone").default(0),
   filesFailed: int("filesFailed").default(0),
   manifest: json("manifest").$type<Record<string, unknown>>(),
+  config: json("config").$type<Record<string, unknown>>(),
+  cron: varchar("cron", { length: 100 }),
+  enabled: mysqlEnum("enabled", ["true", "false"]).default("false").notNull(),
+  nextRunAt: timestamp("nextRunAt"),
+  keepLastN: int("keepLastN").default(7),
+  maxRetries: int("maxRetries").default(3),
+  retryCount: int("retryCount").default(0),
   error: text("error"),
   startedAt: timestamp("startedAt"),
   completedAt: timestamp("completedAt"),
@@ -476,6 +483,7 @@ export const backupJobs = mysqlTable("backup_jobs", {
   index("backupJobs_target_idx").on(table.target),
   index("backupJobs_status_idx").on(table.status),
   index("backupJobs_createdBy_idx").on(table.createdBy),
+  index("backupJobs_enabled_nextRun_idx").on(table.enabled, table.nextRunAt),
   foreignKey({
     columns: [table.createdBy],
     foreignColumns: [users.id],
@@ -603,3 +611,26 @@ export const workflowRunNodes = mysqlTable("workflow_run_nodes", {
 
 export type WorkflowRunNode = typeof workflowRunNodes.$inferSelect;
 export type InsertWorkflowRunNode = typeof workflowRunNodes.$inferInsert;
+
+// ========== 审计日志表 ==========
+export const auditActionEnumValues = ["create", "update", "delete", "run"] as const;
+export const auditLogs = mysqlTable("audit_logs", {
+  id: serial("id").primaryKey(),
+  entityType: varchar("entityType", { length: 100 }).notNull(),
+  entityId: bigint("entityId", { mode: "number", unsigned: true }).notNull(),
+  action: mysqlEnum("action", ["create", "update", "delete", "run"]).notNull(),
+  actorId: bigint("actorId", { mode: "number", unsigned: true }),
+  details: json("details").$type<Record<string, unknown>>(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => [
+  index("auditLogs_entity_idx").on(table.entityType, table.entityId),
+  index("auditLogs_actor_idx").on(table.actorId),
+  foreignKey({
+    columns: [table.actorId],
+    foreignColumns: [users.id],
+    name: "audit_logs_actor_fk",
+  }),
+]);
+
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type InsertAuditLog = typeof auditLogs.$inferInsert;

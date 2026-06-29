@@ -4,6 +4,7 @@ import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { agents } from "@db/schema";
 import { clean } from "./lib/clean";
+import { logAudit } from "./lib/audit";
 
 export const agentRouter = createRouter({
   list: authedQuery
@@ -68,7 +69,9 @@ export const agentRouter = createRouter({
         permissions: input.permissions as Record<string, unknown>,
         createdBy: ctx.user?.id ?? null,
       }));
-      return { id: Number(result[0].insertId) };
+      const id = Number(result[0].insertId);
+      await logAudit(ctx, "agent", "create", id, input as Record<string, unknown>);
+      return { id };
     }),
 
   update: adminQuery
@@ -84,18 +87,20 @@ export const agentRouter = createRouter({
         permissions: z.record(z.string(), z.unknown()).optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const { id, ...data } = input;
       await db.update(agents).set(clean(data as Record<string, unknown>)).where(eq(agents.id, id));
+      await logAudit(ctx, "agent", "update", id, input as Record<string, unknown>);
       return { success: true };
     }),
 
   delete: adminQuery
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       await db.delete(agents).where(eq(agents.id, input.id));
+      await logAudit(ctx, "agent", "delete", input.id, input as Record<string, unknown>);
       return { success: true };
     }),
 
@@ -106,11 +111,12 @@ export const agentRouter = createRouter({
         permissions: z.record(z.string(), z.unknown()),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       await db.update(agents)
         .set({ permissions: input.permissions as Record<string, unknown> })
         .where(eq(agents.id, input.id));
+      await logAudit(ctx, "agent", "update", input.id, input as Record<string, unknown>);
       return { success: true };
     }),
 });

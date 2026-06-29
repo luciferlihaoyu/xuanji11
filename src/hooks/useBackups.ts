@@ -13,6 +13,18 @@ export function useBackups() {
     },
   });
 
+  const updateScheduleMutation = trpc.backup.updateSchedule.useMutation({
+    onSuccess: () => {
+      utils.backup.list.invalidate();
+    },
+  });
+
+  const deleteMutation = trpc.backup.delete.useMutation({
+    onSuccess: () => {
+      utils.backup.list.invalidate();
+    },
+  });
+
   const createRestoreMutation = trpc.backup.createRestore.useMutation({
     onSuccess: () => {
       utils.backup.listRestores.invalidate();
@@ -25,6 +37,8 @@ export function useBackups() {
     restores: restoresQuery.data ?? [],
     isLoading: listQuery.isLoading || targetsQuery.isLoading || restoresQuery.isLoading,
     create: createMutation.mutateAsync,
+    updateSchedule: updateScheduleMutation.mutateAsync,
+    deleteBackup: deleteMutation.mutateAsync,
     createRestore: createRestoreMutation.mutateAsync,
   };
 }

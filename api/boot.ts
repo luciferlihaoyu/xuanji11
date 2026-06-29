@@ -12,6 +12,7 @@ import { getDb } from "./queries/connection";
 import { uploadedFiles, ingestionItems } from "@db/schema";
 import { eq, desc, sql } from "drizzle-orm";
 import { triggerWebhookWorkflow, startWorkflowScheduler } from "./lib/workflow-scheduler";
+import { startBackupScheduler } from "./lib/backup-scheduler";
 import "./connectors"; // 注册 115网盘、阿里云盘等连接器
 
 const app = new Hono<{ Bindings: HttpBindings }>();
@@ -173,11 +174,13 @@ if (env.isProduction) {
   });
 
   const stopScheduler = startWorkflowScheduler();
+  const stopBackupScheduler = startBackupScheduler();
 
   // 优雅关闭
   const shutdown = (signal: string) => {
     console.log(`\n收到 ${signal}，正在优雅关闭...`);
     stopScheduler();
+    stopBackupScheduler();
     server.close(() => {
       console.log("HTTP 服务已关闭");
       process.exit(0);
