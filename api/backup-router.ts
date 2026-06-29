@@ -30,7 +30,7 @@ async function* walkDir(dir: string): AsyncGenerator<{ relativePath: string; ful
   }
 }
 
-async function executeBackup(jobId: number): Promise<void> {
+async function executeBackup(jobId: number, connectorConfig: Record<string, unknown> = {}): Promise<void> {
   const db = getDb();
   const [job] = await db.select().from(backupJobs).where(eq(backupJobs.id, jobId));
   if (!job) return;
@@ -63,17 +63,16 @@ async function executeBackup(jobId: number): Promise<void> {
         const checksum = sha256(content);
         const destName = path.basename(file.relativePath);
         const destDir = path.dirname(file.relativePath);
-        const targetBase = "/"; // 连接器内部处理目录
 
         if (connector.uploadFile) {
-          const result = await connector.uploadFile({ path: targetBase }, `${destDir}/${destName}`, content);
+          const result = await connector.uploadFile(connectorConfig, `${destDir}/${destName}`, content);
           if (!result.success) throw new Error("upload failed");
         } else if (connector.syncFiles) {
           const tempDir = path.join(process.env.UPLOAD_DIR || "./uploads", `backup-${jobId}`);
           await fsp.mkdir(tempDir, { recursive: true });
           const tempPath = path.join(tempDir, destName);
           await fsp.writeFile(tempPath, content);
-          await connector.syncFiles({ path: targetBase }, tempDir);
+          await connector.syncFiles(connectorConfig, tempDir);
           await fsp.rm(tempDir, { recursive: true, force: true });
         } else {
           throw new Error("连接器不支持上传或同步");
@@ -221,6 +220,7 @@ export const backupRouter = createRouter({
       z.object({
         target: z.enum(["aliyundrive", "115", "nas", "local"]),
         sourcePath: z.string().min(1),
+        config: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -230,7 +230,8 @@ export const backupRouter = createRouter({
         throw new Error(`备份目标不可用: ${input.target}`);
       }
 
-      const testResult = await connector.testConnection({ path: input.sourcePath });
+      const connConfig = input.config ?? {};
+      const testResult = await connector.testConnection({ ...connConfig, path: input.sourcePath });
       if (!testResult.success) {
         throw new Error(`连接测试失败: ${testResult.message}`);
       }
@@ -247,7 +248,7 @@ export const backupRouter = createRouter({
       });
       const jobId = Number(result[0].insertId);
 
-      executeBackup(jobId).catch(console.error);
+      executeBackup(jobId, connConfig).catch(console.error);
 
       const [job] = await db.select().from(backupJobs).where(eq(backupJobs.id, jobId));
       return job;

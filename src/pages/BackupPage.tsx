@@ -66,6 +66,8 @@ export default function BackupPage() {
   const [selectedBackupId, setSelectedBackupId] = useState<number | null>(null);
   const [target, setTarget] = useState<"local" | "nas" | "115" | "aliyundrive">("local");
   const [sourcePath, setSourcePath] = useState('/data');
+  const [accessToken, setAccessToken] = useState('');
+  const [refreshToken, setRefreshToken] = useState('');
   const [restoreTargetPath, setRestoreTargetPath] = useState('/data/restore');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -73,11 +75,18 @@ export default function BackupPage() {
 
   const availableTargets = targets.filter((t) => t.available);
 
+  const isCloudDrive = target === '115' || target === 'aliyundrive';
+
   const handleCreateBackup = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     try {
-      await create({ target, sourcePath });
+      const config: Record<string, string> = {};
+      if (isCloudDrive) {
+        config.accessToken = accessToken;
+        if (refreshToken) config.refreshToken = refreshToken;
+      }
+      await create({ target, sourcePath, config });
       addToast({ type: 'success', title: '备份任务已创建' });
       setShowCreate(false);
     } catch (err) {
@@ -150,6 +159,31 @@ export default function BackupPage() {
                 />
               </div>
             </div>
+            {isCloudDrive && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                <div>
+                  <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>Access Token</label>
+                  <input
+                    type="password"
+                    value={accessToken}
+                    onChange={(e) => setAccessToken(e.target.value)}
+                    placeholder={target === '115' ? '115 OAuth accessToken' : '阿里云盘 accessToken'}
+                    className="input-base text-xs w-full"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>Refresh Token <span className="text-[var(--text-muted)]">(可选)</span></label>
+                  <input
+                    type="password"
+                    value={refreshToken}
+                    onChange={(e) => setRefreshToken(e.target.value)}
+                    placeholder="用于自动刷新 accessToken"
+                    className="input-base text-xs w-full"
+                  />
+                </div>
+              </div>
+            )}
             <div className="flex justify-end">
               <button type="submit" disabled={isSubmitting} className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50">
                 {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Archive className="w-3.5 h-3.5" />}
