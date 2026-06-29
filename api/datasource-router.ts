@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, sql } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { dataSources, ingestionJobs, ingestionItems } from "@db/schema";
@@ -176,8 +176,10 @@ export const datasourceRouter = createRouter({
             .from(ingestionItems)
             .where(
               and(
-                eq(ingestionItems.jobId, Number(jobId)),
-                eq(ingestionItems.externalId, file.id)
+                eq(ingestionItems.externalId, file.id),
+                eq(ingestionItems.sourceUrl, file.downloadUrl ?? ""),
+                sql`${ingestionItems.metadata}->>'$.dataSourceId' = ${String(ds.id)}`,
+                sql`${ingestionItems.metadata}->>'$.platform' = ${platform}`
               )
             )
             .orderBy(desc(ingestionItems.createdAt))

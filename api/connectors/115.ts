@@ -13,6 +13,26 @@ import { registerConnector, type CloudConnector, type CloudFile } from "./base";
 /** 115 API 基础地址 */
 const API_BASE = "https://proapi.115.com/app/open";
 
+async function refresh115Token(refreshToken: string): Promise<{ accessToken: string; refreshToken: string } | null> {
+  try {
+    const res = await fetch("https://passportapi.115.com/app/1.0/web/1.0/token/", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ refresh_token: refreshToken }),
+    });
+    const data = (await res.json()) as { data?: { access_token?: string; refresh_token?: string } };
+    if (data.data?.access_token) {
+      return {
+        accessToken: data.data.access_token,
+        refreshToken: data.data.refresh_token || refreshToken,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /** 获取用户信息的授权验证 */
 async function call115Api(token: string, endpoint: string, params?: Record<string, string>): Promise<unknown> {
   const url = new URL(`${API_BASE}${endpoint}`);
@@ -64,15 +84,26 @@ async function get115DownloadUrl(token: string, fileId: string): Promise<string 
   }
 }
 
+async function getEffectiveToken(config: Record<string, unknown>): Promise<string | null> {
+  const accessToken = config.accessToken as string | undefined;
+  const refreshToken = config.refreshToken as string | undefined;
+
+  if (accessToken) return accessToken;
+  if (!refreshToken) return null;
+
+  const refreshed = await refresh115Token(refreshToken);
+  return refreshed?.accessToken ?? null;
+}
+
 export const connector115: CloudConnector = {
   name: "115网盘",
   authType: "oauth2",
 
   async testConnection(config) {
-    const token = config.accessToken || config.apiKey;
-    if (!token) return { success: false, message: "缺少 accessToken，请先完成OAuth授权" };
+    const token = await getEffectiveToken(config);
+    if (!token) return { success: false, message: "缺少 accessToken 或 refreshToken，请先完成OAuth授权" };
     try {
-      await call115Api(token as string, "/user/info");
+      await call115Api(token, "/user/info");
       return { success: true, message: "115网盘连接成功" };
     } catch (err) {
       return { success: false, message: err instanceof Error ? err.message : "连接失败" };
@@ -80,15 +111,15 @@ export const connector115: CloudConnector = {
   },
 
   async listFiles(config, parentId) {
-    const token = config.accessToken || config.apiKey;
+    const token = await getEffectiveToken(config);
     if (!token) return [];
-    return list115Files(token as string, parentId);
+    return list115Files(token, parentId);
   },
 
   async getDownloadUrl(config, fileId) {
-    const token = config.accessToken || config.apiKey;
+    const token = await getEffectiveToken(config);
     if (!token) return null;
-    return get115DownloadUrl(token as string, fileId);
+    return get115DownloadUrl(token, fileId);
   },
 };
 

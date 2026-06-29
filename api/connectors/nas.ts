@@ -7,20 +7,41 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { registerConnector, type CloudConnector, type CloudFile } from './base';
 
-async function listNasFiles(basePath: string, parentId?: string): Promise<CloudFile[]> {
+async function listNasFiles(basePath: string, parentId?: string, recursive = true): Promise<CloudFile[]> {
   const targetPath = parentId ?? basePath;
-  try {
-    const entries = await fs.readdir(targetPath, { withFileTypes: true });
-    return entries.map((entry) => ({
-      id: `${targetPath}/${entry.name}`,
-      name: entry.name,
-      type: entry.isDirectory() ? 'folder' : 'file',
-      parentId: targetPath,
-      modifiedAt: undefined,
-    }));
-  } catch {
-    return [];
+  const results: CloudFile[] = [];
+
+  async function walk(currentPath: string, parent?: string) {
+    try {
+      const entries = await fs.readdir(currentPath, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(currentPath, entry.name);
+        let modifiedAt: Date | undefined;
+        try {
+          const stat = await fs.stat(fullPath);
+          modifiedAt = stat.mtime;
+        } catch {}
+
+        results.push({
+          id: fullPath,
+          name: entry.name,
+          type: entry.isDirectory() ? 'folder' : 'file',
+          parentId: parent,
+          modifiedAt,
+        });
+
+        if (recursive && entry.isDirectory()) {
+          await walk(fullPath, currentPath);
+        }
+      }
+    } catch {}
+
+    await walk(targetPath, parentId);
+    return results;
   }
+
+  await walk(targetPath, parentId);
+  return results;
 }
 
 async function uploadToNas(basePath: string, fileName: string, content: Buffer): Promise<{ success: boolean; path: string }> {
