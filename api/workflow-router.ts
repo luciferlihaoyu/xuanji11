@@ -2,8 +2,9 @@ import { z } from "zod";
 import { eq, desc } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { workflows, workflowNodes } from "@db/schema";
+import { workflows, workflowNodes, workflowRuns, workflowRunNodes } from "@db/schema";
 import { clean } from "./lib/clean";
+import { executeWorkflow } from "./lib/workflow-runtime";
 
 export const workflowRouter = createRouter({
   list: authedQuery.query(async () => {
@@ -194,5 +195,29 @@ export const workflowRouter = createRouter({
       }
 
       return { success: true };
+    }),
+
+  run: adminQuery
+    .input(z.object({ id: z.number(), input: z.record(z.string(), z.unknown()).optional() }))
+    .mutation(async ({ input, ctx }) => {
+      const runId = await executeWorkflow(input.id, input.input ?? {}, ctx.user?.id ?? null);
+      return { runId };
+    }),
+
+  listRuns: authedQuery
+    .input(z.object({ workflowId: z.number() }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      return db.select().from(workflowRuns).where(eq(workflowRuns.workflowId, input.workflowId)).orderBy(desc(workflowRuns.createdAt));
+    }),
+
+  getRun: authedQuery
+    .input(z.object({ id: z.number() }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const [run] = await db.select().from(workflowRuns).where(eq(workflowRuns.id, input.id));
+      if (!run) return null;
+      const nodes = await db.select().from(workflowRunNodes).where(eq(workflowRunNodes.runId, input.id));
+      return { ...run, nodes };
     }),
 });

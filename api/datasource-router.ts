@@ -1,10 +1,11 @@
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { dataSources } from "@db/schema";
+import { dataSources, ingestionJobs, ingestionItems } from "@db/schema";
 import { clean } from "./lib/clean";
 import { getConnector } from "./connectors";
+import { ingestFile } from "./lib/ingestion";
 
 export const datasourceRouter = createRouter({
   list: authedQuery.query(async () => {
@@ -117,10 +118,10 @@ export const datasourceRouter = createRouter({
       }
     }),
 
-  // 同步文件 — 使用连接器获取文件列表
+  // 同步文件 — 使用连接器获取文件列表并进入 ingestion 流水线
   sync: authedQuery
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const results = await db.select().from(dataSources).where(eq(dataSources.id, input.id));
       const ds = results[0];
@@ -134,27 +135,99 @@ export const datasourceRouter = createRouter({
         .where(eq(dataSources.id, input.id));
 
       try {
-        // 如果有平台连接器，获取文件列表
-        let fileCount = 0;
-        if (platform) {
-          const connector = getConnector(platform);
-          if (connector) {
-            const files = await connector.listFiles(config);
-            fileCount = files.length;
-            // 将文件数量保存到配置中
-            config.documentCount = fileCount;
+        if (!platform) {
+          await db.update(dataSources)
+            .set({ status: "connected", lastSyncAt: new Date(), lastError: null })
+            .where(eq(dataSources.id, input.id));
+          return { success: true, message: "同步完成" };
+        }
+
+        const connector = getConnector(platform);
+        if (!connector) {
+          throw new Error(`未找到连接器: ${platform}`);
+        }
+
+        const files = await connector.listFiles(config);
+        const jobId = (await db.insert(ingestionJobs).values({
+          sourceType: "datasource",
+          sourceId: String(ds.id),
+          status: "running",
+          totalItems: files.length,
+          processedItems: 0,
+          failedItems: 0,
+          error: null,
+          retryCount: 0,
+          metadata: { platform, dataSourceName: ds.name },
+          createdBy: ctx.user?.id ?? null,
+        }))[0].insertId;
+
+        let processed = 0;
+        let failed = 0;
+        let skipped = 0;
+
+        for (const file of files) {
+          if (file.type !== "file") {
+            processed++;
+            continue;
+          }
+
+          const existing = await db
+            .select()
+            .from(ingestionItems)
+            .where(
+              and(
+                eq(ingestionItems.jobId, Number(jobId)),
+                eq(ingestionItems.externalId, file.id)
+              )
+            )
+            .orderBy(desc(ingestionItems.createdAt))
+            .limit(1);
+
+          const existingModifiedAt = (existing[0]?.metadata as Record<string, unknown> | undefined)?.remoteModifiedAt as string | undefined;
+          const newModifiedAt = file.modifiedAt?.toISOString();
+          if (existingModifiedAt && newModifiedAt && existingModifiedAt >= newModifiedAt) {
+            skipped++;
+            processed++;
+            continue;
+          }
+
+          try {
+            const downloadUrl = file.downloadUrl ?? (await connector.getDownloadUrl(config, file.id));
+            await ingestFile({
+              sourceType: "datasource",
+              sourceId: String(ds.id),
+              fileName: file.name,
+              mimeType: file.mimeType || "application/octet-stream",
+              size: file.size ?? 0,
+              externalId: file.id,
+              sourceUrl: file.downloadUrl ?? undefined,
+              downloadUrl: downloadUrl ?? undefined,
+              metadata: { dataSourceId: ds.id, platform, remoteModifiedAt: newModifiedAt },
+              createdBy: ctx.user?.id ?? null,
+            });
+            processed++;
+          } catch (err) {
+            failed++;
+            console.error(`[DataSource] Ingest failed for ${file.name}:`, err);
           }
         }
 
+        config.documentCount = files.length;
+
+        await db.update(ingestionJobs)
+          .set({ processedItems: processed, failedItems: failed, status: failed > 0 && processed === failed ? "failed" : "completed" })
+          .where(eq(ingestionJobs.id, Number(jobId)));
+
         await db.update(dataSources)
           .set({
-            status: "connected",
+            status: failed > 0 && processed === failed ? "error" : "connected",
             lastSyncAt: new Date(),
             config,
-            lastError: null,
+            lastError: failed > 0 ? `${failed} 个文件入库失败` : null,
           })
           .where(eq(dataSources.id, input.id));
-        return { success: true, message: fileCount > 0 ? `同步完成，获取到 ${fileCount} 个文件` : "同步完成" };
+
+        return { success: failed === 0, message: `同步完成: ${processed} 处理, ${skipped} 跳过, ${failed} 失败` };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : "同步失败";
         await db.update(dataSources)
