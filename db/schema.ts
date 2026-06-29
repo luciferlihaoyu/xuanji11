@@ -371,3 +371,235 @@ export const systemSettings = mysqlTable("system_settings", {
 
 export type SystemSetting = typeof systemSettings.$inferSelect;
 export type InsertSystemSetting = typeof systemSettings.$inferInsert;
+
+// ========== 摄取任务表（上传/数据源同步/备份等统一入口） ==========
+export const ingestionJobs = mysqlTable("ingestion_jobs", {
+  id: serial("id").primaryKey(),
+  sourceType: mysqlEnum("sourceType", ["upload", "datasource", "backup", "manual"]).notNull(),
+  sourceId: varchar("sourceId", { length: 255 }),
+  status: mysqlEnum("status", ["pending", "running", "completed", "failed", "cancelled"]).default("pending").notNull(),
+  totalItems: int("totalItems").default(0),
+  processedItems: int("processedItems").default(0),
+  failedItems: int("failedItems").default(0),
+  error: text("error"),
+  retryCount: int("retryCount").default(0),
+  metadata: json("metadata").$type<Record<string, unknown>>(),
+  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+}, (table) => [
+  index("ingestionJobs_sourceType_idx").on(table.sourceType),
+  index("ingestionJobs_status_idx").on(table.status),
+  index("ingestionJobs_createdBy_idx").on(table.createdBy),
+  foreignKey({
+    columns: [table.createdBy],
+    foreignColumns: [users.id],
+    name: "ingestion_jobs_created_by_fk",
+  }),
+]);
+
+export type IngestionJob = typeof ingestionJobs.$inferSelect;
+export type InsertIngestionJob = typeof ingestionJobs.$inferInsert;
+
+// ========== 摄取项目表（任务中的单个文件/对象） ==========
+export const ingestionItems = mysqlTable("ingestion_items", {
+  id: serial("id").primaryKey(),
+  jobId: bigint("jobId", { mode: "number", unsigned: true }).notNull(),
+  externalId: varchar("externalId", { length: 500 }),
+  name: varchar("name", { length: 500 }).notNull(),
+  mimeType: varchar("mimeType", { length: 255 }),
+  size: bigint("size", { mode: "number", unsigned: true }),
+  status: mysqlEnum("status", ["pending", "parsing", "chunking", "indexing", "completed", "failed", "unsupported"]).default("pending").notNull(),
+  error: text("error"),
+  sourceUrl: text("sourceUrl"),
+  storagePath: text("storagePath"),
+  documentId: bigint("documentId", { mode: "number", unsigned: true }),
+  metadata: json("metadata").$type<Record<string, unknown>>(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+}, (table) => [
+  index("ingestionItems_jobId_idx").on(table.jobId),
+  index("ingestionItems_status_idx").on(table.status),
+  index("ingestionItems_documentId_idx").on(table.documentId),
+  foreignKey({
+    columns: [table.jobId],
+    foreignColumns: [ingestionJobs.id],
+    name: "ingestion_items_job_fk",
+  }),
+]);
+
+export type IngestionItem = typeof ingestionItems.$inferSelect;
+export type InsertIngestionItem = typeof ingestionItems.$inferInsert;
+
+// ========== 文档分块表（向量搜索基本单元） ==========
+export const documentChunks = mysqlTable("document_chunks", {
+  id: serial("id").primaryKey(),
+  documentId: bigint("documentId", { mode: "number", unsigned: true }).notNull(),
+  itemId: bigint("itemId", { mode: "number", unsigned: true }),
+  content: text("content").notNull(),
+  chunkIndex: int("chunkIndex").default(0).notNull(),
+  embedding: json("embedding").$type<number[]>(),
+  embeddingModel: varchar("embeddingModel", { length: 255 }),
+  metadata: json("metadata").$type<Record<string, unknown>>(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => [
+  index("documentChunks_documentId_idx").on(table.documentId),
+  index("documentChunks_itemId_idx").on(table.itemId),
+  foreignKey({
+    columns: [table.documentId],
+    foreignColumns: [kbDocuments.id],
+    name: "document_chunks_doc_fk",
+  }),
+]);
+
+export type DocumentChunk = typeof documentChunks.$inferSelect;
+export type InsertDocumentChunk = typeof documentChunks.$inferInsert;
+
+// ========== 备份任务表（持久化备份状态） ==========
+export const backupJobs = mysqlTable("backup_jobs", {
+  id: serial("id").primaryKey(),
+  target: varchar("target", { length: 100 }).notNull(),
+  sourcePath: text("sourcePath").notNull(),
+  status: mysqlEnum("status", ["pending", "running", "completed", "failed", "partial"]).default("pending").notNull(),
+  progress: int("progress").default(0),
+  filesTotal: int("filesTotal").default(0),
+  filesDone: int("filesDone").default(0),
+  filesFailed: int("filesFailed").default(0),
+  manifest: json("manifest").$type<Record<string, unknown>>(),
+  error: text("error"),
+  startedAt: timestamp("startedAt"),
+  completedAt: timestamp("completedAt"),
+  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+}, (table) => [
+  index("backupJobs_target_idx").on(table.target),
+  index("backupJobs_status_idx").on(table.status),
+  index("backupJobs_createdBy_idx").on(table.createdBy),
+  foreignKey({
+    columns: [table.createdBy],
+    foreignColumns: [users.id],
+    name: "backup_jobs_created_by_fk",
+  }),
+]);
+
+export type BackupJob = typeof backupJobs.$inferSelect;
+export type InsertBackupJob = typeof backupJobs.$inferInsert;
+
+// ========== 备份任务文件表 ==========
+export const backupJobFiles = mysqlTable("backup_job_files", {
+  id: serial("id").primaryKey(),
+  jobId: bigint("jobId", { mode: "number", unsigned: true }).notNull(),
+  relativePath: text("relativePath").notNull(),
+  size: bigint("size", { mode: "number", unsigned: true }),
+  checksum: varchar("checksum", { length: 255 }),
+  status: mysqlEnum("status", ["pending", "uploaded", "failed"]).default("pending").notNull(),
+  error: text("error"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => [
+  index("backupJobFiles_jobId_idx").on(table.jobId),
+  foreignKey({
+    columns: [table.jobId],
+    foreignColumns: [backupJobs.id],
+    name: "backup_job_files_job_fk",
+  }),
+]);
+
+export type BackupJobFile = typeof backupJobFiles.$inferSelect;
+export type InsertBackupJobFile = typeof backupJobFiles.$inferInsert;
+
+// ========== 恢复任务表 ==========
+export const restoreJobs = mysqlTable("restore_jobs", {
+  id: serial("id").primaryKey(),
+  backupJobId: bigint("backupJobId", { mode: "number", unsigned: true }).notNull(),
+  targetPath: text("targetPath").notNull(),
+  status: mysqlEnum("status", ["pending", "running", "completed", "failed", "partial"]).default("pending").notNull(),
+  progress: int("progress").default(0),
+  filesTotal: int("filesTotal").default(0),
+  filesDone: int("filesDone").default(0),
+  filesFailed: int("filesFailed").default(0),
+  manifestVerified: mysqlEnum("manifestVerified", ["pending", "passed", "failed"]).default("pending").notNull(),
+  error: text("error"),
+  startedAt: timestamp("startedAt"),
+  completedAt: timestamp("completedAt"),
+  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+}, (table) => [
+  index("restoreJobs_backupJobId_idx").on(table.backupJobId),
+  index("restoreJobs_status_idx").on(table.status),
+  foreignKey({
+    columns: [table.backupJobId],
+    foreignColumns: [backupJobs.id],
+    name: "restore_jobs_backup_fk",
+  }),
+  foreignKey({
+    columns: [table.createdBy],
+    foreignColumns: [users.id],
+    name: "restore_jobs_created_by_fk",
+  }),
+]);
+
+export type RestoreJob = typeof restoreJobs.$inferSelect;
+export type InsertRestoreJob = typeof restoreJobs.$inferInsert;
+
+// ========== 工作流运行表 ==========
+export const workflowRuns = mysqlTable("workflow_runs", {
+  id: serial("id").primaryKey(),
+  workflowId: bigint("workflowId", { mode: "number", unsigned: true }).notNull(),
+  status: mysqlEnum("status", ["pending", "running", "completed", "failed", "cancelled"]).default("pending").notNull(),
+  triggeredBy: mysqlEnum("triggeredBy", ["manual", "api", "cron", "webhook"]).default("manual").notNull(),
+  input: json("input").$type<Record<string, unknown>>(),
+  output: json("output").$type<Record<string, unknown>>(),
+  error: text("error"),
+  startedAt: timestamp("startedAt"),
+  completedAt: timestamp("completedAt"),
+  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => [
+  index("workflowRuns_workflowId_idx").on(table.workflowId),
+  index("workflowRuns_status_idx").on(table.status),
+  foreignKey({
+    columns: [table.workflowId],
+    foreignColumns: [workflows.id],
+    name: "workflow_runs_wf_fk",
+  }),
+  foreignKey({
+    columns: [table.createdBy],
+    foreignColumns: [users.id],
+    name: "workflow_runs_created_by_fk",
+  }),
+]);
+
+export type WorkflowRun = typeof workflowRuns.$inferSelect;
+export type InsertWorkflowRun = typeof workflowRuns.$inferInsert;
+
+// ========== 工作流运行节点结果表 ==========
+export const workflowRunNodes = mysqlTable("workflow_run_nodes", {
+  id: serial("id").primaryKey(),
+  runId: bigint("runId", { mode: "number", unsigned: true }).notNull(),
+  nodeId: bigint("nodeId", { mode: "number", unsigned: true }).notNull(),
+  status: mysqlEnum("status", ["pending", "running", "completed", "failed", "skipped"]).default("pending").notNull(),
+  input: json("input").$type<Record<string, unknown>>(),
+  output: json("output").$type<Record<string, unknown>>(),
+  error: text("error"),
+  startedAt: timestamp("startedAt"),
+  completedAt: timestamp("completedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => [
+  index("workflowRunNodes_runId_idx").on(table.runId),
+  index("workflowRunNodes_nodeId_idx").on(table.nodeId),
+  foreignKey({
+    columns: [table.runId],
+    foreignColumns: [workflowRuns.id],
+    name: "workflow_run_nodes_run_fk",
+  }),
+  foreignKey({
+    columns: [table.nodeId],
+    foreignColumns: [workflowNodes.id],
+    name: "workflow_run_nodes_node_fk",
+  }),
+]);
+
+export type WorkflowRunNode = typeof workflowRunNodes.$inferSelect;
+export type InsertWorkflowRunNode = typeof workflowRunNodes.$inferInsert;

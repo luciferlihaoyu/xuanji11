@@ -11,7 +11,7 @@ async function listNasFiles(basePath: string, parentId?: string): Promise<CloudF
   const targetPath = parentId ?? basePath;
   try {
     const entries = await fs.readdir(targetPath, { withFileTypes: true });
-    return entries.map((entry, index) => ({
+    return entries.map((entry) => ({
       id: `${targetPath}/${entry.name}`,
       name: entry.name,
       type: entry.isDirectory() ? 'folder' : 'file',
@@ -51,7 +51,7 @@ export const connectorNas: CloudConnector = {
     return listNasFiles(basePath, parentId);
   },
 
-  async getDownloadUrl(config, fileId) {
+  async getDownloadUrl(_config, fileId) {
     return fileId; // 本地文件直接返回路径
   },
 

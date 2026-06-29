@@ -1,100 +1,199 @@
-/**
- * 璇玑备份系统 — 支持阿里云盘、115网盘、本地NAS三种备份目标
- */
-
 import { z } from "zod";
+import { eq, desc } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
+import { getDb } from "./queries/connection";
+import { backupJobs, backupJobFiles, restoreJobs } from "@db/schema";
 import { getConnector } from "./connectors/base";
 import type { CloudConnector } from "./connectors/base";
-import path from "path";
-import { promises as fs } from "fs";
+import * as fs from "fs";
+import * as path from "path";
+import { createHash } from "crypto";
+import { promises as fsp } from "fs";
 
-// 备份任务状态
-type BackupStatus = "pending" | "running" | "completed" | "failed";
-
-// 内存备份任务存储（生产应接入数据库）
-interface BackupTask {
-  id: number;
-  target: string;
-  sourcePath: string;
-  status: BackupStatus;
-  progress: number;
-  startedAt?: string;
-  completedAt?: string;
-  error?: string;
-  filesTotal: number;
-  filesDone: number;
-}
-
-const tasks: BackupTask[] = [];
-let nextId = 1;
-
-// 支持的备份目标
 const BACKUP_TARGETS = ["aliyundrive", "115", "nas", "local"] as const;
 
-async function executeBackup(task: BackupTask): Promise<void> {
-  const connector = getConnector(task.target) as CloudConnector | undefined;
+function sha256(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+async function* walkDir(dir: string): AsyncGenerator<{ relativePath: string; fullPath: string; size: number }> {
+  const entries = await fsp.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    const relativePath = path.relative(dir, fullPath);
+    if (entry.isDirectory()) {
+      yield* walkDir(fullPath);
+    } else if (entry.isFile()) {
+      const stat = await fsp.stat(fullPath);
+      yield { relativePath, fullPath, size: stat.size };
+    }
+  }
+}
+
+async function executeBackup(jobId: number): Promise<void> {
+  const db = getDb();
+  const [job] = await db.select().from(backupJobs).where(eq(backupJobs.id, jobId));
+  if (!job) return;
+
+  await db.update(backupJobs).set({ status: "running", startedAt: new Date() }).where(eq(backupJobs.id, jobId));
+
+  const connector = getConnector(job.target) as CloudConnector | undefined;
   if (!connector) {
-    task.status = "failed";
-    task.error = `未找到连接器: ${task.target}`;
+    await db.update(backupJobs).set({ status: "failed", error: `未找到连接器: ${job.target}`, completedAt: new Date() }).where(eq(backupJobs.id, jobId));
     return;
   }
 
-  task.status = "running";
-  task.startedAt = new Date().toISOString();
+  try {
+    const files: { relativePath: string; fullPath: string; size: number }[] = [];
+    if (fs.existsSync(job.sourcePath)) {
+      for await (const f of walkDir(job.sourcePath)) {
+        files.push(f);
+      }
+    }
+
+    await db.update(backupJobs).set({ filesTotal: files.length }).where(eq(backupJobs.id, jobId));
+
+    let done = 0;
+    let failed = 0;
+    const manifestFiles: Array<{ path: string; size: number; checksum: string; status: string }> = [];
+
+    for (const file of files) {
+      try {
+        const content = await fsp.readFile(file.fullPath);
+        const checksum = sha256(content);
+        const destName = path.basename(file.relativePath);
+        const destDir = path.dirname(file.relativePath);
+        const targetBase = "/"; // 连接器内部处理目录
+
+        if (connector.uploadFile) {
+          const result = await connector.uploadFile({ path: targetBase }, `${destDir}/${destName}`, content);
+          if (!result.success) throw new Error("upload failed");
+        } else if (connector.syncFiles) {
+          const tempDir = path.join(process.env.UPLOAD_DIR || "./uploads", `backup-${jobId}`);
+          await fsp.mkdir(tempDir, { recursive: true });
+          const tempPath = path.join(tempDir, destName);
+          await fsp.writeFile(tempPath, content);
+          await connector.syncFiles({ path: targetBase }, tempDir);
+          await fsp.rm(tempDir, { recursive: true, force: true });
+        } else {
+          throw new Error("连接器不支持上传或同步");
+        }
+
+        await db.insert(backupJobFiles).values({
+          jobId,
+          relativePath: file.relativePath,
+          size: file.size,
+          checksum,
+          status: "uploaded",
+        });
+        manifestFiles.push({ path: file.relativePath, size: file.size, checksum, status: "uploaded" });
+        done++;
+      } catch (err) {
+        failed++;
+        await db.insert(backupJobFiles).values({
+          jobId,
+          relativePath: file.relativePath,
+          size: file.size,
+          status: "failed",
+          error: err instanceof Error ? err.message : String(err),
+        });
+        manifestFiles.push({ path: file.relativePath, size: file.size, checksum: "", status: "failed" });
+      }
+      await db.update(backupJobs).set({ filesDone: done, filesFailed: failed, progress: Math.round(((done + failed) / files.length) * 100) }).where(eq(backupJobs.id, jobId));
+    }
+
+    const status = failed > 0 ? (done > 0 ? "partial" : "failed") : "completed";
+    await db.update(backupJobs).set({
+      status,
+      progress: 100,
+      manifest: { files: manifestFiles, total: files.length, done, failed },
+      error: failed > 0 ? `${failed} 个文件备份失败` : null,
+      completedAt: new Date(),
+    }).where(eq(backupJobs.id, jobId));
+  } catch (err) {
+    await db.update(backupJobs).set({
+      status: "failed",
+      error: err instanceof Error ? err.message : "备份执行失败",
+      completedAt: new Date(),
+    }).where(eq(backupJobs.id, jobId));
+  }
+}
+
+async function executeRestore(restoreJobId: number): Promise<void> {
+  const db = getDb();
+  const [job] = await db.select().from(restoreJobs).where(eq(restoreJobs.id, restoreJobId));
+  if (!job) return;
+
+  await db.update(restoreJobs).set({ status: "running", startedAt: new Date() }).where(eq(restoreJobs.id, restoreJobId));
 
   try {
-    if (connector.syncFiles) {
-      const result = await connector.syncFiles(
-        { path: task.sourcePath },
-        task.sourcePath
-      );
-      task.filesDone = result.downloaded;
-      task.filesTotal = result.downloaded + result.failed;
-      task.progress = 100;
-      task.completedAt = new Date().toISOString();
+    const files = await db.select().from(backupJobFiles).where(eq(backupJobFiles.jobId, job.backupJobId));
+    await db.update(restoreJobs).set({ filesTotal: files.length }).where(eq(restoreJobs.id, restoreJobId));
 
-      if (result.failed > 0) {
-        task.status = "completed";
-        task.error = `${result.failed} 个文件备份失败`;
-      } else {
-        task.status = "completed";
-      }
-    } else {
-      // 回退：逐个文件上传
-      task.status = "running";
-      task.progress = 0;
+    let done = 0;
+    let failed = 0;
+    let manifestPassed = 0;
+    let manifestFailed = 0;
 
-      const items = await connector.listFiles({ path: task.sourcePath });
-      task.filesTotal = items.length;
-      task.filesDone = 0;
+    for (const file of files) {
+      try {
+        if (file.status !== "uploaded" || !file.relativePath) {
+          failed++;
+          continue;
+        }
 
-      for (const item of items) {
-        if (item.type === "file") {
-          try {
-            const url = await connector.getDownloadUrl({ path: task.sourcePath }, item.id);
-            if (url && connector.uploadFile) {
-              const content = Buffer.from(await (await fetch(url)).arrayBuffer());
-              await connector.uploadFile({ path: task.sourcePath }, item.name, content);
-            }
-            task.filesDone++;
-          } catch {
-            // 跳过失败文件
+        const destPath = path.join(job.targetPath, file.relativePath);
+        await fsp.mkdir(path.dirname(destPath), { recursive: true });
+
+        const connector = getConnector(job.targetPath.startsWith("/") ? "nas" : "local") as CloudConnector | undefined;
+        let content: Buffer | null = null;
+
+        if (connector?.getDownloadUrl) {
+          const url = await connector.getDownloadUrl({ path: "/" }, file.relativePath);
+          if (url) {
+            const res = await fetch(url);
+            content = Buffer.from(await res.arrayBuffer());
           }
         }
-        task.progress = Math.round((task.filesDone / task.filesTotal) * 100);
+
+        if (!content) {
+          throw new Error("无法获取备份文件内容");
+        }
+
+        await fsp.writeFile(destPath, content);
+        const checksum = sha256(content);
+        const verified = checksum === file.checksum;
+
+        if (verified) manifestPassed++;
+        else manifestFailed++;
+
+        done++;
+      } catch (err) {
+        failed++;
+        console.error(`[Restore] Failed ${file.relativePath}:`, err);
       }
-      task.status = "completed";
-      task.completedAt = new Date().toISOString();
+      await db.update(restoreJobs).set({ filesDone: done, filesFailed: failed, progress: Math.round(((done + failed) / files.length) * 100) }).where(eq(restoreJobs.id, restoreJobId));
     }
+
+    const manifestVerified = manifestFailed > 0 ? "failed" : manifestPassed > 0 ? "passed" : "pending";
+    const status = failed > 0 ? (done > 0 ? "partial" : "failed") : "completed";
+    await db.update(restoreJobs).set({
+      status,
+      progress: 100,
+      manifestVerified,
+      error: failed > 0 ? `${failed} 个文件恢复失败` : null,
+      completedAt: new Date(),
+    }).where(eq(restoreJobs.id, restoreJobId));
   } catch (err) {
-    task.status = "failed";
-    task.error = err instanceof Error ? err.message : "备份执行失败";
+    await db.update(restoreJobs).set({
+      status: "failed",
+      error: err instanceof Error ? err.message : "恢复执行失败",
+      completedAt: new Date(),
+    }).where(eq(restoreJobs.id, restoreJobId));
   }
 }
 
 export const backupRouter = createRouter({
-  /** 列出可用备份目标 */
   targets: authedQuery.query(async () => {
     return BACKUP_TARGETS.map((key) => {
       const c = getConnector(key);
@@ -102,19 +201,21 @@ export const backupRouter = createRouter({
     });
   }),
 
-  /** 列出备份任务 */
   list: authedQuery.query(async () => {
-    return tasks.slice(-20).reverse();
+    const db = getDb();
+    return db.select().from(backupJobs).orderBy(desc(backupJobs.createdAt));
   }),
 
-  /** 获取单个备份任务 */
   getById: authedQuery
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {
-      return tasks.find((t) => t.id === input.id) ?? null;
+      const db = getDb();
+      const [job] = await db.select().from(backupJobs).where(eq(backupJobs.id, input.id));
+      if (!job) return null;
+      const files = await db.select().from(backupJobFiles).where(eq(backupJobFiles.jobId, input.id));
+      return { ...job, files };
     }),
 
-  /** 创建并启动备份 */
   create: adminQuery
     .input(
       z.object({
@@ -122,7 +223,8 @@ export const backupRouter = createRouter({
         sourcePath: z.string().min(1),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
       const connector = getConnector(input.target);
       if (!connector) {
         throw new Error(`备份目标不可用: ${input.target}`);
@@ -133,38 +235,75 @@ export const backupRouter = createRouter({
         throw new Error(`连接测试失败: ${testResult.message}`);
       }
 
-      const task: BackupTask = {
-        id: nextId++,
+      const result = await db.insert(backupJobs).values({
         target: input.target,
         sourcePath: input.sourcePath,
         status: "pending",
         progress: 0,
         filesTotal: 0,
         filesDone: 0,
-      };
+        filesFailed: 0,
+        createdBy: ctx.user?.id ?? null,
+      });
+      const jobId = Number(result[0].insertId);
 
-      tasks.push(task);
+      executeBackup(jobId).catch(console.error);
 
-      // 异步执行备份
-      executeBackup(task).catch(console.error);
-
-      return task;
+      const [job] = await db.select().from(backupJobs).where(eq(backupJobs.id, jobId));
+      return job;
     }),
 
-  /** 获取备份任务状态 */
   status: authedQuery
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {
-      const task = tasks.find((t) => t.id === input.id);
-      if (!task) return null;
-      return {
-        id: task.id,
-        target: task.target,
-        status: task.status,
-        progress: task.progress,
-        filesTotal: task.filesTotal,
-        filesDone: task.filesDone,
-        error: task.error,
-      };
+      const db = getDb();
+      const [job] = await db.select().from(backupJobs).where(eq(backupJobs.id, input.id));
+      if (!job) return null;
+      const files = await db.select().from(backupJobFiles).where(eq(backupJobFiles.jobId, input.id));
+      return { ...job, files };
+    }),
+
+  listRestores: authedQuery.query(async () => {
+    const db = getDb();
+    return db.select().from(restoreJobs).orderBy(desc(restoreJobs.createdAt));
+  }),
+
+  createRestore: adminQuery
+    .input(
+      z.object({
+        backupJobId: z.number(),
+        targetPath: z.string().min(1),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      const [backupJob] = await db.select().from(backupJobs).where(eq(backupJobs.id, input.backupJobId));
+      if (!backupJob) throw new Error("备份任务不存在");
+
+      const result = await db.insert(restoreJobs).values({
+        backupJobId: input.backupJobId,
+        targetPath: input.targetPath,
+        status: "pending",
+        progress: 0,
+        filesTotal: 0,
+        filesDone: 0,
+        filesFailed: 0,
+        manifestVerified: "pending",
+        createdBy: ctx.user?.id ?? null,
+      });
+      const restoreJobId = Number(result[0].insertId);
+
+      executeRestore(restoreJobId).catch(console.error);
+
+      const [job] = await db.select().from(restoreJobs).where(eq(restoreJobs.id, restoreJobId));
+      return job;
+    }),
+
+  getRestoreById: authedQuery
+    .input(z.object({ id: z.number() }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const [job] = await db.select().from(restoreJobs).where(eq(restoreJobs.id, input.id));
+      return job ?? null;
     }),
 });
