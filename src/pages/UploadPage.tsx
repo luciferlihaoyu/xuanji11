@@ -10,6 +10,8 @@ interface UploadFile {
   mimeType: string;
   progress: number;
   status: 'queued' | 'uploading' | 'completed' | 'failed';
+  ingestionStatus?: string;
+  ingestionError?: string;
   speed?: string;
   url?: string;
 }
@@ -53,6 +55,36 @@ export default function UploadPage() {
   useEffect(() => {
     fetchUploadedList();
   }, []);
+
+  useEffect(() => {
+    const completedIds = tasks.filter((t) => t.status === 'completed' && t.id && !t.ingestionStatus).map((t) => t.id as number);
+    if (completedIds.length === 0) return;
+
+    const poll = async () => {
+      for (const id of completedIds) {
+        try {
+          const res = await fetch(`/api/upload/${id}/ingestion`);
+          const data = await res.json();
+          if (data.success && data.items && data.items.length > 0) {
+            const item = data.items[0];
+            setTasks((prev) =>
+              prev.map((t) =>
+                t.id === id
+                  ? { ...t, ingestionStatus: item.status, ingestionError: item.error || undefined }
+                  : t
+              )
+            );
+          }
+        } catch (err) {
+          console.error('获取入库状态失败:', err);
+        }
+      }
+    };
+
+    poll();
+    const interval = setInterval(poll, 2000);
+    return () => clearInterval(interval);
+  }, [tasks]);
 
   const fetchUploadedList = async () => {
     try {
@@ -288,7 +320,19 @@ export default function UploadPage() {
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                  <span className="chip chip-emerald text-[10px] py-0.5 px-2 shrink-0">已完成</span>
+                  {task.ingestionStatus ? (
+                    <span
+                      className="chip text-[10px] py-0.5 px-2 shrink-0"
+                      style={{
+                        backgroundColor: task.ingestionStatus === 'completed' ? 'rgba(52,211,153,0.15)' : task.ingestionStatus === 'failed' || task.ingestionStatus === 'unsupported' ? 'rgba(239,68,68,0.15)' : 'rgba(251,191,36,0.15)',
+                        color: task.ingestionStatus === 'completed' ? '#34D399' : task.ingestionStatus === 'failed' || task.ingestionStatus === 'unsupported' ? '#EF4444' : '#FBBF24',
+                      }}
+                    >
+                      {task.ingestionStatus === 'completed' ? '已入库' : task.ingestionStatus === 'unsupported' ? '不支持' : task.ingestionStatus}
+                    </span>
+                  ) : (
+                    <span className="chip chip-emerald text-[10px] py-0.5 px-2 shrink-0">已完成</span>
+                  )}
                 </div>
               );
             })}

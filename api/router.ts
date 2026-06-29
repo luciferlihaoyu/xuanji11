@@ -8,6 +8,7 @@ import { fileRouter } from "./file-router";
 import { vectorRouter } from "./vector-router";
 import { settingRouter } from "./setting-router";
 import { backupRouter } from "./backup-router";
+import { ingestionRouter } from "./ingestion-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -22,6 +23,7 @@ export const appRouter = createRouter({
   vector: vectorRouter,
   setting: settingRouter,
   backup: backupRouter,
+  ingestion: ingestionRouter,
 });
 
 export type AppRouter = typeof appRouter;

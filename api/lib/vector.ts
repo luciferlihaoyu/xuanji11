@@ -68,6 +68,36 @@ export const vectorEngine = {
     }
   },
 
+  /** 索引一组文档分块（idempotent: 先删除该文档已有条目再插入） */
+  async indexDocumentChunks(
+    documentId: number | string,
+    chunks: Array<{ content: string; index: number; metadata?: Record<string, unknown> }>,
+    baseMetadata: Record<string, unknown> = {}
+  ): Promise<number> {
+    const docKey = String(documentId);
+    const existing = fallbackStore.findIndex((e) => String(e.metadata.documentId) === docKey);
+    if (existing >= 0) {
+      for (let i = fallbackStore.length - 1; i >= 0; i--) {
+        if (String(fallbackStore[i].metadata.documentId) === docKey) {
+          fallbackStore.splice(i, 1);
+        }
+      }
+    }
+    const entries = chunks.map((chunk) => ({
+      id: `chunk-${docKey}-${chunk.index}`,
+      vector: this.embedText(chunk.content),
+      metadata: {
+        ...baseMetadata,
+        ...chunk.metadata,
+        documentId: docKey,
+        chunkIndex: chunk.index,
+        content: chunk.content.slice(0, 200),
+      },
+    }));
+    await this.insertBatch(entries);
+    return entries.length;
+  },
+
   /** 语义搜索（返回 topK） */
   async search(queryVector: number[], topK: number = 10): Promise<SearchResult[]> {
     if (fallbackStore.length === 0) return [];
@@ -101,7 +131,8 @@ export const vectorEngine = {
   },
 
   /** 健康检查 */
-  async healthCheck(): Promise<{ ok: boolean; engine: string; size: number }> {
-    return { ok: true, engine: 'cosine-fallback', size: fallbackStore.length };
+  async healthCheck(): Promise<{ ok: boolean; engine: string; size: number; mode: "empty" | "indexed" }> {
+    const size = fallbackStore.length;
+    return { ok: true, engine: 'cosine-fallback', size, mode: size === 0 ? 'empty' : 'indexed' };
   },
 };

@@ -7,9 +7,11 @@ interface NodeDetailPanelProps {
   allNodes: any[];
   categoryColors: Record<string, string>;
   onClose: () => void;
+  onDelete?: (nodeId: string) => void;
+  onConnect?: (nodeId: string) => void;
 }
 
-export default function NodeDetailPanel({ node, connectedEdges, allNodes, categoryColors, onClose }: NodeDetailPanelProps) {
+export default function NodeDetailPanel({ node, connectedEdges, allNodes, categoryColors, onClose, onDelete, onConnect }: NodeDetailPanelProps) {
   const connectedNodes = connectedEdges.map((edge) => {
     const otherId = edge.source === node.id ? edge.target : edge.source;
     return allNodes.find((n) => n.id === otherId);
@@ -104,14 +106,28 @@ export default function NodeDetailPanel({ node, connectedEdges, allNodes, catego
           查看详情
         </Link>
         <div className="flex gap-2">
-          <button className="btn-secondary flex-1 text-xs py-1.5 flex items-center justify-center gap-1">
-            <Link2 className="w-3.5 h-3.5" />
-            编辑链接
-          </button>
-          <button className="btn-danger flex-1 text-xs py-1.5 flex items-center justify-center gap-1">
-            <Trash2 className="w-3.5 h-3.5" />
-            删除
-          </button>
+          {onConnect && (
+            <button
+              onClick={() => onConnect(node.id)}
+              className="btn-secondary flex-1 text-xs py-1.5 flex items-center justify-center gap-1"
+            >
+              <Link2 className="w-3.5 h-3.5" />
+              连线
+            </button>
+          )}
+          {onDelete && (
+            <button
+              onClick={() => {
+                if (confirm(`确定要删除节点 “${node.name}” 吗？`)) {
+                  onDelete(node.id);
+                }
+              }}
+              className="btn-danger flex-1 text-xs py-1.5 flex items-center justify-center gap-1"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              删除
+            </button>
+          )}
         </div>
       </div>
     </div>

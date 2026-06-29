@@ -191,6 +191,10 @@ export const knowledgeRouter = createRouter({
 
   /** 向量健康检查 */
   vectorHealth: authedQuery.query(async () => {
-    return vectorEngine.healthCheck();
+    const engine = await vectorEngine.healthCheck();
+    return {
+      ...engine,
+      mode: engine.mode === 'indexed' ? 'semantic' : 'fallback',
+    };
   }),
 });

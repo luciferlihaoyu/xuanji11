@@ -7,7 +7,10 @@ import { createContext } from "./context";
 import { env } from "./lib/env";
 import { Paths } from "@contracts/constants";
 import { saveUploadedFile, deleteUploadedFile, getFileStream } from "./upload-handler";
+import { ingestFile } from "./lib/ingestion";
 import { getDb } from "./queries/connection";
+import { uploadedFiles, ingestionItems } from "@db/schema";
+import { eq, desc, sql } from "drizzle-orm";
 import "./connectors"; // 注册 115网盘、阿里云盘等连接器
 
 const app = new Hono<{ Bindings: HttpBindings }>();
@@ -38,6 +41,16 @@ app.post("/api/upload", async (c) => {
       if (!(file instanceof File)) continue;
       const result = await saveUploadedFile(file);
       results.push(result);
+      ingestFile({
+        sourceType: "upload",
+        fileName: result.originalName,
+        mimeType: result.mimeType,
+        size: result.size,
+        storagePath: result.storagePath,
+        uploadedFileId: result.id,
+      }).catch((err) => {
+        console.error("[Upload] Ingestion failed:", err);
+      });
     }
 
     return c.json({
@@ -86,6 +99,22 @@ app.get("/api/files/:filename", async (c) => {
   c.header("Content-Type", fileInfo.mimeType);
   // 使用 Bun 或 Node 的流式响应
   return new Response(fileInfo.stream as unknown as ReadableStream);
+});
+
+app.get("/api/upload/:id/ingestion", async (c) => {
+  try {
+    const id = parseInt(c.req.param("id"));
+    if (isNaN(id)) return c.json({ error: "无效的文件ID" }, 400);
+    const db = getDb();
+    const items = await db
+      .select()
+      .from(ingestionItems)
+      .where(sql`${ingestionItems.metadata}->>'$.uploadedFileId' = ${String(id)}`)
+      .orderBy(desc(ingestionItems.createdAt));
+    return c.json({ success: true, items });
+  } catch (err) {
+    return c.json({ error: String(err) }, 500);
+  }
 });
 
 // ========== tRPC API ==========

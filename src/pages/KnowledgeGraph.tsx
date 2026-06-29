@@ -6,6 +6,7 @@ import NodeDetailPanel from '@/components/NodeDetailPanel';
 import BottomInfoBar from '@/components/BottomInfoBar';
 import BgImageUpload from '@/components/BgImageUpload';
 import * as d3 from 'd3';
+import { Plus, Link2, X } from 'lucide-react';
 
 const CATEGORY_COLORS: Record<string, string> = {
   concept: '#00e5ff',
@@ -61,9 +62,22 @@ export default function KnowledgeGraph() {
     nodes: backendNodes,
     edges: backendEdges,
     isLoading: isGraphLoading,
+    createNode,
+    deleteNode,
+    createEdge,
+    updatePositions,
   } = useKnowledgeGraph();
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const selectedNodeIdRef = useRef(selectedNodeId);
+  useEffect(() => { selectedNodeIdRef.current = selectedNodeId; }, [selectedNodeId]);
+
+  const [edgeMode, setEdgeMode] = useState<false | 'source'>(false);
+  const edgeModeRef = useRef(edgeMode);
+  useEffect(() => { edgeModeRef.current = edgeMode; }, [edgeMode]);
+
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [newNode, setNewNode] = useState({ title: '', content: '', type: 'concept' as const });
   const [filteredCategories, setFilteredCategories] = useState<Set<string>>(
     new Set(['concept', 'document', 'topic', 'entity', 'note', 'tag'])
   );
@@ -197,6 +211,9 @@ export default function KnowledgeGraph() {
       .on('end', (event: any, d: any) => {
         if (!event.active) simulation.alphaTarget(0);
         d.fx = null; d.fy = null;
+        updatePositionsRef.current(nodes.map((n: RenderNode) => ({ id: Number(n.id), posX: n.x / 3, posY: n.y / 3 }))).catch((err: unknown) => {
+          console.error('保存位置失败:', err);
+        });
       });
 
     const nodeGroups = g.append('g')
@@ -256,7 +273,29 @@ export default function KnowledgeGraph() {
 
     // Interactions
     nodeGroups
-      .on('click', (_event: unknown, d: RenderNode) => setSelectedNodeId(d.id))
+      .on('click', (_event: unknown, d: RenderNode) => {
+        if (edgeModeRef.current === 'source') {
+          if (selectedNodeIdRef.current === d.id) {
+            setEdgeMode(false);
+            setSelectedNodeId(null);
+            return;
+          }
+          if (selectedNodeIdRef.current) {
+            createEdgeRef.current({ sourceId: Number(selectedNodeIdRef.current), targetId: Number(d.id), type: 'related' })
+              .then(() => {
+                setEdgeMode(false);
+                setSelectedNodeId(null);
+                addToastRef.current({ type: 'success', title: '连线已创建' });
+              })
+              .catch((err: unknown) => {
+                setEdgeMode(false);
+                addToastRef.current({ type: 'error', title: '创建连线失败', description: err instanceof Error ? err.message : String(err) });
+              });
+            return;
+          }
+        }
+        setSelectedNodeId(d.id);
+      })
       .on('mouseenter', function(_event: unknown, d: RenderNode) {
         const idx = nodes.indexOf(d);
         linkGroup.selectAll('line').transition().duration(150)
@@ -320,6 +359,49 @@ export default function KnowledgeGraph() {
     });
   }, []);
 
+  const { addToast } = useAppStore();
+  const addToastRef = useRef(addToast);
+  useEffect(() => { addToastRef.current = addToast; }, [addToast]);
+
+  const createEdgeRef = useRef(createEdge);
+  useEffect(() => { createEdgeRef.current = createEdge; }, [createEdge]);
+
+  const updatePositionsRef = useRef(updatePositions);
+  useEffect(() => { updatePositionsRef.current = updatePositions; }, [updatePositions]);
+
+  const handleAddNode = async () => {
+    if (!newNode.title.trim()) return;
+    try {
+      await createNode({
+        title: newNode.title,
+        content: newNode.content,
+        type: newNode.type,
+        posX: Math.random() * 200 - 100,
+        posY: Math.random() * 200 - 100,
+      });
+      setNewNode({ title: '', content: '', type: 'concept' });
+      setShowAddModal(false);
+      addToast({ type: 'success', title: '节点已创建' });
+    } catch (err) {
+      addToast({ type: 'error', title: '创建节点失败', description: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const handleDeleteNode = async (nodeId: string) => {
+    try {
+      await deleteNode({ id: Number(nodeId) });
+      setSelectedNodeId(null);
+      addToast({ type: 'success', title: '节点已删除' });
+    } catch (err) {
+      addToast({ type: 'error', title: '删除节点失败', description: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const handleConnectStart = (nodeId: string) => {
+    setEdgeMode('source');
+    setSelectedNodeId(nodeId);
+  };
+
   const onlineCount = agents.filter((a) => a.status === 'online').length;
 
   // Find selected node from renderNodes
@@ -373,6 +455,38 @@ export default function KnowledgeGraph() {
 
       {/* Control Panel */}
       <div className={`absolute left-4 top-16 z-10 transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-5'}`}>
+        <div className="panel-floating p-2 mb-3 w-[200px]">
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="btn-primary flex-1 text-xs py-1.5 flex items-center justify-center gap-1"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              添加节点
+            </button>
+            <button
+              onClick={() => {
+                if (edgeMode) {
+                  setEdgeMode(false);
+                  setSelectedNodeId(null);
+                } else if (selectedNodeId) {
+                  setEdgeMode('source');
+                } else {
+                  addToast({ type: 'info', title: '请先选择一个节点' });
+                }
+              }}
+              className={`flex-1 text-xs py-1.5 flex items-center justify-center gap-1 ${edgeMode ? 'btn-danger' : 'btn-secondary'}`}
+            >
+              {edgeMode ? <X className="w-3.5 h-3.5" /> : <Link2 className="w-3.5 h-3.5" />}
+              {edgeMode ? '取消连线' : '连线'}
+            </button>
+          </div>
+          {edgeMode && (
+            <p className="text-[10px] mt-2" style={{ color: 'var(--accent-cyan)' }}>
+              点击目标节点完成连线
+            </p>
+          )}
+        </div>
         <GraphControlPanel
           viewMode="2D"
           onViewModeChange={() => {}}
@@ -395,7 +509,15 @@ export default function KnowledgeGraph() {
       {/* Detail Panel */}
       <div className={`absolute right-4 top-16 z-10 transition-all duration-500 ${selectedNodeData ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-full pointer-events-none'}`}>
         {selectedNodeData && (
-          <NodeDetailPanel node={selectedNodeData} connectedEdges={connectedEdges} allNodes={renderNodes} categoryColors={CATEGORY_COLORS} onClose={() => setSelectedNodeId(null)} />
+          <NodeDetailPanel
+            node={selectedNodeData}
+            connectedEdges={connectedEdges}
+            allNodes={renderNodes}
+            categoryColors={CATEGORY_COLORS}
+            onClose={() => setSelectedNodeId(null)}
+            onDelete={handleDeleteNode}
+            onConnect={handleConnectStart}
+          />
         )}
       </div>
 
@@ -403,6 +525,57 @@ export default function KnowledgeGraph() {
       <div className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-5'}`}>
         <BottomInfoBar nodeCount={renderNodes.length} edgeCount={renderEdges.length} onlineAgents={onlineCount} totalAgents={agents.length} lastSync="后端实时" />
       </div>
+
+      {/* Add Node Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
+          <div className="rounded-lg border p-6 w-[420px]" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>添加知识节点</h3>
+              <button onClick={() => setShowAddModal(false)} className="p-1 rounded hover:bg-white/5">
+                <X className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>标题 *</label>
+                <input
+                  type="text"
+                  value={newNode.title}
+                  onChange={(e) => setNewNode((p) => ({ ...p, title: e.target.value }))}
+                  className="input-base text-xs w-full"
+                  placeholder="节点标题"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>内容</label>
+                <textarea
+                  value={newNode.content}
+                  onChange={(e) => setNewNode((p) => ({ ...p, content: e.target.value }))}
+                  className="input-base text-xs w-full h-24 resize-none"
+                  placeholder="节点内容摘要"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>类型</label>
+                <select
+                  value={newNode.type}
+                  onChange={(e) => setNewNode((p) => ({ ...p, type: e.target.value as typeof p.type }))}
+                  className="input-base text-xs w-full"
+                >
+                  {Object.entries(CATEGORY_LABELS).map(([key, label]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-6 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+              <button onClick={() => setShowAddModal(false)} className="btn-ghost text-xs py-2 px-4">取消</button>
+              <button onClick={handleAddNode} disabled={!newNode.title.trim()} className="btn-primary text-xs py-2 px-4">创建</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
