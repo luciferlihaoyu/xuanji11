@@ -5,6 +5,7 @@ import { getDb } from "./queries/connection";
 import { workflows, workflowNodes, workflowRuns, workflowRunNodes } from "@db/schema";
 import { clean } from "./lib/clean";
 import { executeWorkflow } from "./lib/workflow-runtime";
+import { getWebhookUrl } from "./lib/workflow-scheduler";
 
 export const workflowRouter = createRouter({
   list: authedQuery.query(async () => {
@@ -160,7 +161,9 @@ export const workflowRouter = createRouter({
           id: z.number(),
           name: z.string().optional(),
           description: z.string().optional(),
+          status: z.enum(["draft", "active", "paused", "error", "archived"]).optional(),
           canvas: z.record(z.string(), z.unknown()).optional(),
+          triggers: z.array(z.record(z.string(), z.unknown())).optional(),
         }),
         nodes: z.array(z.object({
           id: z.number().optional(),
@@ -251,5 +254,12 @@ export const workflowRouter = createRouter({
       if (!run) return null;
       const nodes = await db.select().from(workflowRunNodes).where(eq(workflowRunNodes.runId, input.id));
       return { ...run, nodes };
+    }),
+
+  webhookUrl: authedQuery
+    .input(z.object({ id: z.number(), baseUrl: z.string().optional() }))
+    .query(({ input, ctx }) => {
+      const baseUrl = input.baseUrl ?? (ctx.req?.headers?.get("origin") || "http://localhost:3000");
+      return { url: getWebhookUrl(input.id, baseUrl) };
     }),
 });

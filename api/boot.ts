@@ -11,6 +11,7 @@ import { ingestFile } from "./lib/ingestion";
 import { getDb } from "./queries/connection";
 import { uploadedFiles, ingestionItems } from "@db/schema";
 import { eq, desc, sql } from "drizzle-orm";
+import { triggerWebhookWorkflow, startWorkflowScheduler } from "./lib/workflow-scheduler";
 import "./connectors"; // 注册 115网盘、阿里云盘等连接器
 
 const app = new Hono<{ Bindings: HttpBindings }>();
@@ -127,6 +128,25 @@ app.use("/api/trpc/*", async (c) => {
   });
 });
 
+app.post("/api/workflows/:id/webhook", async (c) => {
+  try {
+    const id = parseInt(c.req.param("id"));
+    if (isNaN(id)) return c.json({ error: "无效的工作流 ID" }, 400);
+
+    const payload = await c.req.json().catch(() => ({}));
+    const result = await triggerWebhookWorkflow(id, payload);
+
+    if ("error" in result) {
+      return c.json({ error: result.error }, 400);
+    }
+
+    return c.json({ success: true, runId: result.runId });
+  } catch (err) {
+    console.error("[Webhook] Error:", err);
+    return c.json({ error: err instanceof Error ? err.message : "Webhook 触发失败" }, 500);
+  }
+});
+
 // ========== 健康检查 ==========
 const startTime = Date.now();
 app.get("/health", (c) => {
@@ -152,9 +172,12 @@ if (env.isProduction) {
     console.log(`璇玑智脑 running on http://localhost:${port}/`);
   });
 
+  const stopScheduler = startWorkflowScheduler();
+
   // 优雅关闭
   const shutdown = (signal: string) => {
     console.log(`\n收到 ${signal}，正在优雅关闭...`);
+    stopScheduler();
     server.close(() => {
       console.log("HTTP 服务已关闭");
       process.exit(0);

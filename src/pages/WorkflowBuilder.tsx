@@ -2,7 +2,8 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { useWorkflows, useWorkflow, useWorkflowRuns, useWorkflowRun, useRunWorkflow } from '@/hooks/useWorkflows';
-import { Play, ZoomIn, ZoomOut, Maximize2, Undo2, Redo2, Save, ChevronDown, Copy, Trash2, Power, Plus, X, Check, GripVertical, Loader2, History, ArrowLeft, Clock, AlertCircle } from 'lucide-react';
+import { trpc } from '@/providers/trpc';
+import { Play, ZoomIn, ZoomOut, Maximize2, Undo2, Redo2, Save, ChevronDown, Copy, Trash2, Power, Plus, X, Check, GripVertical, Loader2, History, ArrowLeft, Clock, AlertCircle, Timer } from 'lucide-react';
 
 interface WFNode {
   id: string;
@@ -130,6 +131,10 @@ export default function WorkflowBuilder() {
   const { workflows, isLoading: listLoading, create, saveFull } = useWorkflows();
   const { data: workflowData, isLoading: wfLoading } = useWorkflow(workflowId ?? 0);
   const { data: runsData, refetch: refetchRuns } = useWorkflowRuns(workflowId ?? 0);
+  const { data: webhookUrlData } = trpc.workflow.webhookUrl.useQuery(
+    { id: workflowId ?? 0 },
+    { enabled: workflowId !== null }
+  );
   const runMutation = useRunWorkflow();
 
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
@@ -147,8 +152,13 @@ export default function WorkflowBuilder() {
   const [connectingFrom, setConnectingFrom] = useState<string | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [showRuns, setShowRuns] = useState(false);
+  const [showTriggers, setShowTriggers] = useState(false);
   const [workflowName, setWorkflowName] = useState('新工作流');
   const [workflowDescription, setWorkflowDescription] = useState('');
+  const [workflowStatus, setWorkflowStatus] = useState<'draft' | 'active' | 'paused' | 'error' | 'archived'>('draft');
+  const [cronSchedule, setCronSchedule] = useState('');
+  const [webhookEnabled, setWebhookEnabled] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
 
@@ -158,6 +168,13 @@ export default function WorkflowBuilder() {
     if (!workflowData) return;
     setWorkflowName(workflowData.name || '未命名工作流');
     setWorkflowDescription(workflowData.description || '');
+    setWorkflowStatus(workflowData.status || 'draft');
+
+    const triggers = (workflowData.triggers as Array<{ type: string; schedule?: string; enabled?: boolean }> | undefined) ?? [];
+    const cronTrigger = triggers.find((t) => t.type === 'cron');
+    const webhookTrigger = triggers.find((t) => t.type === 'webhook');
+    setCronSchedule(cronTrigger?.schedule || '');
+    setWebhookEnabled(webhookTrigger?.enabled ?? false);
 
     const loadedNodes = workflowData.nodes.map(toFrontendNode);
     setNodes(loadedNodes);
@@ -180,6 +197,10 @@ export default function WorkflowBuilder() {
 
     setSelectedNode(null);
   }, [workflowData]);
+
+  useEffect(() => {
+    if (webhookUrlData?.url) setWebhookUrl(webhookUrlData.url);
+  }, [webhookUrlData]);
 
   useEffect(() => {
     if (!activeRun) {
@@ -315,19 +336,33 @@ export default function WorkflowBuilder() {
       .filter((e): e is CanvasEdge => !!e.sourceClientId && !!e.targetClientId);
   };
 
+  const buildTriggers = () => {
+    const triggers: Array<{ type: string; schedule?: string; enabled?: boolean }> = [];
+    if (cronSchedule.trim()) {
+      triggers.push({ type: 'cron', schedule: cronSchedule.trim(), enabled: true });
+    }
+    if (webhookEnabled) {
+      triggers.push({ type: 'webhook', enabled: true });
+    }
+    return triggers;
+  };
+
   const saveWorkflow = async () => {
+    const triggers = buildTriggers();
     if (!workflowId) {
       try {
-        const { id } = await create({ name: workflowName, description: workflowDescription, status: 'draft' });
+        const { id } = await create({ name: workflowName, description: workflowDescription, status: workflowStatus });
         await saveFull({
           workflow: {
             id,
             name: workflowName,
             description: workflowDescription,
+            status: workflowStatus,
             canvas: {
               edges: buildCanvasEdges(),
               viewport: { x: pan.x, y: pan.y, zoom },
             },
+            triggers,
           },
           nodes: nodes.map(toBackendNode),
         });
@@ -346,10 +381,12 @@ export default function WorkflowBuilder() {
           id: workflowId,
           name: workflowName,
           description: workflowDescription,
+          status: workflowStatus,
           canvas: {
             edges: buildCanvasEdges(),
             viewport: { x: pan.x, y: pan.y, zoom },
           },
+          triggers,
         },
         nodes: nodes.map(toBackendNode),
       });
@@ -493,6 +530,12 @@ export default function WorkflowBuilder() {
             <button className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-secondary)' }}><Maximize2 className="w-4 h-4" /></button>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowTriggers((s) => !s)}
+              className={`btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 ${showTriggers ? 'bg-white/10' : ''}`}
+            >
+              <Timer className="w-3.5 h-3.5" />触发器
+            </button>
             <button
               onClick={() => setShowRuns((s) => !s)}
               className={`btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 ${showRuns ? 'bg-white/10' : ''}`}
@@ -781,6 +824,67 @@ export default function WorkflowBuilder() {
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Triggers Panel */}
+      {showTriggers && (
+        <div className="w-[320px] shrink-0 border-l overflow-y-auto" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+          <div className="p-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>触发器配置</h3>
+              <button onClick={() => setShowTriggers(false)} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>工作流状态</label>
+                <select
+                  value={workflowStatus}
+                  onChange={(e) => setWorkflowStatus(e.target.value as typeof workflowStatus)}
+                  className="input-base text-xs w-full"
+                >
+                  <option value="draft">草稿</option>
+                  <option value="active">已激活</option>
+                  <option value="paused">已暂停</option>
+                  <option value="archived">已归档</option>
+                </select>
+                <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>只有「已激活」状态才会响应 cron 和 webhook 触发</p>
+              </div>
+
+              <div className="pt-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>Cron 定时触发</label>
+                <input
+                  type="text"
+                  value={cronSchedule}
+                  onChange={(e) => setCronSchedule(e.target.value)}
+                  placeholder="*/5 * * * *"
+                  className="input-base text-xs w-full"
+                />
+                <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>分钟 小时 日期 月份 星期，留空表示不启用</p>
+              </div>
+
+              <div className="pt-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>Webhook 触发</label>
+                  <button
+                    onClick={() => setWebhookEnabled((v) => !v)}
+                    className={`w-9 h-5 rounded-full relative transition-colors ${webhookEnabled ? 'bg-[var(--accent-cyan)]' : 'bg-[var(--bg-tertiary)]'}`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${webhookEnabled ? 'translate-x-4' : ''}`} />
+                  </button>
+                </div>
+                {webhookEnabled && workflowId && (
+                  <div className="p-2 rounded text-[10px] break-all" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+                    {webhookUrl || '保存后生成 URL'}
+                  </div>
+                )}
+                {webhookEnabled && !workflowId && (
+                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>保存工作流后生成 webhook URL</p>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}

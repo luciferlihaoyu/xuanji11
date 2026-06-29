@@ -100,7 +100,12 @@ function topologicalSort(nodes: Array<typeof workflowNodes.$inferSelect>): Array
   return result.reverse();
 }
 
-export async function executeWorkflow(workflowId: number, runInput: Record<string, unknown> = {}, createdBy?: number | null): Promise<number> {
+export async function executeWorkflow(
+  workflowId: number,
+  runInput: Record<string, unknown> = {},
+  createdBy?: number | null,
+  triggeredBy: "manual" | "api" | "cron" | "webhook" = "manual"
+): Promise<number> {
   const db = getDb();
   const [workflow] = await db.select().from(workflows).where(eq(workflows.id, workflowId));
   if (!workflow) throw new Error("Workflow not found");
@@ -111,7 +116,7 @@ export async function executeWorkflow(workflowId: number, runInput: Record<strin
   const runResult = await db.insert(workflowRuns).values({
     workflowId,
     status: "running",
-    triggeredBy: "manual",
+    triggeredBy,
     input: runInput,
     output: {},
     error: null,
