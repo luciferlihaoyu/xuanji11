@@ -1,13 +1,18 @@
 /**
  * 璇玑向量引擎 — 优先真实 embedding 模型，回退到内置余弦相似度
  *
- * 配置环境变量：
- * - LLM_API_URL: OpenAI/MiniMax 兼容的 API 基础地址
- * - LLM_API_KEY: API 密钥
- * - EMBEDDING_MODEL: 模型名称（默认 text-embedding-3-small）
+ * 配置优先级：system_settings 表 > 环境变量
+ * - embedding_api_url / LLM_API_URL: OpenAI/MiniMax 兼容的 API 基础地址
+ * - embedding_api_key / LLM_API_KEY: API 密钥
+ * - embedding_model / EMBEDDING_MODEL: 模型名称（默认 text-embedding-3-small）
+ * - embedding_dimension / EMBEDDING_DIMENSION: 向量维度（默认 1536）
  *
  * 当未配置或调用失败时，自动回退到基于字符哈希的 embedding。
  */
+
+import { getDb } from "../queries/connection";
+import { systemSettings } from "@db/schema";
+import { eq } from "drizzle-orm";
 
 interface VectorEntry {
   id: string;
@@ -44,10 +49,57 @@ interface EmbeddingConfig {
   url: string;
   key: string;
   model: string;
+  dimension: number;
+}
+
+/** 同步回退：只读环境变量 */
+function getEmbeddingConfig(): EmbeddingConfig {
+  const url = process.env.LLM_API_URL || "";
+  const key = process.env.LLM_API_KEY || "";
+  const model = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
+  const dimension = parseInt(process.env.EMBEDDING_DIMENSION || "1536", 10) || 1536;
+  return { enabled: Boolean(url && key), url, key, model, dimension };
+}
+
+/** 异步加载：优先从 system_settings 表读取，回退到环境变量 */
+async function loadEmbeddingConfig(): Promise<EmbeddingConfig> {
+  try {
+    const db = getDb();
+    const keys = [
+      "embedding_api_url",
+      "embedding_api_key",
+      "embedding_model",
+      "embedding_dimension",
+    ];
+
+    const settings = new Map<string, string>();
+    for (const key of keys) {
+      const row = await db
+        .select()
+        .from(systemSettings)
+        .where(eq(systemSettings.key, key));
+      if (row[0]?.value) {
+        settings.set(key, row[0].value);
+      }
+    }
+
+    const url = settings.get("embedding_api_url") || process.env.LLM_API_URL || "";
+    const key = settings.get("embedding_api_key") || process.env.LLM_API_KEY || "";
+    const model = settings.get("embedding_model") || process.env.EMBEDDING_MODEL || "text-embedding-3-small";
+    const dimension = parseInt(
+      settings.get("embedding_dimension") || process.env.EMBEDDING_DIMENSION || "1536",
+      10
+    ) || 1536;
+
+    return { enabled: Boolean(url && key), url, key, model, dimension };
+  } catch (err) {
+    console.warn("[VectorEngine] Failed to load embedding config from DB, falling back to env:", err instanceof Error ? err.message : String(err));
+    return getEmbeddingConfig();
+  }
 }
 
 async function fetchEmbeddings(texts: string[]): Promise<number[][]> {
-  const cfg = getEmbeddingConfig();
+  const cfg = await loadEmbeddingConfig();
   if (!cfg.enabled) {
     throw new Error("Embedding provider not configured");
   }
@@ -92,15 +144,8 @@ async function fetchEmbeddings(texts: string[]): Promise<number[][]> {
   return embeddings;
 }
 
-function getEmbeddingConfig(): EmbeddingConfig {
-  const url = process.env.LLM_API_URL || "";
-  const key = process.env.LLM_API_KEY || "";
-  const model = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
-  return { enabled: Boolean(url && key), url, key, model };
-}
-
 async function embedWithFallback(texts: string[]): Promise<number[][]> {
-  const cfg = getEmbeddingConfig();
+  const cfg = await loadEmbeddingConfig();
   if (!cfg.enabled) {
     return texts.map((t) => simpleTextHash(t, 64));
   }
@@ -206,7 +251,7 @@ export const vectorEngine = {
     provider: string;
     model: string;
   }> {
-    const cfg = getEmbeddingConfig();
+    const cfg = await loadEmbeddingConfig();
     const size = fallbackStore.length;
     return {
       ok: true,

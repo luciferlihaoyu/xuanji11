@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useBackups, useBackup } from '@/hooks/useBackups';
 import { useAppStore } from '@/store/useAppStore';
-import { Archive, RotateCcw, Plus, Loader2, CheckCircle2, AlertCircle, Clock, ChevronDown, ChevronUp, X, HardDrive, FolderOpen, Server, Trash2, Calendar } from 'lucide-react';
+import { Archive, RotateCcw, Plus, Loader2, CheckCircle2, AlertCircle, Clock, ChevronDown, ChevronUp, X, HardDrive, FolderOpen, Server, Trash2, Calendar, Wifi, WifiOff } from 'lucide-react';
 
 const TARGET_ICONS: Record<string, typeof HardDrive> = {
   local: HardDrive,
@@ -69,6 +69,30 @@ function parseCron(schedule: string): string {
   return schedule;
 }
 
+/** 运行中的备份进度信息 */
+function RunningProgress({ job }: { job: { filesDone: number | null; filesTotal: number | null; filesFailed: number | null; progress: number | null; status: string } }) {
+  const done = job.filesDone ?? 0;
+  const total = job.filesTotal ?? 0;
+  const failed = job.filesFailed ?? 0;
+  const progress = job.progress ?? 0;
+
+  if (job.status !== 'running') return null;
+
+  return (
+    <div className="text-[10px] space-y-1" style={{ color: 'var(--text-muted)' }}>
+      <div className="flex items-center gap-2">
+        <Loader2 className="w-3 h-3 animate-spin text-cyan-400" />
+        <span>正在备份... {progress}%</span>
+      </div>
+      <div className="flex items-center gap-3">
+        <span>已处理: {done}/{total} 文件</span>
+        {failed > 0 && <span className="text-rose-400">失败: {failed}</span>}
+        <span>剩余: {Math.max(0, total - done - failed)}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function BackupPage() {
   const { addToast } = useAppStore();
   const { backups, targets, restores, isLoading, create, updateSchedule, deleteBackup, createRestore } = useBackups();
@@ -81,6 +105,7 @@ export default function BackupPage() {
   const [refreshToken, setRefreshToken] = useState('');
   const [restoreTargetPath, setRestoreTargetPath] = useState('/data/restore');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<{ testing: boolean; result?: { success: boolean; message: string } }>({ testing: false });
 
   // Schedule fields
   const [mode, setMode] = useState<'immediate' | 'scheduled'>('immediate');
@@ -103,7 +128,10 @@ export default function BackupPage() {
     try {
       const config: Record<string, string> = {};
       if (isCloudDrive) {
-        config.accessToken = accessToken;
+        if (!accessToken && !refreshToken) {
+          throw new Error('云盘备份需要提供 Access Token 或 Refresh Token');
+        }
+        if (accessToken) config.accessToken = accessToken;
         if (refreshToken) config.refreshToken = refreshToken;
       }
       const payload: Record<string, unknown> = { target, sourcePath, config };
@@ -117,6 +145,7 @@ export default function BackupPage() {
       setShowCreate(false);
       setAccessToken('');
       setRefreshToken('');
+      setConnectionStatus({ testing: false });
     } catch (err) {
       addToast({ type: 'error', title: '创建失败', description: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -177,7 +206,7 @@ export default function BackupPage() {
         <div className="card-base p-4 mb-6">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>新建备份任务</h3>
-            <button onClick={() => setShowCreate(false)} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+            <button onClick={() => { setShowCreate(false); setConnectionStatus({ testing: false }); }} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
           </div>
           <form onSubmit={handleCreateBackup} className="space-y-3">
             <div className="flex gap-2 mb-2">
@@ -203,7 +232,10 @@ export default function BackupPage() {
                 <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>备份目标</label>
                 <select
                   value={target}
-                  onChange={(e) => setTarget(e.target.value as typeof target)}
+                  onChange={(e) => {
+                    setTarget(e.target.value as typeof target);
+                    setConnectionStatus({ testing: false });
+                  }}
                   className="input-base text-xs w-full"
                 >
                   {availableTargets.length === 0 && <option>暂无可用目标</option>}
@@ -262,28 +294,40 @@ export default function BackupPage() {
               </div>
             )}
             {isCloudDrive && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                <div>
-                  <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>Access Token</label>
-                  <input
-                    type="password"
-                    value={accessToken}
-                    onChange={(e) => setAccessToken(e.target.value)}
-                    placeholder={target === '115' ? '115 OAuth accessToken' : '阿里云盘 accessToken'}
-                    className="input-base text-xs w-full"
-                    required
-                  />
+              <div className="space-y-3 pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>
+                      Access Token {target === '115' ? '(或 Refresh Token)' : ''}
+                    </label>
+                    <input
+                      type="password"
+                      value={accessToken}
+                      onChange={(e) => { setAccessToken(e.target.value); setConnectionStatus({ testing: false }); }}
+                      placeholder={target === '115' ? '115 OAuth accessToken' : '阿里云盘 accessToken'}
+                      className="input-base text-xs w-full"
+                      required={!refreshToken}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>
+                      Refresh Token <span className="text-[var(--text-muted)]">(推荐，用于自动刷新)</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={refreshToken}
+                      onChange={(e) => { setRefreshToken(e.target.value); setConnectionStatus({ testing: false }); }}
+                      placeholder="用于自动刷新 accessToken"
+                      className="input-base text-xs w-full"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>Refresh Token <span className="text-[var(--text-muted)]">(可选)</span></label>
-                  <input
-                    type="password"
-                    value={refreshToken}
-                    onChange={(e) => setRefreshToken(e.target.value)}
-                    placeholder="用于自动刷新 accessToken"
-                    className="input-base text-xs w-full"
-                  />
-                </div>
+                {connectionStatus.result && (
+                  <div className={`flex items-center gap-1.5 text-[10px] ${connectionStatus.result.success ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {connectionStatus.result.success ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+                    {connectionStatus.result.message}
+                  </div>
+                )}
               </div>
             )}
             <div className="flex justify-end">
@@ -382,11 +426,12 @@ export default function BackupPage() {
                     </div>
                   </div>
                   <div className="mb-2">{progressBar(job.progress ?? 0, job.status)}</div>
-                  <div className="flex items-center gap-3 text-[10px] mb-3" style={{ color: 'var(--text-muted)' }}>
+                  <div className="flex items-center gap-3 text-[10px] mb-2" style={{ color: 'var(--text-muted)' }}>
                     <span>文件: {job.filesDone}/{job.filesTotal}</span>
                     {(job.filesFailed ?? 0) > 0 && <span className="text-rose-400">失败 {job.filesFailed ?? 0}</span>}
                     <span>{formatTime(job.createdAt)}</span>
                   </div>
+                  {job.status === 'running' && <div className="mb-2"><RunningProgress job={job} /></div>}
                   {job.error && <div className="text-[10px] mb-2" style={{ color: 'var(--accent-rose)' }}>{job.error}</div>}
                   <div className="flex items-center gap-2">
                     <button

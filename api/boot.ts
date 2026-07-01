@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { HttpBindings } from "@hono/node-server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
@@ -13,7 +13,15 @@ import { uploadedFiles, ingestionItems } from "@db/schema";
 import { eq, desc, sql } from "drizzle-orm";
 import { triggerWebhookWorkflow, startWorkflowScheduler } from "./lib/workflow-scheduler";
 import { startBackupScheduler } from "./lib/backup-scheduler";
+import { authenticateLocalRequest } from "./local-auth";
+import type { User } from "@db/schema";
 import "./connectors"; // 注册 115网盘、阿里云盘等连接器
+
+declare module "hono" {
+  interface ContextVariableMap {
+    user: User;
+  }
+}
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
@@ -26,77 +34,192 @@ if (env.appId && env.appSecret) {
   app.get(Paths.oauthCallback, createOAuthCallbackHandler());
 }
 
+// ========== JWT 认证中间件 ==========
+const authMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> = async (c, next) => {
+  const path = c.req.path;
+
+  // 放行公开路由
+  if (
+    path === "/health" ||
+    path.startsWith("/api/trpc/") ||
+    path === Paths.oauthCallback
+  ) {
+    return next();
+  }
+
+  const user = await authenticateLocalRequest(c.req.raw.headers);
+  if (!user) {
+    return c.json({ success: false, error: "Authentication required" }, 401);
+  }
+
+  c.set("user", user);
+  return next();
+};
+
+// 注册认证中间件到所有 /api/* 路由
+app.use("/api/*", authMiddleware);
+
+// ========== 认证状态路由 ==========
+app.get("/api/auth/me", async (c) => {
+  const user = c.get("user");
+  if (!user) {
+    return c.json({ success: false, error: "Authentication required" }, 401);
+  }
+  return c.json({ success: true, user });
+});
+
 // ========== 文件上传 API ==========
 
 // 上传文件（multipart/form-data）
 app.post("/api/upload", async (c) => {
   try {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ success: false, error: "Authentication required" }, 401);
+    }
+
     const formData = await c.req.formData();
     const files = formData.getAll("files") as File[];
 
     if (!files || files.length === 0) {
-      return c.json({ error: "未选择文件" }, 400);
+      return c.json({ success: false, error: "未选择文件" }, 400);
     }
 
     const results = [];
+    const ingestionErrors: { file: string; error: string }[] = [];
+
     for (const file of files) {
       if (!(file instanceof File)) continue;
-      const result = await saveUploadedFile(file);
+      let result;
+      try {
+        result = await saveUploadedFile(file, user.id);
+      } catch (err) {
+        console.error("[Upload] saveUploadedFile failed:", err);
+        return c.json(
+          {
+            success: false,
+            error: "上传失败",
+            details: err instanceof Error ? err.message : String(err),
+          },
+          500,
+        );
+      }
       results.push(result);
-      ingestFile({
-        sourceType: "upload",
-        fileName: result.originalName,
-        mimeType: result.mimeType,
-        size: result.size,
-        storagePath: result.storagePath,
-        uploadedFileId: result.id,
-      }).catch((err) => {
-        console.error("[Upload] Ingestion failed:", err);
-      });
+
+      try {
+        await ingestFile({
+          sourceType: "upload",
+          fileName: result.originalName,
+          mimeType: result.mimeType,
+          size: result.size,
+          storagePath: result.storagePath,
+          uploadedFileId: result.id,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("[Upload] Ingestion failed:", msg);
+        ingestionErrors.push({ file: result.originalName, error: msg });
+      }
     }
 
     return c.json({
       success: true,
       files: results,
       count: results.length,
+      ingestionErrors: ingestionErrors.length > 0 ? ingestionErrors : undefined,
     });
   } catch (err) {
     console.error("[Upload] Error:", err);
-    return c.json({ error: "上传失败: " + (err instanceof Error ? err.message : String(err)) }, 500);
+    return c.json(
+      {
+        success: false,
+        error: "上传失败",
+        details: err instanceof Error ? err.message : String(err),
+      },
+      500,
+    );
   }
 });
 
 // 获取文件列表
 app.get("/api/upload/list", async (c) => {
   try {
-    const { getDb } = await import("./queries/connection");
-    const { uploadedFiles } = await import("@db/schema");
-    const { desc } = await import("drizzle-orm");
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ success: false, error: "Authentication required" }, 401);
+    }
+
     const db = getDb();
-    const files = await db.select().from(uploadedFiles).orderBy(desc(uploadedFiles.createdAt));
+    const query = db
+      .select()
+      .from(uploadedFiles)
+      .orderBy(desc(uploadedFiles.createdAt));
+
+    // 非管理员只看到自己的文件
+    const files = user.role === "admin"
+      ? await query
+      : await query.where(eq(uploadedFiles.uploadedBy, user.id));
+
     return c.json({ success: true, files });
   } catch (err) {
-    return c.json({ error: String(err) }, 500);
+    return c.json(
+      {
+        success: false,
+        error: "获取文件列表失败",
+        details: err instanceof Error ? err.message : String(err),
+      },
+      500,
+    );
   }
 });
 
 // 删除上传的文件
 app.delete("/api/upload/:id", async (c) => {
   try {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ success: false, error: "Authentication required" }, 401);
+    }
+
     const id = parseInt(c.req.param("id"));
-    if (isNaN(id)) return c.json({ error: "无效的文件ID" }, 400);
+    if (isNaN(id)) return c.json({ success: false, error: "无效的文件ID" }, 400);
+
+    // 非管理员只能删除自己的文件
+    if (user.role !== "admin") {
+      const db = getDb();
+      const rows = await db
+        .select()
+        .from(uploadedFiles)
+        .where(eq(uploadedFiles.id, id));
+      if (rows.length === 0 || rows[0].uploadedBy !== user.id) {
+        return c.json({ success: false, error: "无权限删除此文件" }, 403);
+      }
+    }
+
     const success = await deleteUploadedFile(id);
     return c.json({ success });
   } catch (err) {
-    return c.json({ error: String(err) }, 500);
+    return c.json(
+      {
+        success: false,
+        error: "删除失败",
+        details: err instanceof Error ? err.message : String(err),
+      },
+      500,
+    );
   }
 });
 
 // 下载/查看上传的文件
 app.get("/api/files/:filename", async (c) => {
+  const user = c.get("user");
+  if (!user) {
+    return c.json({ success: false, error: "Authentication required" }, 401);
+  }
+
   const filename = c.req.param("filename");
   const fileInfo = getFileStream(filename);
-  if (!fileInfo) return c.json({ error: "文件不存在" }, 404);
+  if (!fileInfo) return c.json({ success: false, error: "文件不存在" }, 404);
 
   c.header("Content-Type", fileInfo.mimeType);
   // 使用 Bun 或 Node 的流式响应
@@ -105,17 +228,32 @@ app.get("/api/files/:filename", async (c) => {
 
 app.get("/api/upload/:id/ingestion", async (c) => {
   try {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ success: false, error: "Authentication required" }, 401);
+    }
+
     const id = parseInt(c.req.param("id"));
-    if (isNaN(id)) return c.json({ error: "无效的文件ID" }, 400);
+    if (isNaN(id)) return c.json({ success: false, error: "无效的文件ID" }, 400);
+
     const db = getDb();
     const items = await db
       .select()
       .from(ingestionItems)
-      .where(sql`${ingestionItems.metadata}->>'$.uploadedFileId' = ${String(id)}`)
+      .where(
+        sql`JSON_UNQUOTE(JSON_EXTRACT(${ingestionItems.metadata}, '$.uploadedFileId')) = ${String(id)}`,
+      )
       .orderBy(desc(ingestionItems.createdAt));
     return c.json({ success: true, items });
   } catch (err) {
-    return c.json({ error: String(err) }, 500);
+    return c.json(
+      {
+        success: false,
+        error: "查询失败",
+        details: err instanceof Error ? err.message : String(err),
+      },
+      500,
+    );
   }
 });
 
@@ -131,20 +269,32 @@ app.use("/api/trpc/*", async (c) => {
 
 app.post("/api/workflows/:id/webhook", async (c) => {
   try {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ success: false, error: "Authentication required" }, 401);
+    }
+
     const id = parseInt(c.req.param("id"));
-    if (isNaN(id)) return c.json({ error: "无效的工作流 ID" }, 400);
+    if (isNaN(id)) return c.json({ success: false, error: "无效的工作流 ID" }, 400);
 
     const payload = await c.req.json().catch(() => ({}));
     const result = await triggerWebhookWorkflow(id, payload);
 
     if ("error" in result) {
-      return c.json({ error: result.error }, 400);
+      return c.json({ success: false, error: result.error }, 400);
     }
 
     return c.json({ success: true, runId: result.runId });
   } catch (err) {
     console.error("[Webhook] Error:", err);
-    return c.json({ error: err instanceof Error ? err.message : "Webhook 触发失败" }, 500);
+    return c.json(
+      {
+        success: false,
+        error: err instanceof Error ? err.message : "Webhook 触发失败",
+        details: err instanceof Error ? err.message : String(err),
+      },
+      500,
+    );
   }
 });
 
@@ -166,7 +316,7 @@ export default app;
 if (env.isProduction) {
   const { serve } = await import("@hono/node-server");
   const { serveStaticFiles } = await import("./lib/vite");
-  serveStaticFiles(app);
+  serveStaticFiles(app as unknown as Parameters<typeof serveStaticFiles>[0]);
 
   const port = parseInt(process.env.PORT || "3000");
   const server = serve({ fetch: app.fetch, port }, () => {

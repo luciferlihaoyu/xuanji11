@@ -77,17 +77,67 @@ async function* walkDir(dir: string): AsyncGenerator<{ relativePath: string; ful
   }
 }
 
+/**
+ * 获取有效的连接器配置，包含 token 刷新逻辑
+ */
+async function getEffectiveConnectorConfig(
+  connector: CloudConnector,
+  config: Record<string, unknown>
+): Promise<{ config: Record<string, unknown>; refreshed: boolean }> {
+  const result = { ...config };
+  let refreshed = false;
+
+  if (connector.refreshToken) {
+    const accessToken = config.accessToken as string | undefined;
+    const refreshToken = config.refreshToken as string | undefined;
+
+    if (!accessToken && refreshToken) {
+      console.log(`[BackupScheduler] No accessToken, trying to refresh with refreshToken...`);
+      const newTokens = await connector.refreshToken(config);
+      if (newTokens) {
+        result.accessToken = newTokens.accessToken;
+        result.refreshToken = newTokens.refreshToken;
+        refreshed = true;
+        console.log(`[BackupScheduler] Token refreshed successfully`);
+      } else {
+        console.error(`[BackupScheduler] Token refresh failed`);
+      }
+    }
+  }
+
+  return { config: result, refreshed };
+}
+
 async function executeBackupJob(jobId: number, connectorConfig: Record<string, unknown> = {}): Promise<void> {
+  console.log(`[BackupScheduler] Starting backup job ${jobId}`);
   const db = getDb();
   const [job] = await db.select().from(backupJobs).where(eq(backupJobs.id, jobId));
-  if (!job) return;
+  if (!job) {
+    console.error(`[BackupScheduler] Job ${jobId} not found`);
+    return;
+  }
 
   await db.update(backupJobs).set({ status: "running", startedAt: new Date() }).where(eq(backupJobs.id, jobId));
 
   const connector = getConnector(job.target) as CloudConnector | undefined;
   if (!connector) {
-    await db.update(backupJobs).set({ status: "failed", error: `未找到连接器: ${job.target}`, completedAt: new Date() }).where(eq(backupJobs.id, jobId));
+    const error = `未找到连接器: ${job.target}`;
+    console.error(`[BackupScheduler] ${error}`);
+    await db.update(backupJobs).set({ status: "failed", error, completedAt: new Date() }).where(eq(backupJobs.id, jobId));
     return;
+  }
+
+  // 合并 job 中存储的 config 和传入的 connectorConfig
+  const storedConfig = (job.config as Record<string, unknown>) ?? {};
+  const mergedConfig = { ...storedConfig, ...connectorConfig };
+
+  // 尝试刷新 token
+  const { config: effectiveConfig, refreshed } = await getEffectiveConnectorConfig(connector, mergedConfig);
+  
+  // 如果 token 被刷新了，更新数据库中的 config
+  if (refreshed) {
+    await db.update(backupJobs).set({ config: effectiveConfig }).where(eq(backupJobs.id, jobId));
+    console.log(`[BackupScheduler] Updated stored config with refreshed tokens for job ${jobId}`);
   }
 
   try {
@@ -98,6 +148,7 @@ async function executeBackupJob(jobId: number, connectorConfig: Record<string, u
       }
     }
 
+    console.log(`[BackupScheduler] Job ${jobId}: found ${files.length} files to backup`);
     await db.update(backupJobs).set({ filesTotal: files.length }).where(eq(backupJobs.id, jobId));
 
     let done = 0;
@@ -112,14 +163,14 @@ async function executeBackupJob(jobId: number, connectorConfig: Record<string, u
         const destDir = path.dirname(file.relativePath);
 
         if (connector.uploadFile) {
-          const result = await connector.uploadFile(connectorConfig, `${destDir}/${destName}`, content);
+          const result = await connector.uploadFile(effectiveConfig, `${destDir}/${destName}`, content);
           if (!result.success) throw new Error("upload failed");
         } else if (connector.syncFiles) {
           const tempDir = path.join(process.env.UPLOAD_DIR || "./uploads", `backup-${jobId}`);
           await fsp.mkdir(tempDir, { recursive: true });
           const tempPath = path.join(tempDir, destName);
           await fsp.writeFile(tempPath, content);
-          await connector.syncFiles(connectorConfig, tempDir);
+          await connector.syncFiles(effectiveConfig, tempDir);
           await fsp.rm(tempDir, { recursive: true, force: true });
         } else {
           throw new Error("连接器不支持上传或同步");
@@ -136,12 +187,14 @@ async function executeBackupJob(jobId: number, connectorConfig: Record<string, u
         done++;
       } catch (err) {
         failed++;
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[BackupScheduler] Job ${jobId}: failed to upload ${file.relativePath}: ${errorMsg}`);
         await db.insert(backupJobFiles).values({
           jobId,
           relativePath: file.relativePath,
           size: file.size,
           status: "failed",
-          error: err instanceof Error ? err.message : String(err),
+          error: errorMsg,
         });
         manifestFiles.push({ path: file.relativePath, size: file.size, checksum: "", status: "failed" });
       }
@@ -149,6 +202,7 @@ async function executeBackupJob(jobId: number, connectorConfig: Record<string, u
     }
 
     const status = failed > 0 ? (done > 0 ? "partial" : "failed") : "completed";
+    console.log(`[BackupScheduler] Job ${jobId} completed with status: ${status}, done: ${done}, failed: ${failed}`);
     await db.update(backupJobs).set({
       status,
       progress: 100,
@@ -158,9 +212,11 @@ async function executeBackupJob(jobId: number, connectorConfig: Record<string, u
       retryCount: 0,
     }).where(eq(backupJobs.id, jobId));
   } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : "备份执行失败";
+    console.error(`[BackupScheduler] Job ${jobId} failed: ${errorMsg}`);
     await db.update(backupJobs).set({
       status: "failed",
-      error: err instanceof Error ? err.message : "备份执行失败",
+      error: errorMsg,
       completedAt: new Date(),
     }).where(eq(backupJobs.id, jobId));
   }
@@ -186,6 +242,7 @@ async function applyRetention(scheduleJobId: number): Promise<void> {
   if (completed.length <= schedule.keepLastN) return;
 
   const toDelete = completed.slice(schedule.keepLastN);
+  console.log(`[BackupScheduler] Applying retention for schedule ${scheduleJobId}: deleting ${toDelete.length} old backups`);
   for (const job of toDelete) {
     await db.delete(backupJobFiles).where(eq(backupJobFiles.jobId, job.id));
     await db.delete(backupJobs).where(eq(backupJobs.id, job.id));
@@ -195,6 +252,8 @@ async function applyRetention(scheduleJobId: number): Promise<void> {
 export async function runDueBackupSchedules(): Promise<void> {
   const db = getDb();
   const now = new Date();
+  console.log(`[BackupScheduler] Checking for due backup schedules at ${now.toISOString()}`);
+
   const due = await db.select().from(backupJobs)
     .where(
       and(
@@ -203,8 +262,12 @@ export async function runDueBackupSchedules(): Promise<void> {
       )
     );
 
+  console.log(`[BackupScheduler] Found ${due.length} due schedules`);
+
   for (const schedule of due) {
     const config = (schedule.config as Record<string, unknown>) ?? {};
+    console.log(`[BackupScheduler] Processing schedule ${schedule.id} (target: ${schedule.target})`);
+
     // 创建新的实际备份任务
     const result = await db.insert(backupJobs).values({
       target: schedule.target,
@@ -218,6 +281,7 @@ export async function runDueBackupSchedules(): Promise<void> {
       createdBy: schedule.createdBy,
     });
     const runJobId = Number(result[0].insertId);
+    console.log(`[BackupScheduler] Created backup run job ${runJobId} for schedule ${schedule.id}`);
 
     // 计算下次运行时间
     const nextRun = schedule.cron ? nextCronTime(schedule.cron, now) : null;
@@ -225,10 +289,12 @@ export async function runDueBackupSchedules(): Promise<void> {
       nextRunAt: nextRun,
       retryCount: 0,
     }).where(eq(backupJobs.id, schedule.id));
+    console.log(`[BackupScheduler] Schedule ${schedule.id} next run at: ${nextRun?.toISOString() ?? 'none'}`);
 
     // 异步执行备份
     executeBackupJob(runJobId, config).then(async () => {
       const [finished] = await db.select().from(backupJobs).where(eq(backupJobs.id, runJobId));
+      console.log(`[BackupScheduler] Backup run ${runJobId} finished with status: ${finished?.status}`);
       if (finished?.status === "completed") {
         await applyRetention(schedule.id);
       } else if (finished?.status === "failed") {
@@ -243,17 +309,24 @@ export async function runDueBackupSchedules(): Promise<void> {
             nextRunAt: retryAt,
             retryCount: retryCount + 1,
           }).where(eq(backupJobs.id, schedule.id));
+          console.log(`[BackupScheduler] Schedule ${schedule.id} retry ${retryCount + 1}/${maxRetries} scheduled at ${retryAt.toISOString()}`);
         }
       }
-    }).catch(console.error);
+    }).catch((err) => {
+      console.error(`[BackupScheduler] Backup run ${runJobId} error:`, err);
+    });
   }
 }
 
 export function startBackupScheduler(intervalMs = 60_000): () => void {
+  console.log(`[BackupScheduler] Starting backup scheduler with interval ${intervalMs}ms`);
   let running = false;
 
   async function tick() {
-    if (running) return;
+    if (running) {
+      console.log("[BackupScheduler] Tick skipped, previous tick still running");
+      return;
+    }
     running = true;
     try {
       await runDueBackupSchedules();
@@ -264,10 +337,13 @@ export function startBackupScheduler(intervalMs = 60_000): () => void {
     }
   }
 
+  // 立即执行一次
   tick();
   const timer = setInterval(tick, intervalMs);
+  console.log("[BackupScheduler] Scheduler started successfully");
 
   return () => {
+    console.log("[BackupScheduler] Stopping scheduler");
     clearInterval(timer);
   };
 }

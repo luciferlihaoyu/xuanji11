@@ -19,6 +19,7 @@ if (!fs.existsSync(UPLOAD_DIR)) {
 /** 保存上传的文件到本地磁盘 */
 export async function saveUploadedFile(
   file: File,
+  uploadedBy?: number,
 ): Promise<{
   id: number;
   filename: string;
@@ -28,7 +29,7 @@ export async function saveUploadedFile(
   storagePath: string;
   url: string;
 }> {
-  // 文件类型白名单
+  // ... existing validation ...
   const ALLOWED_MIMES = new Set([
     "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml",
     "application/pdf",
@@ -66,15 +67,26 @@ export async function saveUploadedFile(
   fs.writeFileSync(storagePath, buffer);
 
   const db = getDb();
-  const result = await db.insert(uploadedFiles).values({
+  let result;
+  const insertValues = {
     filename: uniqueName,
     originalName: file.name,
     mimeType: file.type || "application/octet-stream",
     size: file.size,
     storagePath: storagePath,
     metadata: { uploadedAt: new Date().toISOString() },
-    uploadedBy: null,
-  });
+    uploadedBy: uploadedBy ?? null,
+  };
+
+  try {
+    result = await db.insert(uploadedFiles).values(insertValues);
+  } catch (err) {
+    console.error("[saveUploadedFile] DB insert failed:", err);
+    console.error("[saveUploadedFile] Insert values:", JSON.stringify(insertValues, null, 2));
+    throw new Error(
+      `Failed query: insert into uploaded_files - ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 
   const id = Number(result[0].insertId);
 

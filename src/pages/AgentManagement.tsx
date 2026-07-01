@@ -1,8 +1,9 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useAppStore, DEFAULT_PERMISSIONS } from '@/store/useAppStore';
-import type { Agent, AgentPermission } from '@/store/useAppStore';
+import type { Agent } from '@/store/useAppStore';
+import { useAgents } from '@/hooks/useAgents';
 import PermissionSelector from '@/components/PermissionSelector';
-import { Search, Grid3X3, List, Plus, X, Activity, Shield, Zap, Users, Pencil, Trash2 } from 'lucide-react';
+import { Search, Grid3X3, List, Plus, X, Activity, Shield, Zap, Users, Pencil, Trash2, Eye, EyeOff } from 'lucide-react';
 
 const ABILITY_LABELS = ['知识管理', '内容创作', '编程', '数据分析', '沟通', '学习'];
 
@@ -25,7 +26,8 @@ function getAvatarGradient(name: string) {
 }
 
 export default function AgentManagement() {
-  const { agents, addAgent, updateAgent, deleteAgent, setAgentPermissions, addToast } = useAppStore();
+  const { addToast } = useAppStore();
+  const { agents, create, update, delete: deleteAgent, updatePermissions, testLlmConnection, isLoading } = useAgents();
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [filterDept, setFilterDept] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -36,8 +38,20 @@ export default function AgentManagement() {
 
   // Add/Edit form state
   const [formData, setFormData] = useState<Partial<Agent>>({});
-  const [formPermissions, setFormPermissions] = useState<AgentPermission>({ ...DEFAULT_PERMISSIONS });
+  const [formPermissions, setFormPermissions] = useState<Agent['permissions']>({ ...DEFAULT_PERMISSIONS });
   const [isEditing, setIsEditing] = useState(false);
+
+  // LLM config state
+  const [llmConfig, setLlmConfig] = useState({
+    llm_api_url: '',
+    llm_api_key: '',
+    llm_model: '',
+    temperature: 0.7,
+    max_tokens: 2048,
+  });
+  const [showLlmKey, setShowLlmKey] = useState(false);
+  const [testLlmStatus, setTestLlmStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [testLlmMessage, setTestLlmMessage] = useState('');
 
   const filteredAgents = useMemo(() => {
     return agents.filter((a) => {
@@ -52,44 +66,72 @@ export default function AgentManagement() {
   const onlineCount = agents.filter((a) => a.status === 'online').length;
   const depts = [...new Set(agents.map((a) => a.department))];
 
-  const handleAddAgent = () => {
+  // Sync LLM config when selected agent changes
+  useEffect(() => {
+    if (selectedAgentData) {
+      const cfg = (selectedAgentData as { config?: Record<string, unknown> }).config || {};
+      setLlmConfig({
+        llm_api_url: String(cfg.llm_api_url || ''),
+        llm_api_key: String(cfg.llm_api_key || ''),
+        llm_model: String(cfg.llm_model || ''),
+        temperature: Number(cfg.temperature ?? 0.7),
+        max_tokens: Number(cfg.max_tokens ?? 2048),
+      });
+      setTestLlmStatus('idle');
+      setTestLlmMessage('');
+    }
+  }, [selectedAgentData]);
+
+  const handleAddAgent = async () => {
     if (!formData.name || !formData.role || !formData.department) {
       addToast({ type: 'error', title: '请填写完整信息' });
       return;
     }
-    addAgent({
-      name: formData.name,
-      role: formData.role,
-      department: formData.department,
-      platform: formData.platform || '天宫',
-      capabilities: (formData.capabilities?.length ? formData.capabilities : ['知识管理']).filter(Boolean),
-      avatar: formData.name.charAt(0),
-      knowledgeAccess: formData.knowledgeAccess || '指定文件夹',
-      abilities: formData.abilities || { knowledge: 70, creation: 60, coding: 50, analysis: 60, communication: 70, learning: 65 },
-      permissions: formPermissions,
-    });
-    addToast({ type: 'success', title: `Agent「${formData.name}」已添加` });
-    resetForm();
-    setShowAddModal(false);
+    try {
+      await create({
+        name: formData.name,
+        role: formData.role,
+        department: formData.department,
+        platform: formData.platform || '天宫',
+        capabilities: (formData.capabilities?.length ? formData.capabilities : ['知识管理']).filter(Boolean),
+        avatar: formData.name.charAt(0),
+        knowledgeAccess: formData.knowledgeAccess || '指定文件夹',
+        abilities: formData.abilities || { knowledge: 70, creation: 60, coding: 50, analysis: 60, communication: 70, learning: 65 },
+        permissions: formPermissions,
+      });
+      addToast({ type: 'success', title: `Agent「${formData.name}」已添加` });
+      resetForm();
+      setShowAddModal(false);
+    } catch (err: any) {
+      addToast({ type: 'error', title: err.message || '添加失败' });
+    }
   };
 
-  const handleEditAgent = () => {
+  const handleEditAgent = async () => {
     if (!selectedAgent || !formData.name) return;
-    updateAgent(selectedAgent, {
-      ...formData,
-      permissions: formPermissions,
-    } as Partial<Agent>);
-    addToast({ type: 'success', title: `Agent「${formData.name}」已更新` });
-    resetForm();
-    setShowAddModal(false);
-    setIsEditing(false);
+    try {
+      await update(selectedAgent, {
+        ...formData,
+        permissions: formPermissions,
+      } as Partial<Agent>);
+      addToast({ type: 'success', title: `Agent「${formData.name}」已更新` });
+      resetForm();
+      setShowAddModal(false);
+      setIsEditing(false);
+    } catch (err: any) {
+      addToast({ type: 'error', title: err.message || '更新失败' });
+    }
   };
 
-  const handleDeleteAgent = (id: string) => {
-    deleteAgent(id);
-    setShowDeleteConfirm(null);
-    setSelectedAgent(null);
-    addToast({ type: 'info', title: 'Agent 已删除' });
+  const handleDeleteAgent = async (id: string) => {
+    try {
+      await deleteAgent(id);
+      setShowDeleteConfirm(null);
+      setSelectedAgent(null);
+      addToast({ type: 'info', title: 'Agent 已删除' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: err.message || '删除失败' });
+    }
   };
 
   const openAddModal = () => {
@@ -108,6 +150,44 @@ export default function AgentManagement() {
   const resetForm = () => {
     setFormData({});
     setFormPermissions({ ...DEFAULT_PERMISSIONS });
+  };
+
+  const handleSaveLlmConfig = async () => {
+    if (!selectedAgent) return;
+    try {
+      await update(selectedAgent, {
+        config: {
+          llm_api_url: llmConfig.llm_api_url,
+          llm_api_key: llmConfig.llm_api_key,
+          llm_model: llmConfig.llm_model,
+          temperature: llmConfig.temperature,
+          max_tokens: llmConfig.max_tokens,
+        },
+      });
+      addToast({ type: 'success', title: 'LLM 配置已保存' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: err.message || '保存失败' });
+    }
+  };
+
+  const handleTestLlm = async () => {
+    if (!llmConfig.llm_api_url || !llmConfig.llm_api_key) {
+      addToast({ type: 'error', title: '请填写 API URL 和 API Key' });
+      return;
+    }
+    setTestLlmStatus('loading');
+    try {
+      const result = await testLlmConnection({
+        apiUrl: llmConfig.llm_api_url,
+        apiKey: llmConfig.llm_api_key,
+        model: llmConfig.llm_model || undefined,
+      });
+      setTestLlmStatus(result.success ? 'success' : 'error');
+      setTestLlmMessage(result.message);
+    } catch (err: any) {
+      setTestLlmStatus('error');
+      setTestLlmMessage(err.message || '测试失败');
+    }
   };
 
   const renderRadarChart = (abilities: any) => {
@@ -193,8 +273,15 @@ export default function AgentManagement() {
         </div>
       </div>
 
+      {/* Loading */}
+      {isLoading && (
+        <div className="flex items-center justify-center py-12">
+          <div className="text-sm" style={{ color: 'var(--text-muted)' }}>加载中...</div>
+        </div>
+      )}
+
       {/* Agent Grid/List */}
-      {viewMode === 'grid' ? (
+      {!isLoading && (viewMode === 'grid' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filteredAgents.map((agent) => (
             <div key={agent.id} className="card-base cursor-pointer group" onClick={() => setSelectedAgent(agent.id)}>
@@ -256,7 +343,7 @@ export default function AgentManagement() {
             </tbody>
           </table>
         </div>
-      )}
+      ))}
 
       {/* Detail Drawer */}
       {selectedAgentData && (
@@ -297,12 +384,102 @@ export default function AgentManagement() {
               </div>
               <PermissionSelector
                 permissions={selectedAgentData.permissions}
-                onChange={(perms) => {
-                  setAgentPermissions(selectedAgentData.id, perms);
-                  addToast({ type: 'success', title: '权限已更新' });
+                onChange={async (perms) => {
+                  try {
+                    await updatePermissions(selectedAgentData.id, perms);
+                    addToast({ type: 'success', title: '权限已更新' });
+                  } catch (err: any) {
+                    addToast({ type: 'error', title: err.message || '权限更新失败' });
+                  }
                 }}
                 showPresets={true}
               />
+            </div>
+
+            {/* LLM Config */}
+            <div className="mb-6">
+              <h4 className="text-sm font-semibold mb-3 flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}><Zap className="w-4 h-4" />LLM 配置</h4>
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>API URL</label>
+                  <input
+                    type="text"
+                    value={llmConfig.llm_api_url}
+                    onChange={(e) => setLlmConfig({ ...llmConfig, llm_api_url: e.target.value })}
+                    placeholder="https://api.openai.com/v1"
+                    className="input-base text-xs w-full"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>API Key</label>
+                  <div className="flex gap-2">
+                    <input
+                      type={showLlmKey ? 'text' : 'password'}
+                      value={llmConfig.llm_api_key}
+                      onChange={(e) => setLlmConfig({ ...llmConfig, llm_api_key: e.target.value })}
+                      placeholder="sk-..."
+                      className="input-base text-xs flex-1"
+                    />
+                    <button
+                      onClick={() => setShowLlmKey(!showLlmKey)}
+                      className="p-2 rounded border"
+                      style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                      title={showLlmKey ? '隐藏' : '显示'}
+                    >
+                      {showLlmKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>模型</label>
+                    <input
+                      type="text"
+                      value={llmConfig.llm_model}
+                      onChange={(e) => setLlmConfig({ ...llmConfig, llm_model: e.target.value })}
+                      placeholder="gpt-3.5-turbo"
+                      className="input-base text-xs w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>Max Tokens</label>
+                    <input
+                      type="number"
+                      value={llmConfig.max_tokens}
+                      onChange={(e) => setLlmConfig({ ...llmConfig, max_tokens: Number(e.target.value) })}
+                      className="input-base text-xs w-full"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>Temperature: {llmConfig.temperature}</label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    value={llmConfig.temperature}
+                    onChange={(e) => setLlmConfig({ ...llmConfig, temperature: Number(e.target.value) })}
+                    className="w-full"
+                  />
+                </div>
+                <div className="flex items-center gap-2 pt-2">
+                  <button onClick={handleTestLlm} className="btn-ghost text-xs py-2 px-3 flex items-center gap-1.5">
+                    <Zap className="w-3.5 h-3.5" />测试连接
+                  </button>
+                  <button onClick={handleSaveLlmConfig} className="btn-primary text-xs py-2 px-3 flex items-center gap-1.5">
+                    <Pencil className="w-3.5 h-3.5" />保存配置
+                  </button>
+                  {testLlmStatus !== 'idle' && testLlmStatus !== 'loading' && (
+                    <span className="text-xs" style={{ color: testLlmStatus === 'success' ? 'var(--accent-emerald)' : 'var(--accent-rose)' }}>
+                      {testLlmMessage}
+                    </span>
+                  )}
+                  {testLlmStatus === 'loading' && (
+                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>测试中...</span>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* Radar */}

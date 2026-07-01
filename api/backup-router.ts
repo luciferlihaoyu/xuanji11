@@ -32,6 +32,38 @@ async function* walkDir(dir: string): AsyncGenerator<{ relativePath: string; ful
   }
 }
 
+/**
+ * 获取有效的连接器配置，包含 token 刷新逻辑
+ */
+async function getEffectiveConnectorConfig(
+  connector: CloudConnector,
+  config: Record<string, unknown>
+): Promise<{ config: Record<string, unknown>; refreshed: boolean }> {
+  const result = { ...config };
+  let refreshed = false;
+
+  // 如果 connector 支持 refreshToken 且没有 accessToken 但有 refreshToken
+  if (connector.refreshToken) {
+    const accessToken = config.accessToken as string | undefined;
+    const refreshToken = config.refreshToken as string | undefined;
+
+    if (!accessToken && refreshToken) {
+      console.log(`[Backup] No accessToken, trying to refresh with refreshToken...`);
+      const newTokens = await connector.refreshToken(config);
+      if (newTokens) {
+        result.accessToken = newTokens.accessToken;
+        result.refreshToken = newTokens.refreshToken;
+        refreshed = true;
+        console.log(`[Backup] Token refreshed successfully`);
+      } else {
+        console.error(`[Backup] Token refresh failed`);
+      }
+    }
+  }
+
+  return { config: result, refreshed };
+}
+
 async function executeBackup(jobId: number, connectorConfig: Record<string, unknown> = {}): Promise<void> {
   const db = getDb();
   const [job] = await db.select().from(backupJobs).where(eq(backupJobs.id, jobId));
@@ -43,6 +75,19 @@ async function executeBackup(jobId: number, connectorConfig: Record<string, unkn
   if (!connector) {
     await db.update(backupJobs).set({ status: "failed", error: `未找到连接器: ${job.target}`, completedAt: new Date() }).where(eq(backupJobs.id, jobId));
     return;
+  }
+
+  // 合并 job 中存储的 config 和传入的 connectorConfig
+  const storedConfig = (job.config as Record<string, unknown>) ?? {};
+  const mergedConfig = { ...storedConfig, ...connectorConfig };
+
+  // 尝试刷新 token
+  const { config: effectiveConfig, refreshed } = await getEffectiveConnectorConfig(connector, mergedConfig);
+  
+  // 如果 token 被刷新了，更新数据库中的 config
+  if (refreshed) {
+    await db.update(backupJobs).set({ config: effectiveConfig }).where(eq(backupJobs.id, jobId));
+    console.log(`[Backup] Updated stored config with refreshed tokens for job ${jobId}`);
   }
 
   try {
@@ -67,14 +112,14 @@ async function executeBackup(jobId: number, connectorConfig: Record<string, unkn
         const destDir = path.dirname(file.relativePath);
 
         if (connector.uploadFile) {
-          const result = await connector.uploadFile(connectorConfig, `${destDir}/${destName}`, content);
+          const result = await connector.uploadFile(effectiveConfig, `${destDir}/${destName}`, content);
           if (!result.success) throw new Error("upload failed");
         } else if (connector.syncFiles) {
           const tempDir = path.join(process.env.UPLOAD_DIR || "./uploads", `backup-${jobId}`);
           await fsp.mkdir(tempDir, { recursive: true });
           const tempPath = path.join(tempDir, destName);
           await fsp.writeFile(tempPath, content);
-          await connector.syncFiles(connectorConfig, tempDir);
+          await connector.syncFiles(effectiveConfig, tempDir);
           await fsp.rm(tempDir, { recursive: true, force: true });
         } else {
           throw new Error("连接器不支持上传或同步");
@@ -237,10 +282,26 @@ export const backupRouter = createRouter({
       }
 
       const connConfig = input.config ?? {};
-      const testResult = await connector.testConnection({ ...connConfig, path: input.sourcePath });
+
+      // 云盘备份需要 accessToken 或 refreshToken
+      if (input.target === "115" || input.target === "aliyundrive") {
+        const accessToken = connConfig.accessToken as string | undefined;
+        const refreshToken = connConfig.refreshToken as string | undefined;
+        if (!accessToken && !refreshToken) {
+          throw new Error(`创建 ${input.target} 备份需要提供 accessToken 或 refreshToken`);
+        }
+      }
+
+      // 尝试获取有效 token（包含刷新逻辑）
+      const { config: effectiveConfig, refreshed } = await getEffectiveConnectorConfig(connector, connConfig);
+
+      const testResult = await connector.testConnection({ ...effectiveConfig, path: input.sourcePath });
       if (!testResult.success) {
         throw new Error(`连接测试失败: ${testResult.message}`);
       }
+
+      // 如果 token 被刷新过，使用刷新后的 token 保存
+      const finalConfig = refreshed ? effectiveConfig : connConfig;
 
       const isScheduled = Boolean(input.cron);
       const values: typeof backupJobs.$inferInsert = {
@@ -251,7 +312,7 @@ export const backupRouter = createRouter({
         filesTotal: 0,
         filesDone: 0,
         filesFailed: 0,
-        config: connConfig,
+        config: finalConfig,
         createdBy: ctx.user?.id ?? null,
       };
 
@@ -267,7 +328,7 @@ export const backupRouter = createRouter({
       const jobId = Number(result[0].insertId);
 
       if (!isScheduled) {
-        executeBackup(jobId, connConfig).catch(console.error);
+        executeBackup(jobId, finalConfig).catch(console.error);
       }
 
       const [job] = await db.select().from(backupJobs).where(eq(backupJobs.id, jobId));

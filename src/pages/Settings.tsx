@@ -1,7 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { User, BookOpen, Bot, Brain, HardDrive, Workflow, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon } from 'lucide-react';
+import { User, BookOpen, Bot, Brain, HardDrive, Workflow, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
+import { useSettings, useVectorSettings, useAgentSettings } from '@/hooks/useSettings';
+import { trpcClient } from '@/providers/trpc';
+import { useAuth } from '@/hooks/useAuth';
 
 const SETTINGS_NAV = [
   { key: 'personal', label: '个人设置', icon: User },
@@ -19,8 +22,11 @@ export default function Settings() {
   const { category = 'personal' } = useParams();
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
+  const { user, logout } = useAuth();
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showAgentToken, setShowAgentToken] = useState(false);
   const [testResult, setTestResult] = useState<'success' | 'fail' | null>(null);
+  const [testLoading, setTestLoading] = useState(false);
   const [toggles, setToggles] = useState<Record<string, boolean>>({
     autoClassify: true,
     autoVectorize: true,
@@ -28,13 +34,97 @@ export default function Settings() {
     autoSync: true,
   });
 
+  // Security tab state
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [changePwdError, setChangePwdError] = useState('');
+  const [changePwdSuccess, setChangePwdSuccess] = useState(false);
+  const [changePwdLoading, setChangePwdLoading] = useState(false);
+
+  // Vector settings from backend
+  const vectorSettings = useVectorSettings();
+  const agentSettings = useAgentSettings();
+  const { setMany, isSetting } = useSettings();
+
+  // Local form state for vectorization
+  const [vectorForm, setVectorForm] = useState({
+    provider: 'openai',
+    apiUrl: '',
+    apiKey: '',
+    model: 'text-embedding-3-small',
+    dimension: '1536',
+  });
+
+  // Local form state for agent
+  const [agentForm, setAgentForm] = useState({
+    hubUrl: 'https://tianting.zeabur.app',
+    token: '',
+    heartbeat: '30',
+    autoReconnect: true,
+  });
+
+  // Sync form state when backend data loads
+  useEffect(() => {
+    if (!vectorSettings.isLoading) {
+      setVectorForm({
+        provider: vectorSettings.provider || 'openai',
+        apiUrl: vectorSettings.apiUrl || '',
+        apiKey: vectorSettings.apiKey || '',
+        model: vectorSettings.model || 'text-embedding-3-small',
+        dimension: vectorSettings.dimension || '1536',
+      });
+    }
+  }, [vectorSettings.isLoading, vectorSettings.provider, vectorSettings.apiUrl, vectorSettings.apiKey, vectorSettings.model, vectorSettings.dimension]);
+
+  useEffect(() => {
+    if (!agentSettings.isLoading) {
+      setAgentForm({
+        hubUrl: agentSettings.hubUrl || 'https://tianting.zeabur.app',
+        token: agentSettings.token || '',
+        heartbeat: agentSettings.heartbeat || '30',
+        autoReconnect: agentSettings.autoReconnect === 'true',
+      });
+    }
+  }, [agentSettings.isLoading, agentSettings.hubUrl, agentSettings.token, agentSettings.heartbeat, agentSettings.autoReconnect]);
+
   const toggle = (key: string) => {
     setToggles((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const testConnection = () => {
+  const testConnection = async () => {
     setTestResult(null);
-    setTimeout(() => setTestResult('success'), 1500);
+    setTestLoading(true);
+    try {
+      const result = await trpcClient.knowledge.vectorHealth.query();
+      setTestResult(result.ok ? 'success' : 'fail');
+    } catch {
+      setTestResult('fail');
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
+  const saveVectorSettings = async () => {
+    await setMany([
+      { key: 'embedding_provider', value: vectorForm.provider, category: 'vectorization' },
+      { key: 'embedding_api_url', value: vectorForm.apiUrl, category: 'vectorization' },
+      { key: 'embedding_api_key', value: vectorForm.apiKey, category: 'vectorization' },
+      { key: 'embedding_model', value: vectorForm.model, category: 'vectorization' },
+      { key: 'embedding_dimension', value: vectorForm.dimension, category: 'vectorization' },
+    ]);
+  };
+
+  const saveAgentSettings = async () => {
+    await setMany([
+      { key: 'tiangong_hub_url', value: agentForm.hubUrl, category: 'agent' },
+      { key: 'agent_token', value: agentForm.token, category: 'agent' },
+      { key: 'heartbeat_interval', value: agentForm.heartbeat, category: 'agent' },
+      { key: 'auto_reconnect', value: String(agentForm.autoReconnect), category: 'agent' },
+    ]);
   };
 
   const ToggleSwitch = ({ checked, onChange }: { checked: boolean; onChange: () => void }) => (
@@ -101,43 +191,67 @@ export default function Settings() {
             <div className="space-y-4 max-w-lg">
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>天宫 Hub URL</label>
-                <input type="text" defaultValue="https://tianting.zeabur.app" className="input-base text-sm" />
+                <input
+                  type="text"
+                  value={agentForm.hubUrl}
+                  onChange={(e) => setAgentForm((prev) => ({ ...prev, hubUrl: e.target.value }))}
+                  className="input-base text-sm"
+                />
               </div>
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>Agent Token</label>
                 <div className="flex gap-2">
                   <div className="relative flex-1">
                     <input
-                      type={showApiKey ? 'text' : 'password'}
-                      defaultValue="sk-hub-nxm-xxxx"
+                      type={showAgentToken ? 'text' : 'password'}
+                      value={agentForm.token}
+                      onChange={(e) => setAgentForm((prev) => ({ ...prev, token: e.target.value }))}
                       className="input-base text-sm pr-10"
                     />
-                    <button onClick={() => setShowApiKey(!showApiKey)} className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }}>
-                      {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    <button onClick={() => setShowAgentToken(!showAgentToken)} className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }}>
+                      {showAgentToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
                 </div>
               </div>
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>心跳间隔（秒）</label>
-                <input type="number" defaultValue={30} className="input-base text-sm max-w-[120px]" />
+                <input
+                  type="number"
+                  value={agentForm.heartbeat}
+                  onChange={(e) => setAgentForm((prev) => ({ ...prev, heartbeat: e.target.value }))}
+                  className="input-base text-sm max-w-[120px]"
+                />
               </div>
               <div className="flex items-center justify-between py-2">
                 <div>
                   <div className="text-sm" style={{ color: 'var(--text-primary)' }}>自动重连</div>
                   <div className="text-xs" style={{ color: 'var(--text-muted)' }}>连接断开时自动尝试重连</div>
                 </div>
-                <ToggleSwitch checked={true} onChange={() => {}} />
+                <ToggleSwitch
+                  checked={agentForm.autoReconnect}
+                  onChange={() => setAgentForm((prev) => ({ ...prev, autoReconnect: !prev.autoReconnect }))}
+                />
               </div>
               <div className="flex items-center gap-3 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                <button onClick={testConnection} className="btn-secondary text-xs py-2 px-4">
-                  {testResult === 'success' ? (
+                <button onClick={testConnection} disabled={testLoading} className="btn-secondary text-xs py-2 px-4">
+                  {testLoading ? (
+                    <span className="flex items-center gap-1">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> 测试中...
+                    </span>
+                  ) : testResult === 'success' ? (
                     <span className="flex items-center gap-1" style={{ color: 'var(--accent-emerald)' }}>
                       <Check className="w-3.5 h-3.5" /> 连接成功
                     </span>
                   ) : '测试连接'}
                 </button>
-                <button className="btn-primary text-xs py-2 px-4">保存</button>
+                <button onClick={saveAgentSettings} disabled={isSetting} className="btn-primary text-xs py-2 px-4">
+                  {isSetting ? (
+                    <span className="flex items-center gap-1">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> 保存中...
+                    </span>
+                  ) : '保存'}
+                </button>
               </div>
             </div>
           </div>
@@ -150,17 +264,36 @@ export default function Settings() {
             <div className="space-y-4 max-w-lg">
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>模型提供商</label>
-                <select className="input-base text-sm">
-                  <option>OpenAI</option>
-                  <option>智谱 AI</option>
-                  <option>本地部署</option>
-                  <option>自定义</option>
+                <select
+                  className="input-base text-sm"
+                  value={vectorForm.provider}
+                  onChange={(e) => setVectorForm((prev) => ({ ...prev, provider: e.target.value }))}
+                >
+                  <option value="openai">OpenAI</option>
+                  <option value="minimax">MiniMax</option>
+                  <option value="local">本地部署</option>
+                  <option value="custom">自定义</option>
                 </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>API URL</label>
+                <input
+                  type="text"
+                  value={vectorForm.apiUrl}
+                  onChange={(e) => setVectorForm((prev) => ({ ...prev, apiUrl: e.target.value }))}
+                  placeholder="https://api.openai.com/v1"
+                  className="input-base text-sm"
+                />
               </div>
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>API Key</label>
                 <div className="relative">
-                  <input type={showApiKey ? 'text' : 'password'} defaultValue="sk-openai-xxxx" className="input-base text-sm pr-10" />
+                  <input
+                    type={showApiKey ? 'text' : 'password'}
+                    value={vectorForm.apiKey}
+                    onChange={(e) => setVectorForm((prev) => ({ ...prev, apiKey: e.target.value }))}
+                    className="input-base text-sm pr-10"
+                  />
                   <button onClick={() => setShowApiKey(!showApiKey)} className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }}>
                     {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -168,15 +301,22 @@ export default function Settings() {
               </div>
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>模型</label>
-                <select className="input-base text-sm">
-                  <option>text-embedding-3-large</option>
-                  <option>text-embedding-3-small</option>
-                  <option>text-embedding-ada-002</option>
-                </select>
+                <input
+                  type="text"
+                  value={vectorForm.model}
+                  onChange={(e) => setVectorForm((prev) => ({ ...prev, model: e.target.value }))}
+                  placeholder="text-embedding-3-small"
+                  className="input-base text-sm"
+                />
               </div>
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>向量维度</label>
-                <input type="number" defaultValue={3072} className="input-base text-sm max-w-[120px]" />
+                <input
+                  type="number"
+                  value={vectorForm.dimension}
+                  onChange={(e) => setVectorForm((prev) => ({ ...prev, dimension: e.target.value }))}
+                  className="input-base text-sm max-w-[120px]"
+                />
               </div>
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>索引更新模式</label>
@@ -197,14 +337,24 @@ export default function Settings() {
                 </div>
               </div>
               <div className="flex items-center gap-3 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                <button onClick={testConnection} className="btn-secondary text-xs py-2 px-4">
-                  {testResult === 'success' ? (
+                <button onClick={testConnection} disabled={testLoading} className="btn-secondary text-xs py-2 px-4">
+                  {testLoading ? (
+                    <span className="flex items-center gap-1">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> 测试中...
+                    </span>
+                  ) : testResult === 'success' ? (
                     <span className="flex items-center gap-1" style={{ color: 'var(--accent-emerald)' }}>
                       <Check className="w-3.5 h-3.5" /> 连接成功
                     </span>
                   ) : '测试连接'}
                 </button>
-                <button className="btn-primary text-xs py-2 px-4">保存</button>
+                <button onClick={saveVectorSettings} disabled={isSetting} className="btn-primary text-xs py-2 px-4">
+                  {isSetting ? (
+                    <span className="flex items-center gap-1">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> 保存中...
+                    </span>
+                  ) : '保存'}
+                </button>
               </div>
             </div>
           </div>
@@ -263,6 +413,181 @@ export default function Settings() {
               </div>
 
               <button className="btn-danger text-xs py-2 px-4">立即清理缓存</button>
+            </div>
+          </div>
+        );
+
+      case 'security':
+        return (
+          <div className="space-y-6">
+            <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>安全设置</h3>
+            <div className="max-w-lg space-y-6">
+              {/* 当前登录信息 */}
+              <div className="card-base p-4">
+                <h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>当前登录</h4>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>用户名</span>
+                    <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{user?.name ?? '—'}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>角色</span>
+                    <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{user?.role ?? '—'}</span>
+                  </div>
+                </div>
+                <div className="mt-4 pt-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                  <button
+                    onClick={logout}
+                    className="btn-danger text-xs py-2 px-4 flex items-center gap-2"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    登出
+                  </button>
+                </div>
+              </div>
+
+              {/* 修改密码 */}
+              <div className="card-base p-4">
+                <h4 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+                  <KeyRound className="w-4 h-4" />
+                  修改密码
+                </h4>
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>当前密码</label>
+                    <div className="relative">
+                      <input
+                        type={showCurrentPassword ? 'text' : 'password'}
+                        value={currentPassword}
+                        onChange={(e) => { setCurrentPassword(e.target.value); setChangePwdError(''); setChangePwdSuccess(false); }}
+                        placeholder="请输入当前密码"
+                        className="input-base text-sm pr-10"
+                      />
+                      <button
+                        onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>新密码</label>
+                    <div className="relative">
+                      <input
+                        type={showNewPassword ? 'text' : 'password'}
+                        value={newPassword}
+                        onChange={(e) => { setNewPassword(e.target.value); setChangePwdError(''); setChangePwdSuccess(false); }}
+                        placeholder="至少6位"
+                        className="input-base text-sm pr-10"
+                      />
+                      <button
+                        onClick={() => setShowNewPassword(!showNewPassword)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>确认新密码</label>
+                    <div className="relative">
+                      <input
+                        type={showConfirmPassword ? 'text' : 'password'}
+                        value={confirmPassword}
+                        onChange={(e) => { setConfirmPassword(e.target.value); setChangePwdError(''); setChangePwdSuccess(false); }}
+                        placeholder="再次输入新密码"
+                        className="input-base text-sm pr-10"
+                      />
+                      <button
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {changePwdError && (
+                    <div
+                      className="text-sm px-3 py-2 rounded-md"
+                      style={{
+                        color: '#ef4444',
+                        background: 'rgba(239, 68, 68, 0.1)',
+                        border: '1px solid rgba(239, 68, 68, 0.2)',
+                      }}
+                    >
+                      {changePwdError}
+                    </div>
+                  )}
+
+                  {changePwdSuccess && (
+                    <div
+                      className="text-sm px-3 py-2 rounded-md flex items-center gap-1"
+                      style={{
+                        color: 'var(--accent-emerald)',
+                        background: 'rgba(16, 185, 129, 0.1)',
+                        border: '1px solid rgba(16, 185, 129, 0.2)',
+                      }}
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      密码修改成功
+                    </div>
+                  )}
+
+                  <button
+                    onClick={async () => {
+                      setChangePwdError('');
+                      setChangePwdSuccess(false);
+
+                      if (!currentPassword.trim()) {
+                        setChangePwdError('请输入当前密码');
+                        return;
+                      }
+                      if (newPassword.length < 6) {
+                        setChangePwdError('新密码至少6位');
+                        return;
+                      }
+                      if (newPassword !== confirmPassword) {
+                        setChangePwdError('两次输入的新密码不一致');
+                        return;
+                      }
+
+                      setChangePwdLoading(true);
+                      try {
+                        const result = await trpcClient.auth.changePassword.mutate({
+                          currentPassword,
+                          newPassword,
+                        });
+                        if (result.success) {
+                          setChangePwdSuccess(true);
+                          setCurrentPassword('');
+                          setNewPassword('');
+                          setConfirmPassword('');
+                        }
+                      } catch (err: unknown) {
+                        const msg = err && typeof err === 'object' && 'message' in err
+                          ? String(err.message)
+                          : '修改失败';
+                        setChangePwdError(msg === 'UNAUTHORIZED' ? '当前密码错误' : msg);
+                      } finally {
+                        setChangePwdLoading(false);
+                      }
+                    }}
+                    disabled={changePwdLoading}
+                    className="btn-primary text-xs py-2 px-4"
+                  >
+                    {changePwdLoading ? (
+                      <span className="flex items-center gap-1">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> 修改中...
+                      </span>
+                    ) : '修改密码'}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         );

@@ -13,6 +13,11 @@ import { registerConnector, type CloudConnector, type CloudFile } from "./base";
 /** 阿里云盘 API 基础地址 */
 const API_BASE = "https://openapi.alipan.com";
 
+interface TokenRefreshResult {
+  accessToken: string;
+  refreshToken: string;
+}
+
 /** 调用阿里云盘API */
 async function callAliyunApi(token: string, endpoint: string, body?: Record<string, unknown>): Promise<unknown> {
   const res = await fetch(`${API_BASE}${endpoint}`, {
@@ -28,7 +33,7 @@ async function callAliyunApi(token: string, endpoint: string, body?: Record<stri
 }
 
 /** 刷新access_token */
-async function refreshAliyunToken(refreshToken: string): Promise<{ accessToken: string; refreshToken: string } | null> {
+async function refreshAliyunToken(refreshToken: string): Promise<TokenRefreshResult | null> {
   try {
     const res = await fetch(`${API_BASE}/v2/account/token`, {
       method: "POST",
@@ -43,7 +48,19 @@ async function refreshAliyunToken(refreshToken: string): Promise<{ accessToken: 
       return { accessToken: data.access_token, refreshToken: data.refresh_token || refreshToken };
     }
     return null;
-  } catch {
+  } catch (err) {
+    console.error("[阿里云盘] refresh token failed:", err);
+    return null;
+  }
+}
+
+/** 获取有效的 drive_id */
+async function getAliyunDriveId(token: string): Promise<string | null> {
+  try {
+    const userInfo = (await callAliyunApi(token, "/adrive/v1.0/user/getDriveInfo")) as { default_drive_id?: string };
+    return userInfo.default_drive_id || null;
+  } catch (err) {
+    console.error("[阿里云盘] get drive id failed:", err);
     return null;
   }
 }
@@ -51,9 +68,7 @@ async function refreshAliyunToken(refreshToken: string): Promise<{ accessToken: 
 /** 列出文件夹内容 */
 async function listAliyunFiles(token: string, parentId?: string): Promise<CloudFile[]> {
   try {
-    // 先获取drive_id
-    const userInfo = (await callAliyunApi(token, "/adrive/v1.0/user/getDriveInfo")) as { default_drive_id?: string };
-    const driveId = userInfo.default_drive_id;
+    const driveId = await getAliyunDriveId(token);
     if (!driveId) return [];
 
     const data = (await callAliyunApi(token, "/adrive/v1.0/openFile/list", {
@@ -84,8 +99,7 @@ async function listAliyunFiles(token: string, parentId?: string): Promise<CloudF
 /** 获取下载链接 */
 async function getAliyunDownloadUrl(token: string, fileId: string): Promise<string | null> {
   try {
-    const userInfo = (await callAliyunApi(token, "/adrive/v1.0/user/getDriveInfo")) as { default_drive_id?: string };
-    const driveId = userInfo.default_drive_id;
+    const driveId = await getAliyunDriveId(token);
     if (!driveId) return null;
 
     const data = (await callAliyunApi(token, "/adrive/v1.0/openFile/getDownloadUrl", {
@@ -94,9 +108,72 @@ async function getAliyunDownloadUrl(token: string, fileId: string): Promise<stri
     })) as { url?: string };
 
     return data.url || null;
-  } catch {
+  } catch (err) {
+    console.error("[阿里云盘] get download url failed:", err);
     return null;
   }
+}
+
+/** 阿里云盘上传文件（使用创建文件 + 上传方式） */
+async function uploadAliyunFile(token: string, fileName: string, content: Buffer): Promise<{ success: boolean; path: string }> {
+  try {
+    const driveId = await getAliyunDriveId(token);
+    if (!driveId) {
+      throw new Error("无法获取 drive_id");
+    }
+
+    // 1. 创建文件（获取上传地址）
+    const createRes = (await callAliyunApi(token, "/adrive/v1.0/openFile/create", {
+      drive_id: driveId,
+      parent_file_id: "root",
+      name: fileName,
+      type: "file",
+      size: content.length,
+      check_name_mode: "auto_rename",
+    })) as { file_id?: string; upload_id?: string; part_info_list?: Array<{ upload_url: string; part_number: number }> };
+
+    if (!createRes.file_id) {
+      throw new Error("创建文件失败");
+    }
+
+    // 2. 上传内容（简单上传，不分片）
+    const uploadUrl = createRes.part_info_list?.[0]?.upload_url;
+    if (uploadUrl) {
+      const uploadResult = await fetch(uploadUrl, {
+        method: "PUT",
+        body: new Uint8Array(content),
+        headers: {
+          "Content-Type": "application/octet-stream",
+        },
+      });
+      if (!uploadResult.ok) {
+        throw new Error(`上传失败: ${uploadResult.status}`);
+      }
+    }
+
+    // 3. 完成上传
+    await callAliyunApi(token, "/adrive/v1.0/openFile/complete", {
+      drive_id: driveId,
+      file_id: createRes.file_id,
+      upload_id: createRes.upload_id,
+    });
+
+    return { success: true, path: fileName };
+  } catch (err) {
+    console.error("[阿里云盘] upload file failed:", err);
+    return { success: false, path: "" };
+  }
+}
+
+async function getEffectiveToken(config: Record<string, unknown>): Promise<string | null> {
+  const accessToken = config.accessToken as string | undefined;
+  const refreshToken = config.refreshToken as string | undefined;
+
+  if (accessToken) return accessToken;
+  if (!refreshToken) return null;
+
+  const refreshed = await refreshAliyunToken(refreshToken);
+  return refreshed?.accessToken ?? null;
 }
 
 export const connectorAliyunDrive: CloudConnector = {
@@ -104,8 +181,8 @@ export const connectorAliyunDrive: CloudConnector = {
   authType: "oauth2",
 
   async testConnection(config) {
-    const token = config.accessToken || config.apiKey;
-    const refreshToken = config.refreshToken;
+    const token = await getEffectiveToken(config);
+    const refreshToken = config.refreshToken as string | undefined;
 
     if (!token && !refreshToken) {
       return { success: false, message: "缺少 accessToken 或 refreshToken" };
@@ -115,7 +192,7 @@ export const connectorAliyunDrive: CloudConnector = {
       let effectiveToken = token as string;
       // 如果有refreshToken但没有accessToken，先刷新
       if (!effectiveToken && refreshToken) {
-        const refreshed = await refreshAliyunToken(refreshToken as string);
+        const refreshed = await refreshAliyunToken(refreshToken);
         if (refreshed) {
           effectiveToken = refreshed.accessToken;
         } else {
@@ -126,38 +203,51 @@ export const connectorAliyunDrive: CloudConnector = {
       await callAliyunApi(effectiveToken, "/adrive/v1.0/user/getDriveInfo");
       return { success: true, message: "阿里云盘连接成功" };
     } catch (err) {
-      return { success: false, message: err instanceof Error ? err.message : "连接失败" };
+      const msg = err instanceof Error ? err.message : "连接失败";
+      console.error("[阿里云盘] test connection failed:", msg);
+      return { success: false, message: msg };
     }
   },
 
   async listFiles(config, parentId) {
-    const token = config.accessToken || config.apiKey;
-    const refreshToken = config.refreshToken;
-    if (!token && !refreshToken) return [];
-
-    let effectiveToken = token as string;
-    if (!effectiveToken && refreshToken) {
-      const refreshed = await refreshAliyunToken(refreshToken as string);
-      if (refreshed) effectiveToken = refreshed.accessToken;
-      else return [];
+    const token = await getEffectiveToken(config);
+    if (!token) {
+      console.error("[阿里云盘] listFiles: no token available");
+      return [];
     }
-
-    return listAliyunFiles(effectiveToken, parentId);
+    return listAliyunFiles(token, parentId);
   },
 
   async getDownloadUrl(config, fileId) {
-    const token = config.accessToken || config.apiKey;
-    const refreshToken = config.refreshToken;
-    if (!token && !refreshToken) return null;
-
-    let effectiveToken = token as string;
-    if (!effectiveToken && refreshToken) {
-      const refreshed = await refreshAliyunToken(refreshToken as string);
-      if (refreshed) effectiveToken = refreshed.accessToken;
-      else return null;
+    const token = await getEffectiveToken(config);
+    if (!token) {
+      console.error("[阿里云盘] getDownloadUrl: no token available");
+      return null;
     }
+    return getAliyunDownloadUrl(token, fileId);
+  },
 
-    return getAliyunDownloadUrl(effectiveToken, fileId);
+  async uploadFile(config, fileName: string, content: Buffer) {
+    const token = await getEffectiveToken(config);
+    if (!token) {
+      console.error("[阿里云盘] uploadFile: no token available");
+      return { success: false, path: "" };
+    }
+    return uploadAliyunFile(token, fileName, content);
+  },
+
+  async syncFiles(_config, _localPath: string) {
+    console.error("[阿里云盘] syncFiles not supported, use uploadFile instead");
+    return { downloaded: 0, failed: 0 };
+  },
+
+  async refreshToken(config) {
+    const refreshToken = config.refreshToken as string | undefined;
+    if (!refreshToken) {
+      console.error("[阿里云盘] refreshToken: no refreshToken provided");
+      return null;
+    }
+    return refreshAliyunToken(refreshToken);
   },
 };
 

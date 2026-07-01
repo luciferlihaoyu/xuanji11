@@ -7,6 +7,9 @@ import * as cookie from "cookie";
 import * as crypto from "crypto";
 import { setCookie } from "hono/cookie";
 import type { Context } from "hono";
+import { getDb } from "./queries/connection";
+import { systemSettings } from "@db/schema";
+import { eq } from "drizzle-orm";
 import { env } from "./lib/env";
 import { Session } from "@contracts/constants";
 import { getSessionCookieOptions } from "./lib/cookies";
@@ -21,12 +24,34 @@ function getSecret() {
 
 let adminPasswordHash: Buffer | null = null;
 
-function getAdminPasswordHash(): Buffer {
+async function getStoredAdminPasswordHash(): Promise<Buffer | null> {
+  try {
+    const db = getDb();
+    const results = await db
+      .select()
+      .from(systemSettings)
+      .where(eq(systemSettings.key, "admin_password_hash"));
+    if (results.length > 0 && results[0].value) {
+      return Buffer.from(results[0].value, "hex");
+    }
+  } catch {
+    // 数据库查询失败，回退到环境变量
+  }
+  return null;
+}
+
+function getEnvAdminPasswordHash(): Buffer {
   if (!adminPasswordHash) {
     const salt = crypto.scryptSync(env.jwtSecret, "admin-salt", 64);
     adminPasswordHash = crypto.scryptSync(env.adminPassword, salt, 64);
   }
   return adminPasswordHash;
+}
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.scryptSync(env.jwtSecret, "admin-salt", 64);
+  const hash = crypto.scryptSync(password, salt, 64);
+  return hash.toString("hex");
 }
 
 export async function verifyAdminCredentials(
@@ -37,8 +62,16 @@ export async function verifyAdminCredentials(
   try {
     const salt = crypto.scryptSync(env.jwtSecret, "admin-salt", 64);
     const inputHash = crypto.scryptSync(password, salt, 64);
-    const storedHash = getAdminPasswordHash();
-    return crypto.timingSafeEqual(inputHash, storedHash);
+
+    // 优先检查 system_settings 表中的密码
+    const storedHash = await getStoredAdminPasswordHash();
+    if (storedHash) {
+      return crypto.timingSafeEqual(inputHash, storedHash);
+    }
+
+    // 回退到环境变量密码
+    const envHash = getEnvAdminPasswordHash();
+    return crypto.timingSafeEqual(inputHash, envHash);
   } catch {
     return false;
   }

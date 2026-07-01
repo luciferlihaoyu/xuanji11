@@ -3,8 +3,9 @@ import * as cookie from "cookie";
 import { TRPCError } from "@trpc/server";
 import { Session } from "@contracts/constants";
 import { getSessionCookieOptions } from "./lib/cookies";
-import { verifyAdminCredentials, signLocalToken } from "./local-auth";
-import { createRouter, publicQuery } from "./middleware";
+import { verifyAdminCredentials, signLocalToken, hashPassword } from "./local-auth";
+import { createRouter, publicQuery, adminQuery } from "./middleware";
+import { env } from "./lib/env";
 
 export const authRouter = createRouter({
   // 获取当前用户信息 - 使用 publicQuery，未登录返回 null
@@ -66,4 +67,51 @@ export const authRouter = createRouter({
     );
     return { success: true };
   }),
+
+  // 修改密码（管理员）
+  changePassword: adminQuery
+    .input(
+      z.object({
+        currentPassword: z.string().min(1, "当前密码不能为空"),
+        newPassword: z.string().min(6, "新密码至少6位").max(255, "新密码过长"),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const username = ctx.user?.name ?? env.adminUsername;
+
+      // 1. 验证当前密码
+      const valid = await verifyAdminCredentials(username, input.currentPassword);
+      if (!valid) {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "当前密码错误",
+        });
+      }
+
+      // 2. 生成新密码哈希并写入 system_settings
+      const newHash = await hashPassword(input.newPassword);
+      const db = (await import("./queries/connection")).getDb();
+      const { systemSettings } = await import("@db/schema");
+      const { eq } = await import("drizzle-orm");
+
+      const existing = await db
+        .select()
+        .from(systemSettings)
+        .where(eq(systemSettings.key, "admin_password_hash"));
+
+      if (existing.length > 0) {
+        await db
+          .update(systemSettings)
+          .set({ value: newHash, updatedAt: new Date() })
+          .where(eq(systemSettings.key, "admin_password_hash"));
+      } else {
+        await db.insert(systemSettings).values({
+          key: "admin_password_hash",
+          value: newHash,
+          category: "security",
+        });
+      }
+
+      return { success: true };
+    }),
 });

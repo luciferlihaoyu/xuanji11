@@ -13,7 +13,12 @@ import { registerConnector, type CloudConnector, type CloudFile } from "./base";
 /** 115 API 基础地址 */
 const API_BASE = "https://proapi.115.com/app/open";
 
-async function refresh115Token(refreshToken: string): Promise<{ accessToken: string; refreshToken: string } | null> {
+interface TokenRefreshResult {
+  accessToken: string;
+  refreshToken: string;
+}
+
+async function refresh115Token(refreshToken: string): Promise<TokenRefreshResult | null> {
   try {
     const res = await fetch("https://passportapi.115.com/app/1.0/web/1.0/token/", {
       method: "POST",
@@ -28,7 +33,8 @@ async function refresh115Token(refreshToken: string): Promise<{ accessToken: str
       };
     }
     return null;
-  } catch {
+  } catch (err) {
+    console.error("[115] refresh token failed:", err);
     return null;
   }
 }
@@ -79,8 +85,51 @@ async function get115DownloadUrl(token: string, fileId: string): Promise<string 
   try {
     const data = (await call115Api(token, "/files/download", { fid: fileId })) as { url?: string };
     return data.url || null;
-  } catch {
+  } catch (err) {
+    console.error("[115] get download url failed:", err);
     return null;
+  }
+}
+
+/** 上传文件到115网盘 */
+async function upload115File(token: string, fileName: string, content: Buffer): Promise<{ success: boolean; path: string }> {
+  try {
+    // 1. 获取上传地址
+    const uploadInfo = (await call115Api(token, "/upload/get_upload_url", {
+      file_name: fileName,
+      file_size: String(content.length),
+    })) as { host?: string; object?: string; accessid?: string; policy?: string; signature?: string };
+
+    if (!uploadInfo.host) {
+      throw new Error("Failed to get upload URL from 115");
+    }
+
+    // 2. 构建 multipart form-data 上传
+    const formData = new FormData();
+    formData.append("name", fileName);
+    formData.append("key", uploadInfo.object || fileName);
+    formData.append("policy", uploadInfo.policy || "");
+    formData.append("OSSAccessKeyId", uploadInfo.accessid || "");
+    formData.append("success_action_status", "200");
+    formData.append("signature", uploadInfo.signature || "");
+    
+    // 将 Buffer 转为 Blob
+    const blob = new Blob([new Uint8Array(content)]);
+    formData.append("file", blob, fileName);
+
+    const uploadRes = await fetch(uploadInfo.host, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!uploadRes.ok && uploadRes.status !== 200) {
+      throw new Error(`Upload failed: ${uploadRes.status}`);
+    }
+
+    return { success: true, path: fileName };
+  } catch (err) {
+    console.error("[115] upload file failed:", err);
+    return { success: false, path: "" };
   }
 }
 
@@ -106,20 +155,51 @@ export const connector115: CloudConnector = {
       await call115Api(token, "/user/info");
       return { success: true, message: "115网盘连接成功" };
     } catch (err) {
-      return { success: false, message: err instanceof Error ? err.message : "连接失败" };
+      const msg = err instanceof Error ? err.message : "连接失败";
+      console.error("[115] test connection failed:", msg);
+      return { success: false, message: msg };
     }
   },
 
   async listFiles(config, parentId) {
     const token = await getEffectiveToken(config);
-    if (!token) return [];
+    if (!token) {
+      console.error("[115] listFiles: no token available");
+      return [];
+    }
     return list115Files(token, parentId);
   },
 
   async getDownloadUrl(config, fileId) {
     const token = await getEffectiveToken(config);
-    if (!token) return null;
+    if (!token) {
+      console.error("[115] getDownloadUrl: no token available");
+      return null;
+    }
     return get115DownloadUrl(token, fileId);
+  },
+
+  async uploadFile(config, fileName: string, content: Buffer) {
+    const token = await getEffectiveToken(config);
+    if (!token) {
+      console.error("[115] uploadFile: no token available");
+      return { success: false, path: "" };
+    }
+    return upload115File(token, fileName, content);
+  },
+
+  async syncFiles(_config, _localPath: string) {
+    console.error("[115] syncFiles not supported, use uploadFile instead");
+    return { downloaded: 0, failed: 0 };
+  },
+
+  async refreshToken(config) {
+    const refreshToken = config.refreshToken as string | undefined;
+    if (!refreshToken) {
+      console.error("[115] refreshToken: no refreshToken provided");
+      return null;
+    }
+    return refresh115Token(refreshToken);
   },
 };
 

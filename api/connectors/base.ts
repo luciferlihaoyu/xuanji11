@@ -26,9 +26,11 @@ export interface CloudConnector {
   /** 获取下载链接 */
   getDownloadUrl(config: Record<string, unknown>, fileId: string): Promise<string | null>;
   /** 上传/备份文件（备份用） */
-  uploadFile?(config: Record<string, unknown>, fileName: string, content: Buffer): Promise<{ success: boolean; path: string }>;
+  uploadFile(config: Record<string, unknown>, fileName: string, content: Buffer): Promise<{ success: boolean; path: string }>;
   /** 同步文件到本地（返回下载的文件信息） */
-  syncFiles?(config: Record<string, unknown>, localPath: string): Promise<{ downloaded: number; failed: number }>;
+  syncFiles(config: Record<string, unknown>, localPath: string): Promise<{ downloaded: number; failed: number }>;
+  /** 刷新 token */
+  refreshToken?(config: Record<string, unknown>): Promise<{ accessToken: string; refreshToken: string } | null>;
 }
 
 // 连接器注册表

@@ -10,6 +10,7 @@ export function useBackups() {
   const createMutation = trpc.backup.create.useMutation({
     onSuccess: () => {
       utils.backup.list.invalidate();
+      utils.backup.targets.invalidate();
     },
   });
 
@@ -22,12 +23,14 @@ export function useBackups() {
   const deleteMutation = trpc.backup.delete.useMutation({
     onSuccess: () => {
       utils.backup.list.invalidate();
+      utils.backup.targets.invalidate();
     },
   });
 
   const createRestoreMutation = trpc.backup.createRestore.useMutation({
     onSuccess: () => {
       utils.backup.listRestores.invalidate();
+      utils.backup.list.invalidate();
     },
   });
 

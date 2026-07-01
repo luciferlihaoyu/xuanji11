@@ -119,4 +119,55 @@ export const agentRouter = createRouter({
       await logAudit(ctx, "agent", "update", input.id, input as Record<string, unknown>);
       return { success: true };
     }),
+  testLlmConnection: adminQuery
+    .input(
+      z.object({
+        apiUrl: z.string().url(),
+        apiKey: z.string(),
+        model: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const url = input.apiUrl.endsWith('/chat/completions')
+        ? input.apiUrl
+        : input.apiUrl.replace(/\/$/, '') + '/chat/completions';
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${input.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: input.model || 'gpt-3.5-turbo',
+            messages: [{ role: 'user', content: 'ping' }],
+            max_tokens: 1,
+          }),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => 'No response body');
+          return { success: false as const, message: `HTTP ${res.status}: ${text}` };
+        }
+
+        const data = (await res.json().catch(() => null)) as { choices?: unknown[]; id?: string } | null;
+        if (data && (data.choices || data.id)) {
+          return { success: true as const, message: '连接成功' };
+        }
+        return { success: true as const, message: '响应正常' };
+      } catch (err: any) {
+        clearTimeout(timeout);
+        if (err.name === 'AbortError') {
+          return { success: false as const, message: '请求超时（15秒）' };
+        }
+        return { success: false as const, message: err.message || '网络请求失败' };
+      }
+    }),
 });
