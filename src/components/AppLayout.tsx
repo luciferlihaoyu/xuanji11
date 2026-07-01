@@ -7,6 +7,14 @@ import { useAuth } from '@/hooks/useAuth';
 export default function AppLayout() {
   const navigate = useNavigate();
 
+  // Hooks 必须在条件 return 之前全部调用（React 规则）
+  useHotkeys({
+    'cmd+n': () => navigate('/upload'),
+    'ctrl+n': () => navigate('/upload'),
+    'cmd+b': () => {},
+    'ctrl+b': () => {},
+  });
+
   const { user, isLoading } = useAuth({ redirectOnUnauthenticated: true });
 
   if (isLoading) {
@@ -20,13 +28,6 @@ export default function AppLayout() {
   if (!user) {
     return null;
   }
-
-  useHotkeys({
-    'cmd+n': () => navigate('/upload'),
-    'ctrl+n': () => navigate('/upload'),
-    'cmd+b': () => {},
-    'ctrl+b': () => {},
-  });
 
   return (
     <div
