@@ -125,7 +125,7 @@ export default function Login() {
               disabled={loading}
               style={{
                 background: "var(--accent)",
-                color: "#0a0f1e",
+                color: "#fff",
               }}
             >
               {loading ? "登录中..." : "登录"}
