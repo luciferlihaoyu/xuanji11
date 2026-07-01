@@ -4,6 +4,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import AppLayout from '@/components/AppLayout';
 import CommandPalette from '@/components/CommandPalette';
+import AuthGuard from '@/components/AuthGuard';
 import KnowledgeGraph from '@/pages/KnowledgeGraph';
 import KnowledgeBase from '@/pages/KnowledgeBase';
 import WorkflowBuilder from '@/pages/WorkflowBuilder';
@@ -34,6 +35,7 @@ function App() {
       <ThemeInit />
       <CommandPalette />
       <Routes>
+        <Route element={<AuthGuard />}>
         <Route element={<AppLayout />}>
           <Route path="/" element={<KnowledgeGraph />} />
           <Route path="/kb" element={<KnowledgeBase />} />
@@ -49,6 +51,7 @@ function App() {
           <Route path="/search" element={<SearchResults />} />
           <Route path="/doc/:id" element={<DocumentDetail />} />
           <Route path="/settings/:category" element={<Settings />} />
+        </Route>
         </Route>
         <Route path="/login" element={<Login />} />
         <Route path="*" element={<NotFound />} />
