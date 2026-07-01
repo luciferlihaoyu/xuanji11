@@ -63,7 +63,7 @@ export default function UploadPage() {
     const poll = async () => {
       for (const id of completedIds) {
         try {
-          const res = await fetch(`/api/upload/${id}/ingestion`);
+          const res = await fetch(`/api/upload/${id}/ingestion`, { credentials: 'include' });
           const data = await res.json();
           if (data.success && data.items && data.items.length > 0) {
             const item = data.items[0];
@@ -88,7 +88,7 @@ export default function UploadPage() {
 
   const fetchUploadedList = async () => {
     try {
-      const res = await fetch('/api/upload/list');
+      const res = await fetch('/api/upload/list', { credentials: 'include' });
       const data = await res.json();
       if (data.success && data.files) {
         const existing: UploadFile[] = data.files.map((f: Record<string, unknown>) => ({
@@ -155,6 +155,7 @@ export default function UploadPage() {
 
       const res = await fetch('/api/upload', {
         method: 'POST',
+        credentials: 'include',
         body: formData,
       });
 
@@ -205,7 +206,7 @@ export default function UploadPage() {
   const removeTask = async (task: UploadFile) => {
     if (task.id) {
       try {
-        await fetch(`/api/upload/${task.id}`, { method: 'DELETE' });
+        await fetch(`/api/upload/${task.id}`, { method: 'DELETE', credentials: 'include' });
       } catch (err) {
         console.error('删除文件失败:', err);
       }
