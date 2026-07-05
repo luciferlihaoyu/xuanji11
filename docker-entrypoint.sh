@@ -1,12 +1,28 @@
 #!/bin/sh
 set -e
 
-echo "=== 鐠囩帒鏅鸿剳 鍚姩涓?==="
+echo "=== 璇玑智脑 启动中 ==="
 
-# 鍚屾鏁版嵁搴撹〃缁撴瀯锛堜笉鍒犻櫎宸叉湁琛級
-echo "[Entry] 鍚屾鏁版嵁搴撹〃缁撴瀯..."
-npx drizzle-kit push --force 2>/dev/null || echo "[Entry] 鏁版嵁搴撳悓姝ヨ烦杩囷紙鍙兘DB鏈氨缁級"
+# 同步数据库表结构（不删除已有表）
+echo "[Entry] 同步数据库表结构..."
 
-# 鍚姩鏈嶅姟
-echo "[Entry] 鍚姩鏈嶅姟..."
+# 等待数据库就绪，最多重试 30 次（每次 2 秒）
+attempt=0
+max_attempts=30
+while [ $attempt -lt $max_attempts ]; do
+  if npx drizzle-kit push --force; then
+    echo "[Entry] 数据库同步成功"
+    break
+  fi
+  attempt=$((attempt + 1))
+  echo "[Entry] 数据库同步失败，第 $attempt/$max_attempts 次重试..."
+  sleep 2
+done
+
+if [ $attempt -eq $max_attempts ]; then
+  echo "[Entry] 数据库同步最终失败，服务可能无法正常工作"
+fi
+
+# 启动服务
+echo "[Entry] 启动服务..."
 exec node dist/boot.js

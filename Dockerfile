@@ -29,7 +29,7 @@ ENV PORT=3000
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev --ignore-scripts
 
-RUN npm install drizzle-kit mysql2 dotenv --no-save 2>/dev/null; true
+RUN npm install drizzle-kit mysql2 dotenv --no-save
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/drizzle.config.ts ./
