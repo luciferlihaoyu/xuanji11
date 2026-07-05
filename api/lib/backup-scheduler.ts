@@ -7,6 +7,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
 import { promises as fsp } from "fs";
+import { env } from "./env";
 
 function sha256(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
@@ -166,7 +167,7 @@ async function executeBackupJob(jobId: number, connectorConfig: Record<string, u
           const result = await connector.uploadFile(effectiveConfig, `${destDir}/${destName}`, content);
           if (!result.success) throw new Error("upload failed");
         } else if (connector.syncFiles) {
-          const tempDir = path.join(process.env.UPLOAD_DIR || "./uploads", `backup-${jobId}`);
+          const tempDir = path.join(env.backupTempDir, `backup-${jobId}`);
           await fsp.mkdir(tempDir, { recursive: true });
           const tempPath = path.join(tempDir, destName);
           await fsp.writeFile(tempPath, content);

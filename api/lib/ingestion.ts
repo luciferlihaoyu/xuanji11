@@ -14,6 +14,7 @@ import {
 import { vectorEngine } from "./vector";
 import * as fs from "fs";
 import * as path from "path";
+import { env } from "./env";
 
 export type IngestionSourceType = "upload" | "datasource" | "backup" | "manual";
 
@@ -46,7 +47,11 @@ function isTextMime(mimeType: string): boolean {
   return SUPPORTED_TEXT_MIMES.has(mimeType) || mimeType.startsWith("text/");
 }
 
-const TEMP_DIR = process.env.UPLOAD_DIR || "./uploads";
+const TEMP_DIR = path.resolve(env.uploadDir);
+
+if (!fs.existsSync(TEMP_DIR)) {
+  fs.mkdirSync(TEMP_DIR, { recursive: true });
+}
 
 async function ensureLocalPath(options: IngestFileOptions): Promise<{ localPath: string; isTemp: boolean }> {
   if (options.storagePath && fs.existsSync(options.storagePath)) {

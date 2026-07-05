@@ -11,6 +11,7 @@ import { createHash } from "crypto";
 import { promises as fsp } from "fs";
 import { logAudit } from "./lib/audit";
 import { clean } from "./lib/clean";
+import { env } from "./lib/env";
 
 const BACKUP_TARGETS = ["aliyundrive", "115", "nas", "local"] as const;
 
@@ -115,7 +116,7 @@ async function executeBackup(jobId: number, connectorConfig: Record<string, unkn
           const result = await connector.uploadFile(effectiveConfig, `${destDir}/${destName}`, content);
           if (!result.success) throw new Error("upload failed");
         } else if (connector.syncFiles) {
-          const tempDir = path.join(process.env.UPLOAD_DIR || "./uploads", `backup-${jobId}`);
+          const tempDir = path.join(env.backupTempDir, `backup-${jobId}`);
           await fsp.mkdir(tempDir, { recursive: true });
           const tempPath = path.join(tempDir, destName);
           await fsp.writeFile(tempPath, content);

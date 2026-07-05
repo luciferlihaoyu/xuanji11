@@ -32,6 +32,10 @@ export const env = {
   // 数据库
   databaseUrl: process.env.DATABASE_URL ?? "",
 
+  // 持久化存储
+  uploadDir: process.env.UPLOAD_DIR ?? "/data/app/uploads",
+  backupTempDir: process.env.BACKUP_TEMP_DIR ?? "/data/app/backups",
+
   // 环境
   isProduction: process.env.NODE_ENV === "production",
 };

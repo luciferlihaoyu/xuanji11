@@ -8,8 +8,9 @@ import { uploadedFiles } from "@db/schema";
 import * as fs from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
+import { env } from "./lib/env";
 
-const UPLOAD_DIR = process.env.UPLOAD_DIR || "./uploads";
+const UPLOAD_DIR = path.resolve(env.uploadDir);
 
 // 确保上传目录存在
 if (!fs.existsSync(UPLOAD_DIR)) {
