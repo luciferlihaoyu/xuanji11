@@ -19,7 +19,7 @@ COPY . .
 RUN npm run build
 
 # ------------------ 闃舵2: 杩愯 ------------------
-FROM node:20-alpine AS runner
+FROM node:20-slim AS runner
 
 WORKDIR /app
 
