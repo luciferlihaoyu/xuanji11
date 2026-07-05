@@ -16,5 +16,12 @@
       "tag": "0001_p2_audit_backup",
       "breakpoints": true
     }
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1751757600000,
+      "tag": "0002_add_backup_job_columns",
+      "breakpoints": true
+    }
   ]
 }

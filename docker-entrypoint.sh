@@ -10,7 +10,7 @@ echo "[Entry] 同步数据库表结构..."
 attempt=0
 max_attempts=30
 while [ $attempt -lt $max_attempts ]; do
-  if yes | ./node_modules/.bin/drizzle-kit push --force; then
+  if ./node_modules/.bin/drizzle-kit migrate; then
     echo "[Entry] 数据库同步成功"
     break
   fi
