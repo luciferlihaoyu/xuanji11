@@ -13,9 +13,12 @@ import { uploadedFiles, ingestionItems } from "@db/schema";
 import { eq, desc, sql } from "drizzle-orm";
 import { triggerWebhookWorkflow, startWorkflowScheduler } from "./lib/workflow-scheduler";
 import { startBackupScheduler } from "./lib/backup-scheduler";
+import { initializeZvec } from "./lib/vector";
 import { authenticateLocalRequest } from "./local-auth";
 import type { User } from "@db/schema";
 import "./connectors"; // 注册 115网盘、阿里云盘等连接器
+
+initializeZvec();
 
 declare module "hono" {
   interface ContextVariableMap {
