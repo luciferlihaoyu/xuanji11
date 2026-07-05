@@ -32,6 +32,7 @@ RUN npm ci --omit=dev --ignore-scripts
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/drizzle.config.ts ./
 COPY --from=builder /app/db ./db
+COPY --from=builder /app/scripts ./scripts
 
 COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh

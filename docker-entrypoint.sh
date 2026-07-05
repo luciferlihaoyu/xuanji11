@@ -3,6 +3,10 @@ set -e
 
 echo "=== 璇玑智脑 启动中 ==="
 
+# 修复 backup_jobs 缺失的列（幂等）
+echo "[Entry] 修复 backup_jobs 表结构..."
+node scripts/migrate-backup-jobs.mjs || echo "[Entry] backup_jobs 修复脚本失败，继续启动..."
+
 # 同步数据库表结构（不删除已有表）
 echo "[Entry] 同步数据库表结构..."
 
