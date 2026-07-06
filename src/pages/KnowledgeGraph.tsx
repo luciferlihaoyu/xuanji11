@@ -6,7 +6,7 @@ import NodeDetailPanel from '@/components/NodeDetailPanel';
 import BottomInfoBar from '@/components/BottomInfoBar';
 import BgImageUpload from '@/components/BgImageUpload';
 import * as d3 from 'd3';
-import { Plus, Link2, X } from 'lucide-react';
+import { Plus, Link2, X, ExternalLink, Edit3, Trash2 } from 'lucide-react';
 
 const CATEGORY_COLORS: Record<string, string> = {
   concept: '#00e5ff',
@@ -39,6 +39,8 @@ interface RenderNode {
   summary: string;
   lastUpdate: string;
   tags: string[];
+  importance: number;
+  metadata: Record<string, unknown>;
   // D3 simulation internals
   x: number;
   y: number;
@@ -63,6 +65,7 @@ export default function KnowledgeGraph() {
     edges: backendEdges,
     isLoading: isGraphLoading,
     createNode,
+    updateNode,
     deleteNode,
     createEdge,
     updatePositions,
@@ -77,7 +80,7 @@ export default function KnowledgeGraph() {
   useEffect(() => { edgeModeRef.current = edgeMode; }, [edgeMode]);
 
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newNode, setNewNode] = useState({ title: '', content: '', type: 'concept' as const });
+  const [newNode, setNewNode] = useState({ title: '', content: '', type: 'concept' as const, importance: 5, tags: '' });
   const [filteredCategories, setFilteredCategories] = useState<Set<string>>(
     new Set(['concept', 'document', 'topic', 'entity', 'note', 'tag'])
   );
@@ -85,6 +88,12 @@ export default function KnowledgeGraph() {
   const [nodeSpacing, setNodeSpacing] = useState(50);
   const [isLoading, setIsLoading] = useState(true);
   const [entranceDone, setEntranceDone] = useState(false);
+
+  // Right-click context menu state
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
+
+  // Edit trigger — when set, NodeDetailPanel starts in edit mode
+  const [editTriggerId, setEditTriggerId] = useState<string | null>(null);
 
   // 将后端数据转为前端渲染格式
   const renderNodes: RenderNode[] = backendNodes.map((n: any) => ({
@@ -97,6 +106,8 @@ export default function KnowledgeGraph() {
     summary: n.content?.slice(0, 120) ?? '',
     lastUpdate: n.updatedAt?.toString()?.slice(0, 10) ?? '',
     tags: Array.isArray(n.metadata?.tags) ? n.metadata.tags : [],
+    importance: typeof n.metadata?.importance === 'number' ? n.metadata.importance : 5,
+    metadata: (n.metadata as Record<string, unknown>) ?? {},
     x: (n.posX ?? 0) * 3,
     y: (n.posY ?? 0) * 3,
     fx: null,
@@ -313,6 +324,14 @@ export default function KnowledgeGraph() {
           .attr('opacity', 0.4);
         d3.select(nodeGroups.nodes()[idx] as SVGGElement).selectAll('circle').transition().duration(150)
           .attr('transform', 'scale(1)');
+      })
+      .on('contextmenu', (event: MouseEvent, d: RenderNode) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = container.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        setContextMenu({ x, y, nodeId: d.id });
       });
 
     // Simulation
@@ -378,8 +397,12 @@ export default function KnowledgeGraph() {
         type: newNode.type,
         posX: Math.random() * 200 - 100,
         posY: Math.random() * 200 - 100,
+        metadata: {
+          tags: newNode.tags.split(',').map((t) => t.trim()).filter(Boolean),
+          importance: newNode.importance,
+        },
       });
-      setNewNode({ title: '', content: '', type: 'concept' });
+      setNewNode({ title: '', content: '', type: 'concept', importance: 5, tags: '' });
       setShowAddModal(false);
       addToast({ type: 'success', title: '节点已创建' });
     } catch (err) {
@@ -402,7 +425,68 @@ export default function KnowledgeGraph() {
     setSelectedNodeId(nodeId);
   };
 
-  const onlineCount = agents.filter((a) => a.status === 'online').length;
+  const handleUpdateNode = async (nodeId: string, data: { name: string; category: string; importance: number; tags: string[]; summary: string }) => {
+    try {
+      const existing = renderNodes.find((n) => n.id === nodeId);
+      const existingMetadata = (existing?.metadata as Record<string, unknown>) ?? {};
+      await updateNode({
+        id: Number(nodeId),
+        title: data.name,
+        type: data.category as 'concept' | 'document' | 'topic' | 'entity' | 'note' | 'tag',
+        content: data.summary,
+        metadata: { ...existingMetadata, tags: data.tags, importance: data.importance },
+      });
+      addToast({ type: 'success', title: '节点已更新' });
+    } catch (err) {
+      addToast({ type: 'error', title: '更新节点失败', description: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  // Context menu actions
+  const handleContextMenuView = (nodeId: string) => {
+    setSelectedNodeId(nodeId);
+    setContextMenu(null);
+  };
+
+  const handleContextMenuEdit = (nodeId: string) => {
+    setSelectedNodeId(nodeId);
+    setEditTriggerId(nodeId);
+    setContextMenu(null);
+  };
+
+  const handleContextMenuConnect = (nodeId: string) => {
+    setEdgeMode('source');
+    setSelectedNodeId(nodeId);
+    setContextMenu(null);
+  };
+
+  const handleContextMenuDelete = async (nodeId: string) => {
+    setContextMenu(null);
+    const node = renderNodes.find((n) => n.id === nodeId);
+    if (node && !confirm(`确定要删除节点 "${node.name}" 吗？`)) return;
+    await handleDeleteNode(nodeId);
+  };
+
+  // Close context menu on any click or escape
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const closeOnEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setContextMenu(null); };
+    // Delay to avoid the same right-click event closing immediately
+    const timer = setTimeout(() => {
+      window.addEventListener('click', close);
+      window.addEventListener('contextmenu', close);
+      window.addEventListener('keydown', closeOnEsc);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('click', close);
+      window.removeEventListener('contextmenu', close);
+      window.removeEventListener('keydown', closeOnEsc);
+    };
+  }, [contextMenu]);
+
+  const onlineCount = agents.filter((a) => a.status === 'active').length;
 
   // Find selected node from renderNodes
   const selectedNodeData = selectedNodeId ? renderNodes.find((n) => n.id === selectedNodeId) : null;
@@ -462,7 +546,7 @@ export default function KnowledgeGraph() {
               className="btn-primary flex-1 text-xs py-1.5 flex items-center justify-center gap-1"
             >
               <Plus className="w-3.5 h-3.5" />
-              添加节点
+              新建节点
             </button>
             <button
               onClick={() => {
@@ -517,6 +601,10 @@ export default function KnowledgeGraph() {
             onClose={() => setSelectedNodeId(null)}
             onDelete={handleDeleteNode}
             onConnect={handleConnectStart}
+            onUpdate={handleUpdateNode}
+            startInEdit={editTriggerId === selectedNodeData.id}
+            onEditDone={() => setEditTriggerId(null)}
+            categoryLabels={CATEGORY_LABELS}
           />
         )}
       </div>
@@ -526,12 +614,12 @@ export default function KnowledgeGraph() {
         <BottomInfoBar nodeCount={renderNodes.length} edgeCount={renderEdges.length} onlineAgents={onlineCount} totalAgents={agents.length} lastSync="后端实时" />
       </div>
 
-      {/* Add Node Modal */}
+      {/* Create Node Modal */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
           <div className="rounded-lg border p-6 w-[420px]" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>添加知识节点</h3>
+              <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>新建知识节点</h3>
               <button onClick={() => setShowAddModal(false)} className="p-1 rounded hover:bg-white/5">
                 <X className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
               </button>
@@ -568,12 +656,84 @@ export default function KnowledgeGraph() {
                   ))}
                 </select>
               </div>
+              <div>
+                <div className="flex justify-between text-xs font-medium mb-1.5" style={{ color: 'var(--text-primary)' }}>
+                  <span>重要性</span>
+                  <span style={{ color: 'var(--accent-cyan)' }}>{newNode.importance}/10</span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  value={newNode.importance}
+                  onChange={(e) => setNewNode((p) => ({ ...p, importance: Number(e.target.value) }))}
+                  className="w-full h-1 rounded-full appearance-none cursor-pointer"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', accentColor: 'var(--accent-cyan)' }}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>标签（逗号分隔）</label>
+                <input
+                  type="text"
+                  value={newNode.tags}
+                  onChange={(e) => setNewNode((p) => ({ ...p, tags: e.target.value }))}
+                  className="input-base text-xs w-full"
+                  placeholder="标签1, 标签2, ..."
+                />
+              </div>
             </div>
             <div className="flex justify-end gap-2 mt-6 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
               <button onClick={() => setShowAddModal(false)} className="btn-ghost text-xs py-2 px-4">取消</button>
               <button onClick={handleAddNode} disabled={!newNode.title.trim()} className="btn-primary text-xs py-2 px-4">创建</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Right-click Context Menu */}
+      {contextMenu && (
+        <div
+          className="absolute z-50 panel-floating py-1 min-w-[140px]"
+          style={{
+            left: Math.min(contextMenu.x, (containerRef.current?.clientWidth ?? 0) - 150),
+            top: Math.min(contextMenu.y, (containerRef.current?.clientHeight ?? 0) - 160),
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
+        >
+          <button
+            onClick={() => handleContextMenuView(contextMenu.nodeId)}
+            className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <ExternalLink className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
+            查看详情
+          </button>
+          <button
+            onClick={() => handleContextMenuEdit(contextMenu.nodeId)}
+            className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <Edit3 className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
+            编辑节点
+          </button>
+          <button
+            onClick={() => handleContextMenuConnect(contextMenu.nodeId)}
+            className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <Link2 className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
+            连线
+          </button>
+          <div style={{ borderTop: '1px solid var(--border-subtle)' }} className="my-1" />
+          <button
+            onClick={() => handleContextMenuDelete(contextMenu.nodeId)}
+            className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
+            style={{ color: 'var(--accent-rose)' }}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            删除节点
+          </button>
         </div>
       )}
     </div>

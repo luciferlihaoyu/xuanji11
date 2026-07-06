@@ -1,24 +1,29 @@
 import { HashRouter, Routes, Route } from 'react-router-dom';
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import AppLayout from '@/components/AppLayout';
 import CommandPalette from '@/components/CommandPalette';
 import AuthGuard from '@/components/AuthGuard';
-import KnowledgeGraph from '@/pages/KnowledgeGraph';
-import KnowledgeBase from '@/pages/KnowledgeBase';
-import WorkflowBuilder from '@/pages/WorkflowBuilder';
-import BackupPage from '@/pages/BackupPage';
-import IngestionPage from '@/pages/IngestionPage';
-import AgentManagement from '@/pages/AgentManagement';
-import APICenter from '@/pages/APICenter';
-import DataSources from '@/pages/DataSources';
-import UploadPage from '@/pages/UploadPage';
-import SearchResults from '@/pages/SearchResults';
-import DocumentDetail from '@/pages/DocumentDetail';
-import Settings from '@/pages/Settings';
-import Login from "./pages/Login"
-import NotFound from "./pages/NotFound"
+import PageLoader from '@/components/PageLoader';
+
+// Page components are lazy-loaded to produce separate Vite chunks
+// and reduce the initial bundle. Shell components (AuthGuard, AppLayout,
+// CommandPalette, ErrorBoundary) stay eager for instant shell render.
+const KnowledgeGraph = lazy(() => import('@/pages/KnowledgeGraph'));
+const KnowledgeBase = lazy(() => import('@/pages/KnowledgeBase'));
+const WorkflowBuilder = lazy(() => import('@/pages/WorkflowBuilder'));
+const BackupPage = lazy(() => import('@/pages/BackupPage'));
+const IngestionPage = lazy(() => import('@/pages/IngestionPage'));
+const AgentManagement = lazy(() => import('@/pages/AgentManagement'));
+const APICenter = lazy(() => import('@/pages/APICenter'));
+const DataSources = lazy(() => import('@/pages/DataSources'));
+const UploadPage = lazy(() => import('@/pages/UploadPage'));
+const SearchResults = lazy(() => import('@/pages/SearchResults'));
+const DocumentDetail = lazy(() => import('@/pages/DocumentDetail'));
+const Settings = lazy(() => import('@/pages/Settings'));
+const Login = lazy(() => import('@/pages/Login'));
+const NotFound = lazy(() => import('@/pages/NotFound'));
 
 function ThemeInit() {
   const theme = useAppStore((s) => s.theme);
@@ -34,6 +39,7 @@ function App() {
     <HashRouter>
       <ThemeInit />
       <CommandPalette />
+      <Suspense fallback={<PageLoader />}>
       <Routes>
         <Route element={<AuthGuard />}>
         <Route element={<AppLayout />}>
@@ -56,6 +62,7 @@ function App() {
         <Route path="/login" element={<Login />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
+      </Suspense>
     </HashRouter>
     </ErrorBoundary>
   );

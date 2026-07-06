@@ -1,11 +1,37 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useAppStore, DEFAULT_PERMISSIONS } from '@/store/useAppStore';
-import type { Agent } from '@/store/useAppStore';
+import type { Agent, AgentStatus, AgentType } from '@/store/useAppStore';
 import { useAgents } from '@/hooks/useAgents';
 import PermissionSelector from '@/components/PermissionSelector';
 import { Search, Grid3X3, List, Plus, X, Activity, Shield, Zap, Users, Pencil, Trash2, Eye, EyeOff } from 'lucide-react';
 
 const ABILITY_LABELS = ['知识管理', '内容创作', '编程', '数据分析', '沟通', '学习'];
+const AGENT_STATUS_OPTIONS: ReadonlyArray<{ value: AgentStatus; label: string }> = [
+  { value: 'active', label: '活跃' },
+  { value: 'inactive', label: '停用' },
+  { value: 'error', label: '异常' },
+  { value: 'training', label: '训练中' },
+];
+const AGENT_TYPE_OPTIONS: ReadonlyArray<{ value: AgentType; label: string }> = [
+  { value: 'assistant', label: '助手' },
+  { value: 'analyst', label: '分析师' },
+  { value: 'curator', label: '策展人' },
+  { value: 'connector', label: '连接器' },
+  { value: 'custom', label: '自定义' },
+];
+
+function getStatusMeta(status: AgentStatus) {
+  switch (status) {
+    case 'active':
+      return { label: '活跃', dotClass: 'status-dot-online', color: 'var(--accent-emerald)' };
+    case 'inactive':
+      return { label: '停用', dotClass: 'status-dot-offline', color: 'var(--text-muted)' };
+    case 'error':
+      return { label: '异常', dotClass: 'status-dot-offline', color: 'var(--accent-rose)' };
+    case 'training':
+      return { label: '训练中', dotClass: 'status-dot-online', color: 'var(--accent-amber)' };
+  }
+}
 
 function getAvatarGradient(name: string) {
   const colors = [
@@ -63,7 +89,7 @@ export default function AgentManagement() {
   }, [agents, filterDept, filterStatus, searchQuery]);
 
   const selectedAgentData = agents.find((a) => a.id === selectedAgent);
-  const onlineCount = agents.filter((a) => a.status === 'online').length;
+  const activeCount = agents.filter((a) => a.status === 'active').length;
   const depts = [...new Set(agents.map((a) => a.department))];
 
   // Sync LLM config when selected agent changes
@@ -91,6 +117,8 @@ export default function AgentManagement() {
       await create({
         name: formData.name,
         role: formData.role,
+        type: formData.type || 'custom',
+        status: formData.status || 'active',
         department: formData.department,
         platform: formData.platform || '天宫',
         capabilities: (formData.capabilities?.length ? formData.capabilities : ['知识管理']).filter(Boolean),
@@ -237,7 +265,7 @@ export default function AgentManagement() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {[
           { label: '全部 Agent', value: agents.length, icon: Users, color: 'var(--accent-cyan)' },
-          { label: '在线', value: onlineCount, icon: Activity, color: 'var(--accent-emerald)' },
+          { label: '活跃', value: activeCount, icon: Activity, color: 'var(--accent-emerald)' },
           { label: '今日操作', value: 247, icon: Zap, color: 'var(--accent-cyan)' },
           { label: '待审核', value: 3, icon: Shield, color: 'var(--accent-amber)' },
         ].map((stat) => (
@@ -263,8 +291,7 @@ export default function AgentManagement() {
         </select>
         <select className="h-8 px-3 rounded border text-xs outline-none" style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
           <option value="all">全部状态</option>
-          <option value="online">在线</option>
-          <option value="offline">离线</option>
+          {AGENT_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
         <div className="flex items-center gap-1 ml-auto">
           <button onClick={() => setViewMode('grid')} className="p-2 rounded" style={{ backgroundColor: viewMode === 'grid' ? 'var(--bg-tertiary)' : 'transparent', color: viewMode === 'grid' ? 'var(--accent-cyan)' : 'var(--text-muted)' }}><Grid3X3 className="w-4 h-4" /></button>
@@ -300,8 +327,8 @@ export default function AgentManagement() {
               </div>
               <div className="flex items-center gap-2 text-xs mb-2" style={{ color: 'var(--text-muted)' }}><span>{agent.department}</span><span>·</span><span>{agent.platform}</span></div>
               <div className="flex items-center gap-2 mb-2">
-                <span className={agent.status === 'online' ? 'status-dot-online' : 'status-dot-offline'} />
-                <span className="text-xs" style={{ color: agent.status === 'online' ? 'var(--accent-emerald)' : 'var(--accent-rose)' }}>{agent.status === 'online' ? '在线' : '离线'}</span>
+                <span className={getStatusMeta(agent.status).dotClass} />
+                <span className="text-xs" style={{ color: getStatusMeta(agent.status).color }}>{getStatusMeta(agent.status).label}</span>
                 <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{agent.lastHeartbeat}</span>
               </div>
               <div className="flex flex-wrap gap-1 mb-1">
@@ -332,7 +359,7 @@ export default function AgentManagement() {
                   </div></td>
                   <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-secondary)' }}>{agent.role}</td>
                   <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-secondary)' }}>{agent.department}</td>
-                  <td className="px-4 py-3"><div className="flex items-center gap-1.5"><span className={agent.status === 'online' ? 'status-dot-online' : 'status-dot-offline'} /><span className="text-xs" style={{ color: agent.status === 'online' ? 'var(--accent-emerald)' : 'var(--accent-rose)' }}>{agent.status === 'online' ? '在线' : '离线'}</span></div></td>
+                  <td className="px-4 py-3"><div className="flex items-center gap-1.5"><span className={getStatusMeta(agent.status).dotClass} /><span className="text-xs" style={{ color: getStatusMeta(agent.status).color }}>{getStatusMeta(agent.status).label}</span></div></td>
                   <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>{Object.entries(agent.permissions).filter(([, v]) => v).length}/7</td>
                   <td className="px-4 py-3"><div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
                     <button onClick={() => openEditModal(agent)} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><Pencil className="w-3.5 h-3.5" /></button>
@@ -372,7 +399,7 @@ export default function AgentManagement() {
 
             {/* Status */}
             <div className="card-base mb-6"><div className="flex items-center justify-between">
-              <div className="flex items-center gap-2"><span className={selectedAgentData.status === 'online' ? 'status-dot-online' : 'status-dot-offline'} /><span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{selectedAgentData.status === 'online' ? '在线' : '离线'}</span></div>
+              <div className="flex items-center gap-2"><span className={getStatusMeta(selectedAgentData.status).dotClass} /><span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{getStatusMeta(selectedAgentData.status).label}</span></div>
               <span className="text-xs" style={{ color: 'var(--text-muted)' }}>心跳: {selectedAgentData.lastHeartbeat}</span>
             </div></div>
 
@@ -522,10 +549,22 @@ export default function AgentManagement() {
                     {['技术部', '内容部', '行政部', '财务部', '管理层'].map((d) => <option key={d} value={d}>{d}</option>)}
                   </select>
                 </div>
+                <div><label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>类型</label>
+                  <select value={formData.type || 'custom'} onChange={(e) => setFormData({ ...formData, type: e.target.value as AgentType })} className="input-base text-xs">
+                    {AGENT_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>平台</label>
                   <select value={formData.platform || '天宫'} onChange={(e) => setFormData({ ...formData, platform: e.target.value })} className="input-base text-xs">
                     <option value="天宫">天宫 Hub</option>
                     <option value="自定义">自定义 API</option>
+                  </select>
+                </div>
+                <div><label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>状态</label>
+                  <select value={formData.status || 'active'} onChange={(e) => setFormData({ ...formData, status: e.target.value as AgentStatus })} className="input-base text-xs">
+                    {AGENT_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
                 </div>
               </div>

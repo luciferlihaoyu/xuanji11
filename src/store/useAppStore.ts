@@ -49,13 +49,17 @@ export const ADMIN_PERMISSIONS: AgentPermission = {
 };
 
 // ===================== Agent =====================
+export type AgentStatus = 'active' | 'inactive' | 'error' | 'training';
+export type AgentType = 'assistant' | 'analyst' | 'curator' | 'connector' | 'custom';
+
 export interface Agent {
   id: string;
   name: string;
+  type: AgentType;
   role: string;
   department: string;
   platform: string;
-  status: 'online' | 'offline';
+  status: AgentStatus;
   lastHeartbeat: string;
   capabilities: string[];
   avatar: string;
@@ -229,7 +233,8 @@ export const useAppStore = create<AppState>((set) => ({
     const newAgent: Agent = {
       ...agentData as any,
       id: genId('agent'),
-      status: 'online',
+      type: agentData.type || 'custom',
+      status: 'active',
       lastHeartbeat: '刚刚',
       permissions: agentData.permissions || { ...DEFAULT_PERMISSIONS },
     };

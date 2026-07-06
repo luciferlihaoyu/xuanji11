@@ -1,5 +1,10 @@
 import { trpc } from "@/providers/trpc";
-import type { Agent, AgentPermission } from "@/store/useAppStore";
+import type { Agent, AgentPermission, AgentStatus, AgentType } from "@/store/useAppStore";
+
+type CreateAgentInput = Omit<Agent, "id" | "status" | "lastHeartbeat"> & {
+  readonly status?: AgentStatus;
+  readonly config?: Record<string, unknown>;
+};
 
 export interface UiAgent extends Agent {
   config: Record<string, unknown>;
@@ -9,7 +14,8 @@ function toUiAgent(dbAgent: {
   id: number;
   name: string;
   description: string | null;
-  status: string;
+  type: AgentType;
+  status: AgentStatus;
   updatedAt: Date | string;
   config: Record<string, unknown> | null;
   permissions: Record<string, unknown> | null;
@@ -20,10 +26,11 @@ function toUiAgent(dbAgent: {
   return {
     id: String(dbAgent.id),
     name: dbAgent.name,
+    type: dbAgent.type,
     role: dbAgent.description || "助手",
     department: String(config.department || "技术部"),
     platform: String(config.platform || "天宫"),
-    status: dbAgent.status === "active" ? "online" : "offline",
+    status: dbAgent.status,
     lastHeartbeat:
       typeof dbAgent.updatedAt === "string"
         ? new Date(dbAgent.updatedAt).toLocaleString("zh-CN", {
@@ -67,9 +74,7 @@ function toUiAgent(dbAgent: {
 }
 
 function toCreateInput(
-  data: Omit<Agent, "id" | "status" | "lastHeartbeat"> & {
-    config?: Record<string, unknown>;
-  },
+  data: CreateAgentInput,
 ) {
   const config: Record<string, unknown> = {
     department: data.department,
@@ -83,8 +88,8 @@ function toCreateInput(
   return {
     name: data.name,
     description: data.role,
-    type: "custom" as const,
-    status: "active" as const,
+    type: data.type,
+    status: data.status ?? "active",
     config,
     permissions: data.permissions as unknown as Record<string, unknown>,
   };
@@ -117,6 +122,8 @@ function toUpdateInput(
     id: Number(id),
     name: updates.name,
     description: updates.role,
+    type: updates.type,
+    status: updates.status,
     config: hasConfig ? config : undefined,
     permissions: updates.permissions as unknown as Record<string, unknown> | undefined,
   };
@@ -146,9 +153,7 @@ export function useAgents() {
     agents: (listQuery.data ?? []).map(toUiAgent),
     isLoading: listQuery.isLoading,
     create: async (
-      data: Omit<Agent, "id" | "status" | "lastHeartbeat"> & {
-        config?: Record<string, unknown>;
-      },
+      data: CreateAgentInput,
     ) => {
       return createMutation.mutateAsync(toCreateInput(data));
     },
