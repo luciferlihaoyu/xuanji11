@@ -15,6 +15,7 @@ import { triggerWebhookWorkflow, startWorkflowScheduler } from "./lib/workflow-s
 import { startBackupScheduler } from "./lib/backup-scheduler";
 import { initializeZvec } from "./lib/vector";
 import { authenticateLocalRequest } from "./local-auth";
+import { createMcpHandler } from "./mcp-server";
 import type { User } from "@db/schema";
 import "./connectors"; // 注册 115网盘、阿里云盘等连接器
 
@@ -27,6 +28,7 @@ declare module "hono" {
 }
 
 const app = new Hono<{ Bindings: HttpBindings }>();
+const mcp = createMcpHandler();
 
 // 文件上传路由（50MB 限制）
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
@@ -44,6 +46,8 @@ const authMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> = async (c, 
   // 放行公开路由
   if (
     path === "/health" ||
+    path === "/api/mcp" ||
+    path === "/api/mcp/sse" ||
     path.startsWith("/api/trpc/") ||
     path === Paths.oauthCallback
   ) {
@@ -61,6 +65,18 @@ const authMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> = async (c, 
 
 // 注册认证中间件到所有 /api/* 路由
 app.use("/api/*", authMiddleware);
+
+// MCP endpoint for AI agent access
+app.post("/api/mcp", async (c) => {
+  const body = await c.req.json();
+  const result = await mcp.handleMcpRequest(body, c.req.raw.headers);
+  return c.json(result);
+});
+
+// SSE endpoint for remote MCP clients
+app.get("/api/mcp/sse", (c) => {
+  return mcp.createMcpSseResponse(c.req.raw.headers);
+});
 
 // ========== 认证状态路由 ==========
 app.get("/api/auth/me", async (c) => {

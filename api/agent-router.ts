@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { createHash, randomBytes } from "node:crypto";
 import { eq, desc, like, or, and } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { agents } from "@db/schema";
+import { agents, apiKeys } from "@db/schema";
 import { clean } from "./lib/clean";
 import { logAudit } from "./lib/audit";
 
@@ -119,6 +120,88 @@ export const agentRouter = createRouter({
       await logAudit(ctx, "agent", "update", input.id, input as Record<string, unknown>);
       return { success: true };
     }),
+
+  generateApiKey: adminQuery
+    .input(
+      z.object({
+        agentId: z.number(),
+        name: z.string().min(1).max(255),
+        expiresAt: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      const rawKey = "xu_sk_" + randomBytes(32).toString("hex");
+      const keyHash = createHash("sha256").update(rawKey).digest("hex");
+      const keyPrefix = rawKey.slice(0, 12);
+
+      const [agent] = await db.select().from(agents).where(eq(agents.id, input.agentId));
+      const permissions = agent?.permissions ?? {};
+      const scopes: string[] = [];
+      const permMap: Record<string, string[]> = {
+        read: ["knowledge:read", "documents:read", "workflows:read", "agents:read", "backups:read"],
+        write: ["knowledge:write", "documents:write", "workflows:write"],
+        delete: ["knowledge:delete", "documents:delete", "workflows:delete"],
+        manage: ["system:manage"],
+        triggerWorkflow: ["workflows:execute"],
+        executeWorkflow: ["workflows:execute"],
+        designWorkflow: ["workflows:design"],
+      };
+
+      for (const [perm, hasIt] of Object.entries(permissions)) {
+        if (hasIt && permMap[perm]) scopes.push(...permMap[perm]);
+      }
+
+      const result = await db.insert(apiKeys).values(clean({
+        name: input.name,
+        keyHash,
+        keyPrefix,
+        agentId: input.agentId,
+        permissions,
+        scopes,
+        isActive: "true",
+        expiresAt: input.expiresAt ? new Date(input.expiresAt) : undefined,
+        createdBy: ctx.user?.id ?? null,
+      }));
+
+      return {
+        id: Number(result[0].insertId),
+        key: rawKey,
+        keyPrefix,
+        name: input.name,
+        scopes,
+        message: "Store this key securely. It will not be shown again.",
+      };
+    }),
+
+  listApiKeys: adminQuery
+    .input(z.object({ agentId: z.number() }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      return db.select({
+        id: apiKeys.id,
+        name: apiKeys.name,
+        keyPrefix: apiKeys.keyPrefix,
+        scopes: apiKeys.scopes,
+        isActive: apiKeys.isActive,
+        expiresAt: apiKeys.expiresAt,
+        lastUsedAt: apiKeys.lastUsedAt,
+        createdAt: apiKeys.createdAt,
+      }).from(apiKeys)
+        .where(eq(apiKeys.agentId, input.agentId))
+        .orderBy(desc(apiKeys.createdAt));
+    }),
+
+  revokeApiKey: adminQuery
+    .input(z.object({ keyId: z.number() }))
+    .mutation(async ({ input }) => {
+      const db = getDb();
+      await db.update(apiKeys)
+        .set({ isActive: "false" })
+        .where(eq(apiKeys.id, input.keyId));
+      return { success: true };
+    }),
+
   testLlmConnection: adminQuery
     .input(
       z.object({

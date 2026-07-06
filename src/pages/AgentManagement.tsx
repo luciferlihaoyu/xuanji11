@@ -1,9 +1,10 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useAppStore, DEFAULT_PERMISSIONS } from '@/store/useAppStore';
 import type { Agent, AgentStatus, AgentType } from '@/store/useAppStore';
 import { useAgents } from '@/hooks/useAgents';
+import { trpcClient } from '@/providers/trpc';
 import PermissionSelector from '@/components/PermissionSelector';
-import { Search, Grid3X3, List, Plus, X, Activity, Shield, Zap, Users, Pencil, Trash2, Eye, EyeOff } from 'lucide-react';
+import { Search, Grid3X3, List, Plus, X, Activity, Shield, Zap, Users, Pencil, Trash2, Eye, EyeOff, KeyRound, Copy } from 'lucide-react';
 
 const ABILITY_LABELS = ['知识管理', '内容创作', '编程', '数据分析', '沟通', '学习'];
 const AGENT_STATUS_OPTIONS: ReadonlyArray<{ value: AgentStatus; label: string }> = [
@@ -79,6 +80,26 @@ export default function AgentManagement() {
   const [testLlmStatus, setTestLlmStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [testLlmMessage, setTestLlmMessage] = useState('');
 
+  // API Key management state
+  const [apiKeys, setApiKeys] = useState<Array<{
+    id: number;
+    name: string;
+    keyPrefix: string;
+    scopes: string[] | null;
+    isActive: 'true' | 'false';
+    expiresAt: Date | null;
+    lastUsedAt: Date | null;
+    createdAt: Date;
+  }>>([]);
+  const [apiKeysLoading, setApiKeysLoading] = useState(false);
+  const [showGenerateForm, setShowGenerateForm] = useState(false);
+  const [keyName, setKeyName] = useState('');
+  const [keyExpiry, setKeyExpiry] = useState('');
+  const [generatedKey, setGeneratedKey] = useState<string | null>(null);
+  const [generatingKey, setGeneratingKey] = useState(false);
+  const [revokeConfirmId, setRevokeConfirmId] = useState<number | null>(null);
+  const [revokingKey, setRevokingKey] = useState(false);
+
   const filteredAgents = useMemo(() => {
     return agents.filter((a) => {
       if (filterDept !== 'all' && a.department !== filterDept) return false;
@@ -107,6 +128,85 @@ export default function AgentManagement() {
       setTestLlmMessage('');
     }
   }, [selectedAgentData]);
+
+  // Fetch API keys when selected agent changes
+  const refreshApiKeys = useCallback(async (agentId: string) => {
+    setApiKeysLoading(true);
+    try {
+      const keys = await trpcClient.agent.listApiKeys.query({ agentId: Number(agentId) });
+      setApiKeys(keys);
+    } catch (err: any) {
+      addToast({ type: 'error', title: err.message || '获取 API 密钥失败' });
+    } finally {
+      setApiKeysLoading(false);
+    }
+  }, [addToast]);
+
+  useEffect(() => {
+    if (!selectedAgent) {
+      setApiKeys([]);
+      return;
+    }
+    setGeneratedKey(null);
+    setShowGenerateForm(false);
+    setKeyName('');
+    setKeyExpiry('');
+    refreshApiKeys(selectedAgent);
+  }, [selectedAgent, refreshApiKeys]);
+
+  const formatDate = (date: Date | null | string) => {
+    if (!date) return '从未';
+    const d = typeof date === 'string' ? new Date(date) : date;
+    return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  };
+
+  const handleGenerateApiKey = async () => {
+    if (!selectedAgent || !keyName.trim()) {
+      addToast({ type: 'error', title: '请输入密钥名称' });
+      return;
+    }
+    setGeneratingKey(true);
+    try {
+      const result = await trpcClient.agent.generateApiKey.mutate({
+        agentId: Number(selectedAgent),
+        name: keyName.trim(),
+        expiresAt: keyExpiry || undefined,
+      });
+      setGeneratedKey(result.key);
+      setShowGenerateForm(false);
+      setKeyName('');
+      setKeyExpiry('');
+      await refreshApiKeys(selectedAgent);
+      addToast({ type: 'success', title: 'API 密钥已生成' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: err.message || '生成密钥失败' });
+    } finally {
+      setGeneratingKey(false);
+    }
+  };
+
+  const handleRevokeApiKey = async (keyId: number) => {
+    setRevokingKey(true);
+    try {
+      await trpcClient.agent.revokeApiKey.mutate({ keyId });
+      setRevokeConfirmId(null);
+      if (selectedAgent) await refreshApiKeys(selectedAgent);
+      addToast({ type: 'info', title: '密钥已撤销' });
+    } catch (err: any) {
+      addToast({ type: 'error', title: err.message || '撤销密钥失败' });
+    } finally {
+      setRevokingKey(false);
+    }
+  };
+
+  const handleCopyKey = async (key: string) => {
+    try {
+      await navigator.clipboard.writeText(key);
+      addToast({ type: 'success', title: '已复制到剪贴板' });
+    } catch {
+      addToast({ type: 'error', title: '复制失败' });
+    }
+  };
 
   const handleAddAgent = async () => {
     if (!formData.name || !formData.role || !formData.department) {
@@ -421,6 +521,142 @@ export default function AgentManagement() {
                 }}
                 showPresets={true}
               />
+            </div>
+
+            {/* API Keys */}
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-semibold flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}><KeyRound className="w-4 h-4" />API 密钥</h4>
+                <button
+                  onClick={() => { setShowGenerateForm(!showGenerateForm); setGeneratedKey(null); }}
+                  className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5" />生成密钥
+                </button>
+              </div>
+
+              {/* Generated key display - shown once after creation */}
+              {generatedKey && (
+                <div className="bg-yellow-900/20 border border-yellow-500/30 rounded p-3 mb-3">
+                  <p className="text-xs mb-2" style={{ color: 'var(--accent-amber)' }}>
+                    重要：请立即复制此密钥，它不会再次显示。
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      readOnly
+                      value={generatedKey}
+                      className="input-base text-xs flex-1 font-mono"
+                      onClick={(e) => e.currentTarget.select()}
+                    />
+                    <button
+                      onClick={() => handleCopyKey(generatedKey)}
+                      className="btn-primary text-xs py-2 px-3 flex items-center gap-1.5"
+                    >
+                      <Copy className="w-3.5 h-3.5" />复制
+                    </button>
+                    <button
+                      onClick={() => setGeneratedKey(null)}
+                      className="btn-ghost text-xs py-2 px-3"
+                    >
+                      关闭
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Generate form */}
+              {showGenerateForm && (
+                <div className="card-base mb-3 space-y-3">
+                  <div>
+                    <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>密钥名称 *</label>
+                    <input
+                      type="text"
+                      value={keyName}
+                      onChange={(e) => setKeyName(e.target.value)}
+                      placeholder="如：生产环境密钥"
+                      className="input-base text-xs w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>过期时间（可选）</label>
+                    <input
+                      type="date"
+                      value={keyExpiry}
+                      onChange={(e) => setKeyExpiry(e.target.value)}
+                      className="input-base text-xs w-full"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleGenerateApiKey}
+                      disabled={generatingKey || !keyName.trim()}
+                      className="btn-primary text-xs py-2 px-3 flex items-center gap-1.5"
+                    >
+                      <Plus className="w-3.5 h-3.5" />{generatingKey ? '生成中...' : '生成'}
+                    </button>
+                    <button
+                      onClick={() => { setShowGenerateForm(false); setKeyName(''); setKeyExpiry(''); }}
+                      className="btn-ghost text-xs py-2 px-3"
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Key list */}
+              {apiKeysLoading ? (
+                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-muted)' }}>加载中...</div>
+              ) : apiKeys.length === 0 ? (
+                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-muted)' }}>暂无 API 密钥</div>
+              ) : (
+                <div className="space-y-2">
+                  {apiKeys.map((key) => (
+                    <div key={key.id} className="card-base p-3">
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xs font-mono" style={{ color: 'var(--accent-cyan)' }}>{key.keyPrefix}...</span>
+                            <span className={`chip text-[10px] py-0.5 px-2 ${key.isActive === 'true' ? 'chip-emerald' : 'chip-rose'}`}>
+                              {key.isActive === 'true' ? '活跃' : '已撤销'}
+                            </span>
+                          </div>
+                          <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{key.name}</div>
+                        </div>
+                        {key.isActive === 'true' && (
+                          <button
+                            onClick={() => setRevokeConfirmId(key.id)}
+                            className="btn-danger text-[10px] py-1 px-2"
+                          >
+                            撤销
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                        <span>创建: {formatDate(key.createdAt)}</span>
+                        <span>·</span>
+                        <span>最后使用: {formatDate(key.lastUsedAt)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Revoke confirmation */}
+              {revokeConfirmId !== null && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
+                  <div className="animate-scale-in rounded-lg border p-5 w-[360px]" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+                    <h4 className="text-base font-bold mb-2" style={{ color: 'var(--text-primary)' }}>确认撤销密钥</h4>
+                    <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>撤销后，使用此密钥的所有请求将立即被拒绝。此操作不可撤销。</p>
+                    <div className="flex justify-end gap-2">
+                      <button onClick={() => setRevokeConfirmId(null)} className="btn-ghost text-xs py-2 px-4">取消</button>
+                      <button onClick={() => handleRevokeApiKey(revokeConfirmId)} disabled={revokingKey} className="btn-danger text-xs py-2 px-4">
+                        {revokingKey ? '撤销中...' : '确认撤销'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* LLM Config */}

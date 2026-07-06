@@ -634,3 +634,35 @@ export const auditLogs = mysqlTable("audit_logs", {
 
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type InsertAuditLog = typeof auditLogs.$inferInsert;
+
+// ========== 外部 Agent API 密钥表 ==========
+export const apiKeys = mysqlTable("api_keys", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  keyHash: varchar("keyHash", { length: 255 }).notNull().unique(),
+  keyPrefix: varchar("keyPrefix", { length: 12 }).notNull(),
+  agentId: bigint("agentId", { mode: "number", unsigned: true }).notNull(),
+  permissions: json("permissions").$type<Record<string, unknown>>(),
+  scopes: json("scopes").$type<string[]>(),
+  isActive: mysqlEnum("isActive", ["true", "false"]).default("true").notNull(),
+  expiresAt: timestamp("expiresAt"),
+  lastUsedAt: timestamp("lastUsedAt"),
+  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => [
+  index("apiKeys_agentId_idx").on(table.agentId),
+  index("apiKeys_keyPrefix_idx").on(table.keyPrefix),
+  foreignKey({
+    columns: [table.agentId],
+    foreignColumns: [agents.id],
+    name: "api_keys_agent_fk",
+  }),
+  foreignKey({
+    columns: [table.createdBy],
+    foreignColumns: [users.id],
+    name: "api_keys_created_by_fk",
+  }),
+]);
+
+export type ApiKey = typeof apiKeys.$inferSelect;
+export type InsertApiKey = typeof apiKeys.$inferInsert;
