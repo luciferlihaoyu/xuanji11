@@ -5,7 +5,7 @@
 import * as jose from "jose";
 import * as cookie from "cookie";
 import * as crypto from "crypto";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import { setCookie } from "hono/cookie";
 import type { Context } from "hono";
 import { getDb } from "./queries/connection";
