@@ -195,7 +195,7 @@ async function executeBackupJob(jobId: number, connectorConfig: Record<string, u
           relativePath: file.relativePath,
           size: file.size,
           status: "failed",
-          error: errorMsg,
+          error: "Internal backup error",
         });
         manifestFiles.push({ path: file.relativePath, size: file.size, checksum: "", status: "failed" });
       }
@@ -217,7 +217,7 @@ async function executeBackupJob(jobId: number, connectorConfig: Record<string, u
     console.error(`[BackupScheduler] Job ${jobId} failed: ${errorMsg}`);
     await db.update(backupJobs).set({
       status: "failed",
-      error: errorMsg,
+      error: "Internal backup error",
       completedAt: new Date(),
     }).where(eq(backupJobs.id, jobId));
   }

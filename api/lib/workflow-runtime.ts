@@ -156,9 +156,10 @@ export async function executeWorkflow(
       await db.update(workflowRunNodes).set({ status: "completed", output, completedAt: new Date() }).where(eq(workflowRunNodes.id, nodeRunId));
     } catch (err) {
       failed = true;
+      console.error("[WorkflowRuntime] Node execution failed:", err);
       await db.update(workflowRunNodes).set({
         status: "failed",
-        error: err instanceof Error ? err.message : String(err),
+        error: "Internal workflow error",
         completedAt: new Date(),
       }).where(eq(workflowRunNodes.id, nodeRunId));
     }
