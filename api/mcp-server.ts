@@ -192,9 +192,9 @@ export async function handleMcpRequest(body: unknown, headers: Headers): Promise
   const request = parsed.data;
   if (request.method === "initialize") return ok(request.id, { protocolVersion: "2024-11-05", serverInfo: { name: "xuanji-mcp", version: "1.0.0" }, capabilities: { tools: {} } });
   const identity = await authenticate(headers);
-  if (!identity) return err(request.id, -32001, "Authentication required");
+  if (!identity) { console.error("MCP authentication failed", { hasAuthorization: headers.has("authorization") }); return err(request.id, -32001, "Authentication required"); }
   if (request.method === "tools/list") return ok(request.id, { tools });
-  if (request.method !== "tools/call") return err(request.id, -32601, `Method not found: ${request.method}`);
+  if (request.method !== "tools/call") { console.error("MCP method not found", { method: request.method }); return err(request.id, -32601, "Method not found"); }
   try {
     const call = toolCallSchema.parse(request.params);
     return ok(request.id, await callTool(call, identity.user, identity.auth));

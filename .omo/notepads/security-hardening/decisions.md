@@ -30,3 +30,10 @@
 - Zeabur 直传部署: `project_id=6a23dcd2f1be9943f1f95ca0`，`service_id=6a355024558aac447d432fdd`，最新部署 ID `6a4cb6506ec90535ce43d0ee`，状态 `RUNNING`。
 - Runtime 日志确认服务已启动：`璇玑智脑 running on http://localhost:8080/`，无运行错误。
 - 线上健康检查: `https://xuanjj29.zeabur.app/health` 返回 HTTP 200，`ok: true`，`dbConnected: true`。
+
+## 2026-07-07 MCP 错误消息收敛修复部署记录
+- F1 最后一次修复已完成：`api/mcp-server.ts` 的认证失败与 method not found 统一改为客户端通用消息；服务端分别记录 `hasAuthorization` 与 `method`，但不记录完整 Authorization token。
+- 部署提交: 待本次提交落盘后补充。
+- Zeabur 直传部署: `project_id=6a23dcd2f1be9943f1f95ca0`，`service_id=6a355024558aac447d432fdd`，最新部署 ID `6a4cba2349ff5417a9a10ae9`，状态 `RUNNING`。
+- Runtime 日志确认服务已启动：`璇玑智脑 running on http://localhost:8080/`，并持续打印 `BackupScheduler` 日志，无运行错误。
+- 线上健康检查: `https://xuanjj29.zeabur.app/health` 返回 HTTP 200，`{"ok":true,"dbConnected":true}`。
