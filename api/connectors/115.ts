@@ -155,9 +155,8 @@ export const connector115: CloudConnector = {
       await call115Api(token, "/user/info");
       return { success: true, message: "115网盘连接成功" };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "连接失败";
-      console.error("[115] test connection failed:", msg);
-      return { success: false, message: msg };
+      console.error("[115] test connection failed:", err);
+      return { success: false, message: "连接测试失败" };
     }
   },
 

@@ -203,9 +203,8 @@ export const connectorAliyunDrive: CloudConnector = {
       await callAliyunApi(effectiveToken, "/adrive/v1.0/user/getDriveInfo");
       return { success: true, message: "阿里云盘连接成功" };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "连接失败";
-      console.error("[阿里云盘] test connection failed:", msg);
-      return { success: false, message: msg };
+      console.error("[阿里云盘] test connection failed:", err);
+      return { success: false, message: "连接测试失败" };
     }
   },
 
