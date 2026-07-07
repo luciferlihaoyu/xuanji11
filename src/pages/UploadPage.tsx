@@ -156,6 +156,7 @@ export default function UploadPage() {
       const res = await fetch('/api/upload', {
         method: 'POST',
         credentials: 'include',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
         body: formData,
       });
 
@@ -206,7 +207,11 @@ export default function UploadPage() {
   const removeTask = async (task: UploadFile) => {
     if (task.id) {
       try {
-        await fetch(`/api/upload/${task.id}`, { method: 'DELETE', credentials: 'include' });
+        await fetch(`/api/upload/${task.id}`, {
+          method: 'DELETE',
+          credentials: 'include',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        });
       } catch (err) {
         console.error('删除文件失败:', err);
       }

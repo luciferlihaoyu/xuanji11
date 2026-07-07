@@ -428,7 +428,7 @@ export default function KnowledgeBase() {
     try {
       const res = await fetch('/api/trpc/kb.reindexDocument', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
         body: JSON.stringify({ id: activeDocId }),
       });
       const json = await res.json();
@@ -455,7 +455,7 @@ export default function KnowledgeBase() {
     try {
       await fetch('/api/trpc/kb.moveDocument', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
         body: JSON.stringify({ id: did, folderId }),
       });
       addToast({ type: 'success', title: '已移动' });
