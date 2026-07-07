@@ -41,3 +41,12 @@
 - **Service**: `https://xuanjj29.zeabur.app/`
 - **Health check**: `GET /health` → `200 OK` with `{"ok":true,"uptime":400,"dbConnected":true}`
 - **Runtime logs**: No errors observed; service booted cleanly.
+
+## 2026-07-07 F1 重审残余错误详情泄露修复
+
+### D9: 修复 workflow-runtime.ts 和 backup-scheduler.ts 残余错误详情泄露
+- **Decision**: F1 重审发现 2 处残余错误详情泄露，本次修复：
+  - `api/lib/workflow-runtime.ts` line ~162: `error: err instanceof Error ? err.message : String(err)` → `error: "Internal workflow error"`，真实异常通过 `console.error` 记录。
+  - `api/lib/backup-scheduler.ts` line ~198、~220: `error: errorMsg` → `error: "Internal backup error"`（真实异常已通过 `console.error` 记录，无需新增）。
+- **Files changed**: `api/lib/workflow-runtime.ts`, `api/lib/backup-scheduler.ts`
+- **Verification**: `npm run check` (tsc -b), `npm test -- --run` (13 tests passed), `npm run build` 全部通过。
