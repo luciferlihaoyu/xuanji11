@@ -15,3 +15,20 @@
 - Docker runner 阶段使用官方 `node` 非 root 用户运行；root 仅用于安装依赖、复制文件、设置 `docker-entrypoint.sh` 可执行位和目录归属。
 - `/data/app/uploads`、`/data/app/backups`、`/data/app/zvec` 统一授权给 `node:node`，保障持久卷挂载后的应用读写路径与默认环境变量一致。
 - `.env.example` 中 `ADMIN_PASSWORD` 和 `JWT_SECRET` 改为占位符，并用注释要求生产环境设置强密码及 ≥32 字符随机 JWT secret；`ADMIN_USERNAME=admin` 仅保留为示例并注明必须修改。
+- 非 MCP 路由错误详情泄露收敛：
+  - `api/agent-router.ts` 的 `testLlmConnection` catch 不再返回 `err.message`，统一返回 `"连接测试失败"`，完整异常写入 `console.error("[TestLlm] Failed:", err)`。
+  - `api/datasource-router.ts` 的 `testConnection` / `sync` catch 返回固定文案 `"连接测试失败"` / `"同步失败"`，`dataSources.lastError` 写入 `"Internal error"`，真实异常写入 `console.error`。
+  - `api/backup-router.ts` 的 `backupJobFiles`、`backupJobs`、`restoreJobs` 的 `.error` 字段不再写入 `err.message`，统一写入 `"Internal error"`，真实异常写入 `console.error`。
+  - `api/lib/ingestion.ts` 的 `ingestFile` catch 将 `ingestionItems.error` 改为 `"Internal error"`，真实异常写入 `console.error`。
+  - `api/connectors/115.ts` 与 `api/connectors/aliyundrive.ts` 的 `testConnection` catch 不再把 `err.message` 放入 `result.message`，返回 `"连接测试失败"`，真实异常写入 `console.error`。
+  - 验证：`npm run check`、`npm test -- --run`、`npm run build` 全部通过。
+
+## 2026-07-07 Deployment
+
+### D7: GitHub Push + Zeabur Direct Deploy
+- **Decision**: Push Phase 2 commits to `main` via GitHub, then deploy via `npx zeabur@latest deploy --service-id`.
+- **Commits**: 6 atomic commits covering core security, tests, frontend CSRF, deps, Docker, and docs.
+- **Deployment ID**: `6a4cf98e49ff5417a9a111c6`
+- **Service**: `https://xuanjj29.zeabur.app/`
+- **Health check**: `GET /health` → `200 OK` with `{"ok":true,"uptime":15,"dbConnected":true}`
+- **Runtime logs**: No errors observed; service booted cleanly, backup scheduler started, all migration checks passed.
