@@ -11,6 +11,7 @@
 - 下载统一 `Content-Disposition: attachment`、`X-Content-Type-Options: nosniff`，HTML/SVG/XML 等可执行或高风险扩展不允许作为上传扩展保留。
 - 非管理员下载必须显式校验 `uploadedBy === user.id`，不依赖线上数据库 FK。
 - 上传失败仅向客户端返回通用错误，详细错误只写服务端日志。
+- MCP `handleMcpRequest` 的异常处理改为仅向调用方返回通用 JSON-RPC 错误：`ZodError` 返回 `Invalid tool arguments`，其他 `Error` 返回 `Internal tool error`；真实异常与请求方法仅写入服务端日志，避免内部详情泄露给 MCP 调用方。
 
 ## 2026-07-07 部署记录
 - 安全加固提交: `b50bd95 fix: enforce P0 security hardening`，已推送到 GitHub `main`。

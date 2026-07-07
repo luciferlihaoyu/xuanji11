@@ -199,9 +199,16 @@ export async function handleMcpRequest(body: unknown, headers: Headers): Promise
     const call = toolCallSchema.parse(request.params);
     return ok(request.id, await callTool(call, identity.user, identity.auth));
   } catch (caught) {
-    if (caught instanceof z.ZodError) return err(request.id, -32602, "Invalid tool arguments", caught.issues);
-    if (caught instanceof Error) return err(request.id, -32603, caught.message);
-    throw caught;
+    if (caught instanceof z.ZodError) {
+      console.error("MCP tool argument validation failed", { method: request.method, error: caught });
+      return err(request.id, -32602, "Invalid tool arguments");
+    }
+    if (caught instanceof Error) {
+      console.error("MCP tool execution failed", { method: request.method, error: caught });
+      return err(request.id, -32603, "Internal tool error");
+    }
+    console.error("MCP tool execution failed with unknown exception", { method: request.method, error: caught });
+    return err(request.id, -32603, "Internal tool error");
   }
 }
 
