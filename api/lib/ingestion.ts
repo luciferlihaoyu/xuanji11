@@ -168,6 +168,7 @@ export async function ingestFile(options: IngestFileOptions): Promise<{ itemId: 
     localPath = ensured.localPath;
     isTemp = ensured.isTemp;
   } catch (err) {
+    console.error("[Ingestion] ensureLocalPath failed:", err);
     const jobId = await createIngestionJob(sourceType, sourceId, createdBy ?? null);
     const itemResult = await db.insert(ingestionItems).values({
       jobId,
@@ -176,7 +177,7 @@ export async function ingestFile(options: IngestFileOptions): Promise<{ itemId: 
       mimeType,
       size,
       status: "failed",
-      error: err instanceof Error ? err.message : String(err),
+      error: "Internal error",
       sourceUrl: sourceUrl ?? null,
       storagePath: storagePath ?? null,
       documentId: null,

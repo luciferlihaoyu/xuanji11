@@ -137,12 +137,13 @@ async function executeBackup(jobId: number, connectorConfig: Record<string, unkn
         done++;
       } catch (err) {
         failed++;
+        console.error(`[Backup] Failed ${file.relativePath}:`, err);
         await db.insert(backupJobFiles).values({
           jobId,
           relativePath: file.relativePath,
           size: file.size,
           status: "failed",
-          error: err instanceof Error ? err.message : String(err),
+          error: "Internal error",
         });
         manifestFiles.push({ path: file.relativePath, size: file.size, checksum: "", status: "failed" });
       }
@@ -158,9 +159,10 @@ async function executeBackup(jobId: number, connectorConfig: Record<string, unkn
       completedAt: new Date(),
     }).where(eq(backupJobs.id, jobId));
   } catch (err) {
+    console.error(`[Backup] Job ${jobId} failed:`, err);
     await db.update(backupJobs).set({
       status: "failed",
-      error: err instanceof Error ? err.message : "备份执行失败",
+      error: "Internal error",
       completedAt: new Date(),
     }).where(eq(backupJobs.id, jobId));
   }
@@ -232,9 +234,10 @@ async function executeRestore(restoreJobId: number): Promise<void> {
       completedAt: new Date(),
     }).where(eq(restoreJobs.id, restoreJobId));
   } catch (err) {
+    console.error(`[Restore] Job ${restoreJobId} failed:`, err);
     await db.update(restoreJobs).set({
       status: "failed",
-      error: err instanceof Error ? err.message : "恢复执行失败",
+      error: "Internal error",
       completedAt: new Date(),
     }).where(eq(restoreJobs.id, restoreJobId));
   }

@@ -238,7 +238,8 @@ export const agentRouter = createRouter({
         if (err.name === 'AbortError') {
           return { success: false as const, message: '请求超时（15秒）' };
         }
-        return { success: false as const, message: err.message || '网络请求失败' };
+        console.error('[TestLlm] Failed:', err);
+        return { success: false as const, message: '连接测试失败' };
       }
     }),
 });

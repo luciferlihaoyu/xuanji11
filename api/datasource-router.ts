@@ -115,11 +115,11 @@ export const datasourceRouter = createRouter({
           .where(eq(dataSources.id, input.id));
         return { success: true, message: "连接成功" };
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : "连接失败";
+        console.error("[DataSource] testConnection failed:", err);
         await db.update(dataSources)
-          .set({ status: "error", lastError: errorMsg })
+          .set({ status: "error", lastError: "Internal error" })
           .where(eq(dataSources.id, input.id));
-        return { success: false, message: errorMsg };
+        return { success: false, message: "连接测试失败" };
       }
     }),
 
@@ -236,11 +236,11 @@ export const datasourceRouter = createRouter({
 
         return { success: failed === 0, message: `同步完成: ${processed} 处理, ${skipped} 跳过, ${failed} 失败` };
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : "同步失败";
+        console.error("[DataSource] sync failed:", err);
         await db.update(dataSources)
-          .set({ status: "error", lastError: errorMsg })
+          .set({ status: "error", lastError: "Internal error" })
           .where(eq(dataSources.id, input.id));
-        return { success: false, message: errorMsg };
+        return { success: false, message: "同步失败" };
       }
     }),
 });
