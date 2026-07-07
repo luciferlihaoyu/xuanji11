@@ -89,7 +89,7 @@ function assertScope(auth: AuthInfo, scope: string): void {
 
 async function handleKnowledgeSearch(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
   assertScope(auth, "knowledge:read");
-  const input = z.object({ query: z.string().optional().default(""), type: knowledgeTypeSchema.optional() }).parse(args);
+  const input = z.object({ query: z.string().max(500).optional().default(""), type: knowledgeTypeSchema.optional() }).parse(args);
   const q = `%${input.query}%`;
   const db = getDb();
   const nodeFilter = input.query

@@ -136,7 +136,7 @@ export const kbRouter = createRouter({
     }),
 
   searchDocuments: authedQuery
-    .input(z.object({ query: z.string() }))
+    .input(z.object({ query: z.string().min(1).max(500) }))
     .query(async ({ input }) => {
       const db = getDb();
       return db.select().from(kbDocuments)

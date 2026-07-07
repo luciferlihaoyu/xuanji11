@@ -14,7 +14,7 @@ export const knowledgeRouter = createRouter({
   }),
 
   searchNodes: authedQuery
-    .input(z.object({ query: z.string() }))
+    .input(z.object({ query: z.string().max(500) }))
     .query(async ({ input }) => {
       const db = getDb();
       const q = `%${input.query}%`;
@@ -172,7 +172,7 @@ export const knowledgeRouter = createRouter({
 
   /** 语义搜索 — 使用向量引擎 */
   semanticSearch: authedQuery
-    .input(z.object({ query: z.string().min(1), topK: z.number().min(1).max(50).default(10) }))
+    .input(z.object({ query: z.string().min(1).max(500), topK: z.number().min(1).max(50).default(10) }))
     .query(async ({ input }) => {
       const results = await vectorEngine.searchByText(input.query, input.topK);
 

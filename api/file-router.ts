@@ -10,8 +10,8 @@ export const fileRouter = createRouter({
   list: authedQuery
     .input(
       z.object({
-        search: z.string().optional(),
-        mimeType: z.string().optional(),
+        search: z.string().max(200).optional(),
+        mimeType: z.string().max(100).optional(),
       }).optional()
     )
     .query(async ({ input }) => {
@@ -48,7 +48,9 @@ export const fileRouter = createRouter({
         originalName: z.string().min(1).max(500),
         mimeType: z.string().max(255).optional(),
         size: z.number().int().min(0).optional(),
-        storagePath: z.string().min(1),
+        storagePath: z.string().min(1).max(500).refine((p) => !p.includes("\0") && !p.split(/[/\\\\]/).some((s) => s === ".."), {
+          message: "storagePath contains path traversal",
+        }),
         metadata: z.record(z.string(), z.unknown()).optional(),
       })
     )

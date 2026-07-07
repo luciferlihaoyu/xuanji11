@@ -12,7 +12,7 @@ export const agentRouter = createRouter({
   list: authedQuery
     .input(
       z.object({
-        search: z.string().optional(),
+        search: z.string().max(200).optional(),
         type: z.string().optional(),
         status: z.string().optional(),
       }).optional()
