@@ -37,6 +37,11 @@ COPY --from=builder /app/scripts ./scripts
 COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 
+RUN mkdir -p /data/app/uploads /data/app/backups /data/app/zvec \
+    && chown -R node:node /app /data/app
+
+USER node
+
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
