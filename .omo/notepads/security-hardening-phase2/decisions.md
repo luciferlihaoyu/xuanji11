@@ -50,3 +50,21 @@
   - `api/lib/backup-scheduler.ts` line ~198、~220: `error: errorMsg` → `error: "Internal backup error"`（真实异常已通过 `console.error` 记录，无需新增）。
 - **Files changed**: `api/lib/workflow-runtime.ts`, `api/lib/backup-scheduler.ts`
 - **Verification**: `npm run check` (tsc -b), `npm test -- --run` (13 tests passed), `npm run build` 全部通过。
+
+## 2026-07-07 Deployment (F1 Residual Error Leak Fix)
+
+### D10: GitHub Push + Zeabur Direct Deploy
+- **Decision**: Push F1 residual error message leak fix to `main`, then deploy via `npx zeabur@latest deploy --service-id 6a355024558aac447d432fdd --project-id 6a23dcd2f1be9943f1f95ca0`.
+- **Commits**: 2 atomic commits — `fix: redact error details in workflow-runtime and backup-scheduler`, `docs: record F1 residual error leak fix`.
+- **Service**: `https://xuanjj29.zeabur.app/`
+- **Health check**: `GET /health` → `200 OK` with `{"ok":true,"uptime":185,"dbConnected":true}`
+- **Runtime logs**: No errors observed; service booted cleanly.
+- **F1 重审确认**: 逐文件 grep `err\.message`，以下 8 个位置均无向 DB 或外部响应泄露 `err.message`：
+  - `api/agent-router.ts` ✅
+  - `api/datasource-router.ts` ✅
+  - `api/backup-router.ts` ✅
+  - `api/lib/ingestion.ts` ✅
+  - `api/connectors/115.ts` ✅
+  - `api/connectors/aliyundrive.ts` ✅
+  - `api/lib/workflow-runtime.ts` ✅
+  - `api/lib/backup-scheduler.ts` ✅（仅 `console.error` 日志使用 `errorMsg`，DB 字段统一写入 `"Internal backup error"`）
