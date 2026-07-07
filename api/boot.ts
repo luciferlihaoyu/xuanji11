@@ -29,7 +29,44 @@ declare module "hono" {
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 const mcp = createMcpHandler();
+
+// ========== 全局安全响应头中间件 ==========
+const securityHeadersMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> = async (c, next) => {
+  await next();
+
+  c.res.headers.set("X-Content-Type-Options", "nosniff");
+  c.res.headers.set("X-Frame-Options", "DENY");
+  c.res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  c.res.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+
+  const isLocalhost = ["localhost", "127.0.0.1", "[::1]"].includes(new URL(c.req.url).hostname);
+  if (env.isProduction && !isLocalhost) {
+    c.res.headers.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+  }
+
+  const cspDirectives = [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' blob: data:",
+    "font-src 'self'",
+    "connect-src 'self' https:",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ];
+  c.res.headers.set("Content-Security-Policy", cspDirectives.join("; "));
+};
+
+app.use(securityHeadersMiddleware);
+
 const csrfProtectedMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+function parsePositiveIntParam(value: string | undefined): number | undefined {
+  const id = Number(value);
+  if (!Number.isInteger(id) || id <= 0) return undefined;
+  return id;
+}
 
 function isCsrfExemptPath(path: string): boolean {
   return path === "/api/mcp" || path === "/api/mcp/sse" || /^\/api\/workflows\/[^/]+\/webhook$/.test(path);
@@ -215,8 +252,8 @@ app.delete("/api/upload/:id", async (c) => {
       return c.json({ success: false, error: "Authentication required" }, 401);
     }
 
-    const id = parseInt(c.req.param("id"));
-    if (isNaN(id)) return c.json({ success: false, error: "无效的文件ID" }, 400);
+    const id = parsePositiveIntParam(c.req.param("id"));
+    if (id === undefined) return c.json({ success: false, error: "无效的文件ID" }, 400);
 
     // 非管理员只能删除自己的文件
     if (user.role !== "admin") {
@@ -278,8 +315,8 @@ app.get("/api/upload/:id/ingestion", async (c) => {
       return c.json({ success: false, error: "Authentication required" }, 401);
     }
 
-    const id = parseInt(c.req.param("id"));
-    if (isNaN(id)) return c.json({ success: false, error: "无效的文件ID" }, 400);
+    const id = parsePositiveIntParam(c.req.param("id"));
+    if (id === undefined) return c.json({ success: false, error: "无效的文件ID" }, 400);
 
     const db = getDb();
     const items = await db
@@ -319,8 +356,8 @@ app.post("/api/workflows/:id/webhook", async (c) => {
       return c.json({ success: false, error: "Authentication required" }, 401);
     }
 
-    const id = parseInt(c.req.param("id"));
-    if (isNaN(id)) return c.json({ success: false, error: "无效的工作流 ID" }, 400);
+    const id = parsePositiveIntParam(c.req.param("id"));
+    if (id === undefined) return c.json({ success: false, error: "无效的工作流 ID" }, 400);
 
     const payload = await c.req.json().catch(() => ({}));
     const result = await triggerWebhookWorkflow(id, payload);
