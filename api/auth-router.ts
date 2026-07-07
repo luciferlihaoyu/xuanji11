@@ -3,7 +3,14 @@ import * as cookie from "cookie";
 import { TRPCError } from "@trpc/server";
 import { Session } from "@contracts/constants";
 import { getSessionCookieOptions } from "./lib/cookies";
-import { verifyAdminCredentials, signLocalToken, hashPassword } from "./local-auth";
+import {
+  verifyAdminCredentials,
+  signLocalToken,
+  hashPassword,
+  persistAdminPasswordChangedAt,
+  getClientIp,
+  isTrustedMutationRequest,
+} from "./local-auth";
 import { createRouter, publicQuery, adminQuery } from "./middleware";
 import { env } from "./lib/env";
 
@@ -22,7 +29,12 @@ export const authRouter = createRouter({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      const valid = await verifyAdminCredentials(input.username, input.password);
+      assertTrustedMutationRequest(ctx.req);
+      const valid = await verifyAdminCredentials(
+        input.username,
+        input.password,
+        getClientIp(ctx.req.headers),
+      );
       if (!valid) {
         throw new TRPCError({
           code: "UNAUTHORIZED",
@@ -77,10 +89,11 @@ export const authRouter = createRouter({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      assertTrustedMutationRequest(ctx.req);
       const username = ctx.user?.name ?? env.adminUsername;
 
       // 1. 验证当前密码
-      const valid = await verifyAdminCredentials(username, input.currentPassword);
+      const valid = await verifyAdminCredentials(username, input.currentPassword, getClientIp(ctx.req.headers));
       if (!valid) {
         throw new TRPCError({
           code: "UNAUTHORIZED",
@@ -112,6 +125,30 @@ export const authRouter = createRouter({
         });
       }
 
+      await persistAdminPasswordChangedAt(new Date());
+
+      const token = await signLocalToken(username);
+      const opts = getSessionCookieOptions(ctx.req.headers);
+      ctx.resHeaders.append(
+        "set-cookie",
+        cookie.serialize(Session.cookieName, token, {
+          httpOnly: opts.httpOnly,
+          path: opts.path,
+          sameSite: opts.sameSite?.toLowerCase() as "lax" | "none",
+          secure: opts.secure,
+          maxAge: Session.maxAgeMs / 1000,
+        }),
+      );
+
       return { success: true };
     }),
 });
+
+function assertTrustedMutationRequest(req: Request): void {
+  if (isTrustedMutationRequest(req)) return;
+
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: "Invalid request origin",
+  });
+}

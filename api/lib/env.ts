@@ -10,9 +10,13 @@ for (const key of requiredEnvVars) {
   }
 }
 
-// JWT 密钥：未设置时自动生成随机密钥
-const jwtSecret = process.env.JWT_SECRET ?? process.env.APP_SECRET ?? randomBytes(32).toString("hex");
-if (!process.env.JWT_SECRET && !process.env.APP_SECRET) {
+const configuredJwtSecret = process.env.JWT_SECRET;
+const jwtSecret = configuredJwtSecret || randomBytes(32).toString("hex");
+if (process.env.NODE_ENV === "production" && (!configuredJwtSecret || configuredJwtSecret.length < 32)) {
+  console.error("❌ 生产环境必须配置长度至少 32 字符的 JWT_SECRET");
+  process.exit(1);
+}
+if (!configuredJwtSecret) {
   console.warn("⚠️ 未设置 JWT_SECRET，已自动生成随机密钥（重启后失效，建议在环境变量中固定配置）");
 }
 

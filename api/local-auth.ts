@@ -15,6 +15,12 @@ import { env } from "./lib/env";
 import { Session } from "@contracts/constants";
 import { getSessionCookieOptions } from "./lib/cookies";
 import type { User } from "@db/schema";
+import {
+  clearLoginFailures,
+  createLoginAttempt,
+  isLoginLocked,
+  recordLoginFailure,
+} from "./login-rate-limit";
 
 const JWT_ALG = "HS256";
 const LOCAL_ADMIN_UNION_ID = "local_admin";
@@ -44,26 +50,36 @@ async function getStoredAdminPasswordHash(): Promise<string | null> {
   return null;
 }
 
-async function persistAdminPasswordHash(hash: string): Promise<void> {
+async function getAdminPasswordChangedAt(): Promise<Date | null> {
   const db = getDb();
-  const existing = await db
+  const results = await db
     .select()
     .from(systemSettings)
-    .where(eq(systemSettings.key, "admin_password_hash"));
+    .where(eq(systemSettings.key, "admin_password_changed_at"));
+  if (results.length === 0 || !results[0].value) return null;
+
+  const changedAt = new Date(results[0].value);
+  return Number.isNaN(changedAt.getTime()) ? null : changedAt;
+}
+
+async function persistSystemSetting(key: string, value: string): Promise<void> {
+  const db = getDb();
+  const existing = await db.select().from(systemSettings).where(eq(systemSettings.key, key));
 
   if (existing.length > 0) {
-    await db
-      .update(systemSettings)
-      .set({ value: hash, updatedAt: new Date() })
-      .where(eq(systemSettings.key, "admin_password_hash"));
+    await db.update(systemSettings).set({ value, updatedAt: new Date() }).where(eq(systemSettings.key, key));
     return;
   }
 
-  await db.insert(systemSettings).values({
-    key: "admin_password_hash",
-    value: hash,
-    category: "security",
-  });
+  await db.insert(systemSettings).values({ key, value, category: "security" });
+}
+
+async function persistAdminPasswordHash(hash: string): Promise<void> {
+  await persistSystemSetting("admin_password_hash", hash);
+}
+
+export async function persistAdminPasswordChangedAt(changedAt: Date): Promise<void> {
+  await persistSystemSetting("admin_password_changed_at", changedAt.toISOString());
 }
 
 function getEnvAdminPasswordHash(): string {
@@ -96,31 +112,54 @@ export async function hashPassword(password: string): Promise<string> {
 export async function verifyAdminCredentials(
   username: string,
   password: string,
+  clientIp = "unknown",
 ): Promise<boolean> {
-  if (username !== env.adminUsername) return false;
+  const loginAttempt = createLoginAttempt(username, clientIp);
+  const now = Date.now();
+  if (isLoginLocked(loginAttempt, now)) {
+    console.warn(`[Local Auth] Rejected locked login for ${clientIp}::${username}`);
+    return false;
+  }
+
+  if (username !== env.adminUsername) {
+    recordLoginFailure(loginAttempt, now);
+    return false;
+  }
   try {
     // 优先检查 system_settings 表中的密码
     const storedHash = await getStoredAdminPasswordHash();
     if (storedHash) {
       if (storedHash.startsWith("$2")) {
-        return bcrypt.compare(password, storedHash);
+        const valid = await bcrypt.compare(password, storedHash);
+        if (valid) clearLoginFailures(loginAttempt);
+        else recordLoginFailure(loginAttempt, now);
+        return valid;
       }
 
       const legacyValid = verifyLegacyScryptPassword(password, storedHash);
-      if (!legacyValid) return false;
+      if (!legacyValid) {
+        recordLoginFailure(loginAttempt, now);
+        return false;
+      }
 
       await persistAdminPasswordHash(await hashPassword(password));
+      clearLoginFailures(loginAttempt);
       return true;
     }
 
     // 回退到环境变量密码
     const envHash = getEnvAdminPasswordHash();
     const legacyValid = verifyLegacyScryptPassword(password, envHash);
-    if (!legacyValid) return false;
+    if (!legacyValid) {
+      recordLoginFailure(loginAttempt, now);
+      return false;
+    }
 
     await persistAdminPasswordHash(await hashPassword(password));
+    clearLoginFailures(loginAttempt);
     return true;
   } catch {
+    recordLoginFailure(loginAttempt, now);
     return false;
   }
 }
@@ -130,9 +169,10 @@ export async function signLocalToken(username: string): Promise<string> {
     username,
     type: "local",
     unionId: LOCAL_ADMIN_UNION_ID,
-  })
+    })
     .setProtectedHeader({ alg: JWT_ALG })
     .setIssuedAt()
+    .setJti(crypto.randomUUID())
     .setExpirationTime(LOCAL_TOKEN_EXPIRES_IN)
     .sign(getSecret());
 }
@@ -146,8 +186,16 @@ export async function verifyLocalToken(
       algorithms: [JWT_ALG],
       clockTolerance: 60,
     });
-    if (payload.type !== "local" || !payload.username) return null;
-    return { username: payload.username as string };
+    if (payload.type !== "local" || typeof payload.username !== "string" || typeof payload.iat !== "number") {
+      return null;
+    }
+
+    const passwordChangedAt = await getAdminPasswordChangedAt();
+    if (passwordChangedAt && payload.iat * 1000 + 999 < passwordChangedAt.getTime()) {
+      return null;
+    }
+
+    return { username: payload.username };
   } catch {
     return null;
   }
@@ -181,6 +229,10 @@ export async function authenticateLocalRequest(
 export function createLocalLoginHandler() {
   return async (c: Context) => {
     try {
+      if (!isTrustedMutationRequest(c.req.raw)) {
+        return c.json({ error: "Invalid request" }, 403);
+      }
+
       const body = await c.req.json();
       const { username, password } = body;
 
@@ -188,7 +240,7 @@ export function createLocalLoginHandler() {
         return c.json({ error: "Login required" }, 400);
       }
 
-      const valid = await verifyAdminCredentials(username, password);
+      const valid = await verifyAdminCredentials(username, password, getClientIp(c.req.raw.headers));
       if (!valid) {
         return c.json({ error: "Invalid credentials" }, 401);
       }
@@ -206,6 +258,18 @@ export function createLocalLoginHandler() {
       return c.json({ error: "Login failed" }, 500);
     }
   };
+}
+
+export function getClientIp(headers: Headers): string {
+  const forwardedFor = headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  return forwardedFor || headers.get("x-real-ip") || "unknown";
+}
+
+export function isTrustedMutationRequest(req: Request): boolean {
+  if (req.headers.get("x-requested-with") === "XMLHttpRequest") return true;
+
+  const origin = req.headers.get("origin");
+  return Boolean(origin && origin === new URL(req.url).origin);
 }
 
 export function createLocalLogoutHandler() {

@@ -7,11 +7,12 @@ function isLocalhost(headers: Headers): boolean {
 
 export function getSessionCookieOptions(headers: Headers): CookieOptions {
   const localhost = isLocalhost(headers);
+  const sameSite = process.env.COOKIE_SAMESITE === "None" ? "None" : "Lax";
 
   return {
     httpOnly: true,
     path: "/",
-    sameSite: localhost ? "Lax" : "None",
+    sameSite,
     secure: !localhost,
   };
 }

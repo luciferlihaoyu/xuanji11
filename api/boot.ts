@@ -29,6 +29,23 @@ declare module "hono" {
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 const mcp = createMcpHandler();
+const csrfProtectedMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+function isCsrfExemptPath(path: string): boolean {
+  return path === "/api/mcp" || path === "/api/mcp/sse" || /^\/api\/workflows\/[^/]+\/webhook$/.test(path);
+}
+
+const csrfMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> = async (c, next) => {
+  if (
+    csrfProtectedMethods.has(c.req.method) &&
+    !isCsrfExemptPath(c.req.path) &&
+    c.req.header("X-Requested-With") !== "XMLHttpRequest"
+  ) {
+    return c.json({ success: false, error: "Invalid request" }, 403);
+  }
+
+  return next();
+};
 
 // 文件上传路由（50MB 限制）
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
@@ -64,6 +81,7 @@ const authMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> = async (c, 
 };
 
 // 注册认证中间件到所有 /api/* 路由
+app.use("/api/*", csrfMiddleware);
 app.use("/api/*", authMiddleware);
 
 // MCP endpoint for AI agent access
@@ -134,8 +152,7 @@ app.post("/api/upload", async (c) => {
           uploadedFileId: result.id,
         });
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error("[Upload] Ingestion failed:", msg);
+        console.error("[Upload] Ingestion failed:", err);
         ingestionErrors.push({ file: result.originalName, error: "文件入库失败" });
       }
     }
@@ -309,7 +326,8 @@ app.post("/api/workflows/:id/webhook", async (c) => {
     const result = await triggerWebhookWorkflow(id, payload);
 
     if ("error" in result) {
-      return c.json({ success: false, error: result.error }, 400);
+      console.error("[Webhook] Trigger failed:", result.error);
+      return c.json({ success: false, error: "Webhook 触发失败" }, 400);
     }
 
     return c.json({ success: true, runId: result.runId });
@@ -331,7 +349,8 @@ app.get("/health", (c) => {
   try {
     const db = getDb();
     return c.json({ ok: true, uptime: Math.floor((Date.now() - startTime) / 1000), dbConnected: true });
-  } catch {
+  } catch (err) {
+    console.error("[Health] Error:", err);
     return c.json({ ok: true, uptime: Math.floor((Date.now() - startTime) / 1000), dbConnected: false }, 503);
   }
 });
