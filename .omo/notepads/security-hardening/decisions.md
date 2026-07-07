@@ -11,3 +11,9 @@
 - 下载统一 `Content-Disposition: attachment`、`X-Content-Type-Options: nosniff`，HTML/SVG/XML 等可执行或高风险扩展不允许作为上传扩展保留。
 - 非管理员下载必须显式校验 `uploadedBy === user.id`，不依赖线上数据库 FK。
 - 上传失败仅向客户端返回通用错误，详细错误只写服务端日志。
+
+## 2026-07-07 部署记录
+- 安全加固提交: `b50bd95 fix: enforce P0 security hardening`，已推送到 GitHub `main`。
+- 提交前复验: `npm run check` 通过，`npm run build` 通过。
+- Zeabur 直传部署: `project_id=6a23dcd2f1be9943f1f95ca0`，`service_id=6a355024558aac447d432fdd`，CLI 返回 `status: success`。
+- 线上健康检查: `https://xuanjj29.zeabur.app/health` 返回 HTTP 200，`ok: true`，`dbConnected: true`。
