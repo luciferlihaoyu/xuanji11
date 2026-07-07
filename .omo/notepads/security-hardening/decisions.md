@@ -18,3 +18,8 @@
 - 提交前复验: `npm run check` 通过，`npm run build` 通过。
 - Zeabur 直传部署: `project_id=6a23dcd2f1be9943f1f95ca0`，`service_id=6a355024558aac447d432fdd`，CLI 返回 `status: success`。
 - 线上健康检查: `https://xuanjj29.zeabur.app/health` 返回 HTTP 200，`ok: true`，`dbConnected: true`。
+
+## 2026-07-07 MCP 错误详情泄露修复部署记录
+- 修复提交: `85dbc19 fix: redact MCP error details`，已推送到 GitHub `main`。
+- Zeabur 重新直传部署: `project_id=6a23dcd2f1be9943f1f95ca0`，`service_id=6a355024558aac447d432fdd`，最新部署 ID `6a4cb38949ff5417a9a10a16`，状态 `RUNNING`。
+- 线上健康检查: `https://xuanjj29.zeabur.app/health` 返回 HTTP 200，`ok: true`，`dbConnected: true`。
