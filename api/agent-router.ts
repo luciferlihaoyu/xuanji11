@@ -6,6 +6,7 @@ import { getDb } from "./queries/connection";
 import { agents, apiKeys } from "@db/schema";
 import { clean } from "./lib/clean";
 import { logAudit } from "./lib/audit";
+import { scopesFromPermissions } from "./lib/auth";
 
 export const agentRouter = createRouter({
   list: authedQuery
@@ -137,20 +138,7 @@ export const agentRouter = createRouter({
 
       const [agent] = await db.select().from(agents).where(eq(agents.id, input.agentId));
       const permissions = agent?.permissions ?? {};
-      const scopes: string[] = [];
-      const permMap: Record<string, string[]> = {
-        read: ["knowledge:read", "documents:read", "workflows:read", "agents:read", "backups:read"],
-        write: ["knowledge:write", "documents:write", "workflows:write"],
-        delete: ["knowledge:delete", "documents:delete", "workflows:delete"],
-        manage: ["system:manage"],
-        triggerWorkflow: ["workflows:execute"],
-        executeWorkflow: ["workflows:execute"],
-        designWorkflow: ["workflows:design"],
-      };
-
-      for (const [perm, hasIt] of Object.entries(permissions)) {
-        if (hasIt && permMap[perm]) scopes.push(...permMap[perm]);
-      }
+      const scopes = scopesFromPermissions(permissions);
 
       const result = await db.insert(apiKeys).values(clean({
         name: input.name,

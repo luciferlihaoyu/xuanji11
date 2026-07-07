@@ -118,7 +118,6 @@ app.post("/api/upload", async (c) => {
           {
             success: false,
             error: "上传失败",
-            details: err instanceof Error ? err.message : String(err),
           },
           500,
         );
@@ -137,7 +136,7 @@ app.post("/api/upload", async (c) => {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error("[Upload] Ingestion failed:", msg);
-        ingestionErrors.push({ file: result.originalName, error: msg });
+        ingestionErrors.push({ file: result.originalName, error: "文件入库失败" });
       }
     }
 
@@ -153,7 +152,6 @@ app.post("/api/upload", async (c) => {
       {
         success: false,
         error: "上传失败",
-        details: err instanceof Error ? err.message : String(err),
       },
       500,
     );
@@ -181,11 +179,11 @@ app.get("/api/upload/list", async (c) => {
 
     return c.json({ success: true, files });
   } catch (err) {
+    console.error("[UploadList] Error:", err);
     return c.json(
       {
         success: false,
         error: "获取文件列表失败",
-        details: err instanceof Error ? err.message : String(err),
       },
       500,
     );
@@ -218,29 +216,40 @@ app.delete("/api/upload/:id", async (c) => {
     const success = await deleteUploadedFile(id);
     return c.json({ success });
   } catch (err) {
+    console.error("[UploadDelete] Error:", err);
     return c.json(
       {
         success: false,
         error: "删除失败",
-        details: err instanceof Error ? err.message : String(err),
       },
       500,
     );
   }
 });
 
-// 下载/查看上传的文件
-app.get("/api/files/:filename", async (c) => {
+// 下载上传的文件
+app.get("/api/files/:id", async (c) => {
   const user = c.get("user");
   if (!user) {
     return c.json({ success: false, error: "Authentication required" }, 401);
   }
 
-  const filename = c.req.param("filename");
-  const fileInfo = getFileStream(filename);
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ success: false, error: "无效的文件ID" }, 400);
+  }
+
+  const fileInfo = await getFileStream(id);
   if (!fileInfo) return c.json({ success: false, error: "文件不存在" }, 404);
 
-  c.header("Content-Type", fileInfo.mimeType);
+  if (user.role !== "admin" && fileInfo.file.uploadedBy !== user.id) {
+    return c.json({ success: false, error: "无权限下载此文件" }, 403);
+  }
+
+  const mimeType = fileInfo.file.mimeType || "application/octet-stream";
+  c.header("Content-Type", mimeType);
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(fileInfo.file.originalName)}`);
   // 使用 Bun 或 Node 的流式响应
   return new Response(fileInfo.stream as unknown as ReadableStream);
 });
@@ -265,11 +274,11 @@ app.get("/api/upload/:id/ingestion", async (c) => {
       .orderBy(desc(ingestionItems.createdAt));
     return c.json({ success: true, items });
   } catch (err) {
+    console.error("[UploadIngestion] Error:", err);
     return c.json(
       {
         success: false,
         error: "查询失败",
-        details: err instanceof Error ? err.message : String(err),
       },
       500,
     );
@@ -309,8 +318,7 @@ app.post("/api/workflows/:id/webhook", async (c) => {
     return c.json(
       {
         success: false,
-        error: err instanceof Error ? err.message : "Webhook 触发失败",
-        details: err instanceof Error ? err.message : String(err),
+        error: "Webhook 触发失败",
       },
       500,
     );

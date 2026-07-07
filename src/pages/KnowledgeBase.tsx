@@ -1,8 +1,13 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, type CSSProperties, type ReactNode } from 'react';
+import DOMPurify from 'dompurify';
+import { marked, Renderer } from 'marked';
+import type { Token, Tokens } from 'marked';
 import { useKbTree, useDocument } from '@/hooks/useKb';
 import { useAppStore } from '@/store/useAppStore';
 import { Search, Folder, FolderOpen, FileText, ChevronRight, ChevronDown, Plus, Pencil, Trash2, X, Check, FileCode, Image, File, Save, RotateCcw, Tag, MoreHorizontal } from 'lucide-react';
 import type { KbFolder, KbDocument } from '@db/schema';
+
+const markdownRenderer = new Renderer();
 
 const FileIcon = ({ type, size = 16 }: { type?: string; size?: number }) => {
   const props = { size, className: 'shrink-0' };
@@ -14,18 +19,133 @@ const FileIcon = ({ type, size = 16 }: { type?: string; size?: number }) => {
   }
 };
 
-function renderMarkdown(md: string): string {
-  return md
-    .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-bold mb-4 pb-2" style="color:var(--text-primary);border-bottom:1px solid var(--border-subtle)">$1</h1>')
-    .replace(/^## (.*$)/gim, '<h2 class="text-xl font-semibold mt-6 mb-3" style="color:var(--text-primary)">$1</h2>')
-    .replace(/^### (.*$)/gim, '<h3 class="text-base font-semibold mt-4 mb-2" style="color:var(--text-primary)">$1</h3>')
-    .replace(/\*\*(.*?)\*\*/g, '<strong style="color:var(--text-primary)">$1</strong>')
-    .replace(/\[\[(.*?)\]\]/g, '<a href="#/kb/$1" class="inline-block px-2.5 py-0.5 rounded-full text-xs font-medium" style="background:rgba(34,211,238,0.1);color:var(--accent-cyan)">$1</a>')
-    .replace(/#(\w+)/g, '<span class="inline-block px-2 py-0.5 rounded-full text-xs" style="background:rgba(167,139,250,0.1);color:var(--accent-violet)">#$1</span>')
-    .replace(/^- (.*$)/gim, '<li class="ml-4 mb-1 flex items-start gap-2"><span style="color:var(--text-muted)">•</span><span>$1</span></li>')
-    .replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre class="rounded-md p-4 my-4 overflow-x-auto text-xs" style="background:#0D1117;border:1px solid var(--border-subtle)"><code>$2</code></pre>')
-    .replace(/^> (.*$)/gim, '<blockquote class="pl-4 py-3 pr-4 my-4 rounded-r-md border-l-2" style="border-color:var(--accent-cyan);background:rgba(34,211,238,0.05);color:var(--text-secondary)">$1</blockquote>')
-    .replace(/^(?!<[hl]|<li|<tr|<td|<th|<pre|<blockquote|<a|<span|<strong)(.*$)/gim, '<p class="mb-3 text-sm leading-relaxed" style="color:var(--text-secondary)">$1</p>');
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderTagChips(text: string): string {
+  return text.replace(/#(\w+)/g, '<span class="inline-block px-2 py-0.5 rounded-full text-xs" style="background:rgba(167,139,250,0.1);color:var(--accent-violet)">#$1</span>');
+}
+
+function renderKnowledgeLinks(text: string): string {
+  let rendered = '';
+  let lastIndex = 0;
+  for (const match of text.matchAll(/\[\[(.*?)\]\]/g)) {
+    const index = match.index ?? 0;
+    const label = match[1] ?? '';
+    rendered += renderTagChips(text.slice(lastIndex, index));
+    rendered += `<a href="#/kb/${encodeURIComponent(label)}" class="inline-block px-2.5 py-0.5 rounded-full text-xs font-medium" style="background:rgba(34,211,238,0.1);color:var(--accent-cyan)">${label}</a>`;
+    lastIndex = index + match[0].length;
+  }
+  return rendered + renderTagChips(text.slice(lastIndex));
+}
+
+function renderInline(tokens: Token[]): string {
+  return marked.Parser.parseInline(tokens, { renderer: markdownRenderer });
+}
+
+function isSafeHref(href: string): boolean {
+  const trimmedHref = href.trim().toLowerCase();
+  return /^(https?:|mailto:|tel:|#\/kb\/|#(?!\w+:)|\/)(?!.*javascript:)/.test(trimmedHref);
+}
+
+function renderListItem({ tokens }: Tokens.ListItem): string {
+  return `<li class="ml-4 mb-1 flex items-start gap-2"><span style="color:var(--text-muted)">•</span><span>${marked.Parser.parse(tokens, { renderer: markdownRenderer })}</span></li>`;
+}
+
+markdownRenderer.html = ({ text }) => escapeHtml(text);
+markdownRenderer.heading = ({ tokens, depth }) => {
+  const content = renderInline(tokens);
+  if (depth === 1) {
+    return `<h1 class="text-2xl font-bold mb-4 pb-2" style="color:var(--text-primary);border-bottom:1px solid var(--border-subtle)">${content}</h1>`;
+  }
+  if (depth === 2) {
+    return `<h2 class="text-xl font-semibold mt-6 mb-3" style="color:var(--text-primary)">${content}</h2>`;
+  }
+  return `<h3 class="text-base font-semibold mt-4 mb-2" style="color:var(--text-primary)">${content}</h3>`;
+};
+markdownRenderer.strong = ({ tokens }) => `<strong style="color:var(--text-primary)">${renderInline(tokens)}</strong>`;
+markdownRenderer.link = ({ href, tokens }) => {
+  const content = renderInline(tokens);
+  return isSafeHref(href) ? `<a href="${escapeHtml(href)}" class="underline decoration-dotted hover:decoration-solid" style="color:var(--accent-cyan)">${content}</a>` : content;
+};
+markdownRenderer.list = ({ ordered, items }) => {
+  const body = items.map((item) => renderListItem(item)).join('');
+  return ordered ? `<ol>${body}</ol>` : `<ul>${body}</ul>`;
+};
+markdownRenderer.listitem = renderListItem;
+markdownRenderer.code = ({ text }) => `<pre class="rounded-md p-4 my-4 overflow-x-auto text-xs" style="background:#0D1117;border:1px solid var(--border-subtle)"><code>${escapeHtml(text)}</code></pre>`;
+markdownRenderer.codespan = ({ text }) => `<code class="px-1 py-0.5 rounded text-xs" style="background:#0D1117;color:var(--text-primary)">${escapeHtml(text)}</code>`;
+markdownRenderer.blockquote = ({ tokens }) => `<blockquote class="pl-4 py-3 pr-4 my-4 rounded-r-md border-l-2" style="border-color:var(--accent-cyan);background:rgba(34,211,238,0.05);color:var(--text-secondary)">${marked.Parser.parse(tokens, { renderer: markdownRenderer })}</blockquote>`;
+markdownRenderer.paragraph = ({ tokens }) => `<p class="mb-3 text-sm leading-relaxed" style="color:var(--text-secondary)">${renderInline(tokens)}</p>`;
+markdownRenderer.text = ({ text }) => renderKnowledgeLinks(escapeHtml(text));
+
+function sanitizeMarkdownHtml(html: string): string {
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ['h1', 'h2', 'h3', 'p', 'strong', 'a', 'span', 'ul', 'ol', 'li', 'pre', 'code', 'blockquote', 'br', 'em', 'del'],
+    ALLOWED_ATTR: ['class', 'style', 'href', 'title'],
+    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|#\/kb\/|#(?!\w+:)|\/)/i,
+    FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'svg', 'math', 'form', 'input', 'button', 'textarea', 'select', 'option'],
+  });
+}
+
+function parseMarkdownStyle(styleText: string): CSSProperties | undefined {
+  const style: CSSProperties = {};
+  for (const declaration of styleText.split(';')) {
+    const [property, value] = declaration.split(':').map((part) => part.trim());
+    if (!property || !value) continue;
+    if (property === 'color') style.color = value;
+    if (property === 'background') style.background = value;
+    if (property === 'background-color') style.backgroundColor = value;
+    if (property === 'border') style.border = value;
+    if (property === 'border-bottom') style.borderBottom = value;
+    if (property === 'border-color') style.borderColor = value;
+  }
+  return Object.keys(style).length > 0 ? style : undefined;
+}
+
+function markdownNodeToReact(node: ChildNode, key: string): ReactNode {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
+  if (node.nodeType !== Node.ELEMENT_NODE) return null;
+
+  const element = node as Element;
+  const children = Array.from(element.childNodes).map((child, index) => markdownNodeToReact(child, `${key}-${index}`));
+  const className = element.getAttribute('class') ?? undefined;
+  const style = parseMarkdownStyle(element.getAttribute('style') ?? '');
+  const href = element.getAttribute('href') ?? undefined;
+  const title = element.getAttribute('title') ?? undefined;
+
+  switch (element.tagName.toLowerCase()) {
+    case 'h1': return <h1 key={key} className={className} style={style}>{children}</h1>;
+    case 'h2': return <h2 key={key} className={className} style={style}>{children}</h2>;
+    case 'h3': return <h3 key={key} className={className} style={style}>{children}</h3>;
+    case 'p': return <p key={key} className={className} style={style}>{children}</p>;
+    case 'strong': return <strong key={key} className={className} style={style}>{children}</strong>;
+    case 'a': return <a key={key} className={className} style={style} href={href} title={title}>{children}</a>;
+    case 'span': return <span key={key} className={className} style={style}>{children}</span>;
+    case 'ul': return <ul key={key} className={className} style={style}>{children}</ul>;
+    case 'ol': return <ol key={key} className={className} style={style}>{children}</ol>;
+    case 'li': return <li key={key} className={className} style={style}>{children}</li>;
+    case 'pre': return <pre key={key} className={className} style={style}>{children}</pre>;
+    case 'code': return <code key={key} className={className} style={style}>{children}</code>;
+    case 'blockquote': return <blockquote key={key} className={className} style={style}>{children}</blockquote>;
+    case 'br': return <br key={key} />;
+    case 'em': return <em key={key} className={className} style={style}>{children}</em>;
+    case 'del': return <del key={key} className={className} style={style}>{children}</del>;
+    default: return children;
+  }
+}
+
+export function renderMarkdown(md: string): ReactNode[] {
+  const parsedHtml = marked.parse(md, { async: false, breaks: true, gfm: true, renderer: markdownRenderer });
+  const sanitizedHtml = sanitizeMarkdownHtml(parsedHtml);
+  const document = new DOMParser().parseFromString(`<div>${sanitizedHtml}</div>`, 'text/html');
+  return Array.from(document.body.firstElementChild?.childNodes ?? []).map((node, index) => markdownNodeToReact(node, `md-${index}`));
 }
 
 interface TreeNode {
@@ -481,7 +601,7 @@ export default function KnowledgeBase() {
               )}
               {(editMode === 'preview' || editMode === 'split') && (
                 <div className={`${editMode === 'split' ? 'w-1/2' : 'w-full'} overflow-auto`}>
-                  <div className="p-6 max-w-3xl mx-auto" dangerouslySetInnerHTML={{ __html: renderMarkdown(localContent) }} />
+                  <div className="p-6 max-w-3xl mx-auto">{renderMarkdown(localContent)}</div>
                 </div>
               )}
             </div>

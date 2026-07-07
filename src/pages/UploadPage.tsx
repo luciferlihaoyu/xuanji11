@@ -99,7 +99,7 @@ export default function UploadPage() {
           mimeType: f.mimeType as string,
           progress: 100,
           status: 'completed' as const,
-          url: `/api/files/${f.filename}`,
+          url: `/api/files/${f.id}`,
         }));
         setTasks(existing);
       }
