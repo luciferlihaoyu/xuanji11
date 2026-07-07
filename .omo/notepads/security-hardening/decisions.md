@@ -23,3 +23,4 @@
 - 修复提交: `85dbc19 fix: redact MCP error details`，已推送到 GitHub `main`。
 - Zeabur 重新直传部署: `project_id=6a23dcd2f1be9943f1f95ca0`，`service_id=6a355024558aac447d432fdd`，最新部署 ID `6a4cb38949ff5417a9a10a16`，状态 `RUNNING`。
 - 线上健康检查: `https://xuanjj29.zeabur.app/health` 返回 HTTP 200，`ok: true`，`dbConnected: true`。
+- F1 最后一个阻塞问题修复：`api/mcp-server.ts:191` 的 JSON-RPC 解析失败现在只返回通用 `Invalid JSON-RPC request`，`parsed.error.issues` 仅记录到服务端日志，不再回传给 MCP 调用方。

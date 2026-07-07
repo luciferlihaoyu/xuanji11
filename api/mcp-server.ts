@@ -188,7 +188,7 @@ async function callTool(call: McpToolCall, user: User, auth: AuthInfo): Promise<
 
 export async function handleMcpRequest(body: unknown, headers: Headers): Promise<JsonRpcResponse> {
   const parsed = z.object({ jsonrpc: z.literal("2.0").optional(), id: z.union([z.string(), z.number(), z.null()]).default(null), method: z.string(), params: z.unknown().optional() }).safeParse(body);
-  if (!parsed.success) return err(null, -32600, "Invalid JSON-RPC request", parsed.error.issues);
+  if (!parsed.success) { console.error("MCP invalid JSON-RPC request", parsed.error.issues); return err(null, -32600, "Invalid JSON-RPC request"); }
   const request = parsed.data;
   if (request.method === "initialize") return ok(request.id, { protocolVersion: "2024-11-05", serverInfo: { name: "xuanji-mcp", version: "1.0.0" }, capabilities: { tools: {} } });
   const identity = await authenticate(headers);
