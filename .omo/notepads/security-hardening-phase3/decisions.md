@@ -100,3 +100,34 @@
 - 本次仅做最小修复，未修改 schema / 数据库结构，未大规模重构。
 - 备份/恢复路径安全由输入层 `zod refine` + 执行层 `backup-path.ts` 双重防御，后续如新增连接器应复用同一套消毒逻辑。
 
+## 2026-07-07 部署 Phase 3（生产验证）
+
+### Git 提交（5 个原子 commit，均为 semantic style）
+1. `63eb542` `fix: prevent path traversal in backup/restore and NAS connector`
+   - `api/lib/backup-path.ts`（新增）+ `api/lib/backup-scheduler.ts` + `api/backup-router.ts` + `api/connectors/nas.ts`
+2. `a3b0fac` `feat: add global security response headers and positive-int param validation`
+   - `api/boot.ts`
+3. `c8e9a25` `fix: constrain max length on all user-facing search/query inputs`
+   - `api/agent-router.ts` + `api/file-router.ts` + `api/kb-router.ts` + `api/knowledge-router.ts` + `api/mcp-server.ts`
+4. `16fab18` `chore: fix dependency vulnerabilities via npm audit fix`
+   - `package-lock.json`
+5. `aa20136` `docs: record Phase 3 security hardening decisions, issues, and learnings`
+   - `.omo/notepads/security-hardening-phase3/`
+
+### Zeabur 部署
+- 部署方式：`npx zeabur@latest deploy --project-id 6a23dcd2f1be9943f1f95ca0 --service-id 6a355024558aac447d432fdd --json`
+- 目标环境：`6a23dcd295b39806d284a971`
+- 状态：RUNNING（finishedAt 2026-07-07T14:35:39Z）
+- 服务域名：`https://xuanjj29.zeabur.app`
+
+### 生产验证
+- `GET /health` → `200`，`{"ok":true,"uptime":148,"dbConnected":true}`
+- 安全响应头全部存在：
+  - `X-Frame-Options: DENY`
+  - `X-Content-Type-Options: nosniff`
+  - `Referrer-Policy: strict-origin-when-cross-origin`
+  - `Content-Security-Policy: default-src 'self'; …`
+  - `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`
+  - `Permissions-Policy: camera=(), microphone=(), geolocation=()`
+- 由于线上环境为 production（经 Zeabur 代理），且 hostname 非 localhost，HSTS 正确添加。
+
