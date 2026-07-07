@@ -32,3 +32,12 @@
 - **Service**: `https://xuanjj29.zeabur.app/`
 - **Health check**: `GET /health` → `200 OK` with `{"ok":true,"uptime":15,"dbConnected":true}`
 - **Runtime logs**: No errors observed; service booted cleanly, backup scheduler started, all migration checks passed.
+
+## 2026-07-07 Deployment (F1 Error Convergence)
+
+### D8: GitHub Push + Zeabur Direct Deploy
+- **Decision**: Push F1 error message convergence fix to `main`, then deploy via `npx zeabur@latest deploy --service-id 6a355024558aac447d432fdd`.
+- **Commits**: 4 atomic commits — `fix: converge error messages across API routes`, `fix: converge error messages in cloud connectors`, `docs: record F1 error convergence decisions`, `docs: record knowledge graph phases and learnings`.
+- **Service**: `https://xuanjj29.zeabur.app/`
+- **Health check**: `GET /health` → `200 OK` with `{"ok":true,"uptime":400,"dbConnected":true}`
+- **Runtime logs**: No errors observed; service booted cleanly.
