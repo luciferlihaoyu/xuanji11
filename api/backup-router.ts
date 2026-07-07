@@ -12,6 +12,7 @@ import { promises as fsp } from "fs";
 import { logAudit } from "./lib/audit";
 import { clean } from "./lib/clean";
 import { env } from "./lib/env";
+import { hasPathTraversal, sanitizeRelativePath, resolveRestoreDestPath } from "./lib/backup-path";
 
 const BACKUP_TARGETS = ["aliyundrive", "115", "nas", "local"] as const;
 
@@ -92,6 +93,10 @@ async function executeBackup(jobId: number, connectorConfig: Record<string, unkn
   }
 
   try {
+    if (hasPathTraversal(job.sourcePath)) {
+      throw new Error(`Invalid backup source path: ${job.sourcePath}`);
+    }
+
     const files: { relativePath: string; fullPath: string; size: number }[] = [];
     if (fs.existsSync(job.sourcePath)) {
       for await (const f of walkDir(job.sourcePath)) {
@@ -107,10 +112,11 @@ async function executeBackup(jobId: number, connectorConfig: Record<string, unkn
 
     for (const file of files) {
       try {
+        const safeRelativePath = sanitizeRelativePath(file.relativePath);
         const content = await fsp.readFile(file.fullPath);
         const checksum = sha256(content);
-        const destName = path.basename(file.relativePath);
-        const destDir = path.dirname(file.relativePath);
+        const destName = path.basename(safeRelativePath);
+        const destDir = path.dirname(safeRelativePath);
 
         if (connector.uploadFile) {
           const result = await connector.uploadFile(effectiveConfig, `${destDir}/${destName}`, content);
@@ -128,24 +134,25 @@ async function executeBackup(jobId: number, connectorConfig: Record<string, unkn
 
         await db.insert(backupJobFiles).values({
           jobId,
-          relativePath: file.relativePath,
+          relativePath: safeRelativePath,
           size: file.size,
           checksum,
           status: "uploaded",
         });
-        manifestFiles.push({ path: file.relativePath, size: file.size, checksum, status: "uploaded" });
+        manifestFiles.push({ path: safeRelativePath, size: file.size, checksum, status: "uploaded" });
         done++;
       } catch (err) {
         failed++;
-        console.error(`[Backup] Failed ${file.relativePath}:`, err);
+        const safeRelativePath = sanitizeRelativePath(file.relativePath);
+        console.error(`[Backup] Failed ${safeRelativePath}:`, err);
         await db.insert(backupJobFiles).values({
           jobId,
-          relativePath: file.relativePath,
+          relativePath: safeRelativePath,
           size: file.size,
           status: "failed",
           error: "Internal error",
         });
-        manifestFiles.push({ path: file.relativePath, size: file.size, checksum: "", status: "failed" });
+        manifestFiles.push({ path: safeRelativePath, size: file.size, checksum: "", status: "failed" });
       }
       await db.update(backupJobs).set({ filesDone: done, filesFailed: failed, progress: Math.round(((done + failed) / files.length) * 100) }).where(eq(backupJobs.id, jobId));
     }
@@ -176,6 +183,10 @@ async function executeRestore(restoreJobId: number): Promise<void> {
   await db.update(restoreJobs).set({ status: "running", startedAt: new Date() }).where(eq(restoreJobs.id, restoreJobId));
 
   try {
+    if (hasPathTraversal(job.targetPath)) {
+      throw new Error(`Invalid restore target path: ${job.targetPath}`);
+    }
+
     const files = await db.select().from(backupJobFiles).where(eq(backupJobFiles.jobId, job.backupJobId));
     await db.update(restoreJobs).set({ filesTotal: files.length }).where(eq(restoreJobs.id, restoreJobId));
 
@@ -191,14 +202,15 @@ async function executeRestore(restoreJobId: number): Promise<void> {
           continue;
         }
 
-        const destPath = path.join(job.targetPath, file.relativePath);
+        const safeRelativePath = sanitizeRelativePath(file.relativePath);
+        const destPath = resolveRestoreDestPath(job.targetPath, safeRelativePath);
         await fsp.mkdir(path.dirname(destPath), { recursive: true });
 
         const connector = getConnector(job.targetPath.startsWith("/") ? "nas" : "local") as CloudConnector | undefined;
         let content: Buffer | null = null;
 
         if (connector?.getDownloadUrl) {
-          const url = await connector.getDownloadUrl({ path: "/" }, file.relativePath);
+          const url = await connector.getDownloadUrl({ path: "/" }, safeRelativePath);
           if (url) {
             const res = await fetch(url);
             content = Buffer.from(await res.arrayBuffer());
@@ -270,7 +282,9 @@ export const backupRouter = createRouter({
     .input(
       z.object({
         target: z.enum(["aliyundrive", "115", "nas", "local"]),
-        sourcePath: z.string().min(1),
+        sourcePath: z.string().min(1).max(500).refine((p) => !hasPathTraversal(p), {
+          message: "sourcePath contains path traversal",
+        }),
         config: z.record(z.string(), z.unknown()).optional(),
         cron: z.string().max(100).optional(),
         enabled: z.boolean().default(false),
@@ -394,7 +408,9 @@ export const backupRouter = createRouter({
     .input(
       z.object({
         backupJobId: z.number(),
-        targetPath: z.string().min(1),
+        targetPath: z.string().min(1).max(500).refine((p) => !hasPathTraversal(p), {
+          message: "targetPath contains path traversal",
+        }),
       })
     )
     .mutation(async ({ input, ctx }) => {

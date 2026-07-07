@@ -8,6 +8,7 @@ import * as path from "path";
 import { createHash } from "crypto";
 import { promises as fsp } from "fs";
 import { env } from "./env";
+import { hasPathTraversal, sanitizeRelativePath, resolveRestoreDestPath } from "./backup-path";
 
 function sha256(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
@@ -142,6 +143,10 @@ async function executeBackupJob(jobId: number, connectorConfig: Record<string, u
   }
 
   try {
+    if (hasPathTraversal(job.sourcePath)) {
+      throw new Error(`Invalid backup source path: ${job.sourcePath}`);
+    }
+
     const files: { relativePath: string; fullPath: string; size: number }[] = [];
     if (fs.existsSync(job.sourcePath)) {
       for await (const f of walkDir(job.sourcePath)) {
@@ -158,10 +163,11 @@ async function executeBackupJob(jobId: number, connectorConfig: Record<string, u
 
     for (const file of files) {
       try {
+        const safeRelativePath = sanitizeRelativePath(file.relativePath);
         const content = await fsp.readFile(file.fullPath);
         const checksum = sha256(content);
-        const destName = path.basename(file.relativePath);
-        const destDir = path.dirname(file.relativePath);
+        const destName = path.basename(safeRelativePath);
+        const destDir = path.dirname(safeRelativePath);
 
         if (connector.uploadFile) {
           const result = await connector.uploadFile(effectiveConfig, `${destDir}/${destName}`, content);
@@ -179,25 +185,26 @@ async function executeBackupJob(jobId: number, connectorConfig: Record<string, u
 
         await db.insert(backupJobFiles).values({
           jobId,
-          relativePath: file.relativePath,
+          relativePath: safeRelativePath,
           size: file.size,
           checksum,
           status: "uploaded",
         });
-        manifestFiles.push({ path: file.relativePath, size: file.size, checksum, status: "uploaded" });
+        manifestFiles.push({ path: safeRelativePath, size: file.size, checksum, status: "uploaded" });
         done++;
       } catch (err) {
         failed++;
+        const safeRelativePath = sanitizeRelativePath(file.relativePath);
         const errorMsg = err instanceof Error ? err.message : String(err);
-        console.error(`[BackupScheduler] Job ${jobId}: failed to upload ${file.relativePath}: ${errorMsg}`);
+        console.error(`[BackupScheduler] Job ${jobId}: failed to upload ${safeRelativePath}: ${errorMsg}`);
         await db.insert(backupJobFiles).values({
           jobId,
-          relativePath: file.relativePath,
+          relativePath: safeRelativePath,
           size: file.size,
           status: "failed",
           error: "Internal backup error",
         });
-        manifestFiles.push({ path: file.relativePath, size: file.size, checksum: "", status: "failed" });
+        manifestFiles.push({ path: safeRelativePath, size: file.size, checksum: "", status: "failed" });
       }
       await db.update(backupJobs).set({ filesDone: done, filesFailed: failed, progress: Math.round(((done + failed) / files.length) * 100) }).where(eq(backupJobs.id, jobId));
     }

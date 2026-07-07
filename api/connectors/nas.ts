@@ -45,6 +45,9 @@ async function listNasFiles(basePath: string, parentId?: string, recursive = tru
 }
 
 async function uploadToNas(basePath: string, fileName: string, content: Buffer): Promise<{ success: boolean; path: string }> {
+  if (fileName.split(/[/\\\\]/).some((s) => s === "..") || path.isAbsolute(fileName)) {
+    throw new Error(`Invalid NAS upload path: ${fileName}`);
+  }
   const filePath = path.join(basePath, fileName);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content);
