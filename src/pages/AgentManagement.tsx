@@ -4,6 +4,7 @@ import type { Agent, AgentStatus, AgentType } from '@/store/useAppStore';
 import { useAgents } from '@/hooks/useAgents';
 import { trpcClient } from '@/providers/trpc';
 import PermissionSelector from '@/components/PermissionSelector';
+import { isSameDay, isWithinInterval, startOfDay, endOfDay, subDays } from 'date-fns';
 import { Search, Grid3X3, List, Plus, X, Activity, Shield, Zap, Users, Pencil, Trash2, Eye, EyeOff, KeyRound, Copy } from 'lucide-react';
 
 const ABILITY_LABELS = ['知识管理', '内容创作', '编程', '数据分析', '沟通', '学习'];
@@ -111,6 +112,14 @@ export default function AgentManagement() {
 
   const selectedAgentData = agents.find((a) => a.id === selectedAgent);
   const activeCount = agents.filter((a) => a.status === 'active').length;
+  const today = new Date();
+  const todayOps = agents.filter((a) => isSameDay(new Date(a.createdAt), today)).length;
+  const recent7d = agents.filter((a) =>
+    isWithinInterval(new Date(a.createdAt), {
+      start: startOfDay(subDays(today, 6)),
+      end: endOfDay(today),
+    })
+  ).length;
   const depts = [...new Set(agents.map((a) => a.department))];
 
   // Sync LLM config when selected agent changes
@@ -366,8 +375,8 @@ export default function AgentManagement() {
         {[
           { label: '全部 Agent', value: agents.length, icon: Users, color: 'var(--accent-cyan)' },
           { label: '活跃', value: activeCount, icon: Activity, color: 'var(--accent-emerald)' },
-          { label: '今日操作', value: 247, icon: Zap, color: 'var(--accent-cyan)' },
-          { label: '待审核', value: 3, icon: Shield, color: 'var(--accent-amber)' },
+          { label: '今日操作', value: todayOps, icon: Zap, color: 'var(--accent-cyan)' },
+          { label: '待审核', value: recent7d, icon: Shield, color: 'var(--accent-amber)' },
         ].map((stat) => (
           <div key={stat.label} className="card-base flex items-center justify-between">
             <div>

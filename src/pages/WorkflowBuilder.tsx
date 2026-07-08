@@ -29,6 +29,11 @@ interface CanvasEdge {
   targetClientId: string;
 }
 
+interface CanvasSnapshot {
+  nodes: WFNode[];
+  edges: WFEdge[];
+}
+
 const NODE_CATEGORIES: Record<string, { label: string; color: string; bg: string }> = {
   trigger: { label: '触发器', color: '#00e5ff', bg: 'rgba(0,229,255,0.1)' },
   processing: { label: '知识处理', color: '#a78bfa', bg: 'rgba(167,139,250,0.1)' },
@@ -147,7 +152,10 @@ export default function WorkflowBuilder() {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [draggingNode, setDraggingNode] = useState<string | null>(null);
+  const [dragType, setDragType] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [undoStack, setUndoStack] = useState<CanvasSnapshot[]>([]);
+  const [redoStack, setRedoStack] = useState<CanvasSnapshot[]>([]);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['trigger', 'processing', 'connection']));
   const [connectingFrom, setConnectingFrom] = useState<string | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
@@ -196,6 +204,8 @@ export default function WorkflowBuilder() {
     if (viewport.zoom !== undefined) setZoom(viewport.zoom);
 
     setSelectedNode(null);
+    setUndoStack([]);
+    setRedoStack([]);
   }, [workflowData]);
 
   useEffect(() => {
@@ -231,14 +241,60 @@ export default function WorkflowBuilder() {
     });
   };
 
+  const pushHistory = useCallback((snapshot: CanvasSnapshot) => {
+    setUndoStack((prev) => [...prev, snapshot]);
+    setRedoStack([]);
+  }, []);
+
+  const commitNodes = useCallback((update: (prev: WFNode[]) => WFNode[]) => {
+    pushHistory({ nodes, edges });
+    setNodes((prev) => update(prev));
+  }, [edges, nodes, pushHistory]);
+
+  const commitCanvas = useCallback((update: (snapshot: CanvasSnapshot) => CanvasSnapshot) => {
+    pushHistory({ nodes, edges });
+    const next = update({ nodes, edges });
+    setNodes(next.nodes);
+    setEdges(next.edges);
+  }, [edges, nodes, pushHistory]);
+
+  const handleUndo = useCallback(() => {
+    setUndoStack((prev) => {
+      const snapshot = prev.at(-1);
+      if (!snapshot) return prev;
+      setRedoStack((redoPrev) => [...redoPrev, { nodes, edges }]);
+      setNodes(snapshot.nodes);
+      setEdges(snapshot.edges);
+      return prev.slice(0, -1);
+    });
+  }, [edges, nodes]);
+
+  const handleRedo = useCallback(() => {
+    setRedoStack((prev) => {
+      const snapshot = prev.at(-1);
+      if (!snapshot) return prev;
+      setUndoStack((undoPrev) => [...undoPrev, { nodes, edges }]);
+      setNodes(snapshot.nodes);
+      setEdges(snapshot.edges);
+      return prev.slice(0, -1);
+    });
+  }, [edges, nodes]);
+
+  const handleFullscreen = useCallback(() => {
+    void document.documentElement.requestFullscreen().catch((err: unknown) => {
+      addToast({ type: 'error', title: '进入全屏失败', description: err instanceof Error ? err.message : String(err) });
+    });
+  }, [addToast]);
+
   const handleMouseDown = useCallback((e: React.MouseEvent, nodeId: string) => {
     e.stopPropagation();
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
+    pushHistory({ nodes, edges });
     setDraggingNode(nodeId);
     setDragOffset({ x: e.clientX - node.x * zoom - pan.x, y: e.clientY - node.y * zoom - pan.y });
     setSelectedNode(nodeId);
-  }, [nodes, zoom, pan]);
+  }, [edges, nodes, pan, pushHistory, zoom]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -281,7 +337,7 @@ export default function WorkflowBuilder() {
         if (!sourceNode || !targetNode) { setConnectingFrom(null); return; }
         const edgeId = `e-${sourceNode.clientId}-${targetNode.clientId}`;
         if (!edges.find((e) => e.source === connectingFrom && e.target === nodeId)) {
-          setEdges((prev) => [...prev, { id: edgeId, source: connectingFrom, target: nodeId }]);
+          commitCanvas((snapshot) => ({ ...snapshot, edges: [...snapshot.edges, { id: edgeId, source: connectingFrom, target: nodeId }] }));
           addToast({ type: 'success', title: '连线已创建' });
         }
         setConnectingFrom(null);
@@ -289,45 +345,77 @@ export default function WorkflowBuilder() {
     }
   };
 
-  const addNode = (type: string, category: string, label: string) => {
+  const addNode = (type: string) => {
     const clientId = generateClientId();
     const meta = getNodeMeta(type);
     const newNode: WFNode = {
       id: `tmp-${clientId}`,
       clientId,
       type,
-      category,
-      label,
+      category: meta.category,
+      label: meta.label,
       x: 200 + Math.random() * 200,
       y: 200 + Math.random() * 100,
       description: meta.desc,
       config: {},
       status: 'idle',
     };
-    setNodes((prev) => [...prev, newNode]);
+    commitNodes((prev) => [...prev, newNode]);
     setSelectedNode(newNode.id);
-    addToast({ type: 'success', title: `已添加「${label}」节点` });
+    addToast({ type: 'success', title: `已添加「${meta.label}」节点` });
+  };
+
+  const addNodeAtPosition = (type: string, position: { x: number; y: number }) => {
+    const clientId = generateClientId();
+    const meta = getNodeMeta(type);
+    const newNode: WFNode = {
+      id: `tmp-${clientId}`,
+      clientId,
+      type,
+      category: meta.category,
+      label: meta.label,
+      x: position.x,
+      y: position.y,
+      description: meta.desc,
+      config: {},
+      status: 'idle',
+    };
+    commitNodes((prev) => [...prev, newNode]);
+    setSelectedNode(newNode.id);
+    addToast({ type: 'success', title: `已添加「${meta.label}」节点` });
   };
 
   const deleteNode = (id: string) => {
-    setNodes((prev) => prev.filter((n) => n.id !== id));
-    setEdges((prev) => prev.filter((e) => e.source !== id && e.target !== id));
+    commitCanvas((snapshot) => ({
+      nodes: snapshot.nodes.filter((n) => n.id !== id),
+      edges: snapshot.edges.filter((e) => e.source !== id && e.target !== id),
+    }));
     setSelectedNode(null);
   };
 
   const duplicateNode = (node: WFNode) => {
     const clientId = generateClientId();
     const newNode: WFNode = { ...node, id: `tmp-${clientId}`, clientId, x: node.x + 30, y: node.y + 30, status: 'idle' };
-    setNodes((prev) => [...prev, newNode]);
+    commitNodes((prev) => [...prev, newNode]);
   };
 
   const updateNodeConfig = (id: string, patch: Partial<WFNode> | ((prev: WFNode) => Partial<WFNode>)) => {
-    setNodes((prev) => prev.map((n) => {
+    commitNodes((prev) => prev.map((n) => {
       if (n.id !== id) return n;
       const updates = typeof patch === 'function' ? patch(n) : patch;
       return { ...n, ...updates };
     }));
   };
+
+  const handleCanvasDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const type = dragType;
+    setDragType(null);
+    if (!type) return;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    addNodeAtPosition(type, { x: (e.clientX - rect.left - pan.x) / zoom, y: (e.clientY - rect.top - pan.y) / zoom });
+  }, [dragType, pan, zoom]);
 
   const buildCanvasEdges = (): CanvasEdge[] => {
     const clientIdById = new Map(nodes.map((n) => [n.id, n.clientId]));
@@ -472,7 +560,7 @@ export default function WorkflowBuilder() {
                 {expanded && (
                   <div className="pb-1">
                     {group.items.map((item) => (
-                      <div key={item.type} draggable onDragStart={() => {}} onClick={() => addNode(item.type, group.category, item.label)}
+                      <div key={item.type} draggable onDragStart={() => setDragType(item.type)} onDragEnd={() => setDragType(null)} onClick={() => addNode(item.type)}
                         className="flex items-center gap-2 px-3 py-1.5 mx-2 rounded cursor-pointer text-xs transition-colors hover:bg-white/5" style={{ color: 'var(--text-secondary)' }}>
                         <Plus className="w-3 h-3 shrink-0" style={{ color: catInfo.color }} />
                         <div><div className="font-medium" style={{ color: 'var(--text-primary)' }}>{item.label}</div><div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{item.desc}</div></div>
@@ -521,13 +609,13 @@ export default function WorkflowBuilder() {
             </div>
           </div>
           <div className="flex items-center gap-1">
-            <button className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-secondary)' }} title="撤销"><Undo2 className="w-4 h-4" /></button>
-            <button className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-secondary)' }} title="重做"><Redo2 className="w-4 h-4" /></button>
+            <button onClick={handleUndo} disabled={undoStack.length === 0} className="p-1.5 rounded hover:bg-white/5 disabled:opacity-40" style={{ color: 'var(--text-secondary)' }} title="撤销"><Undo2 className="w-4 h-4" /></button>
+            <button onClick={handleRedo} disabled={redoStack.length === 0} className="p-1.5 rounded hover:bg-white/5 disabled:opacity-40" style={{ color: 'var(--text-secondary)' }} title="重做"><Redo2 className="w-4 h-4" /></button>
             <div className="w-px h-5 mx-1" style={{ backgroundColor: 'var(--border-subtle)' }} />
             <button className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-secondary)' }} onClick={() => setZoom((z) => Math.max(0.25, z - 0.1))}><ZoomOut className="w-4 h-4" /></button>
             <span className="text-xs w-10 text-center font-mono" style={{ color: 'var(--text-muted)' }}>{Math.round(zoom * 100)}%</span>
             <button className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-secondary)' }} onClick={() => setZoom((z) => Math.min(2, z + 0.1))}><ZoomIn className="w-4 h-4" /></button>
-            <button className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-secondary)' }}><Maximize2 className="w-4 h-4" /></button>
+            <button onClick={handleFullscreen} className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-secondary)' }}><Maximize2 className="w-4 h-4" /></button>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -554,6 +642,7 @@ export default function WorkflowBuilder() {
         {/* Canvas Area */}
         <div ref={canvasRef} className="flex-1 relative overflow-hidden cursor-grab active:cursor-grabbing"
           style={{ backgroundColor: 'var(--bg-primary)' }}
+          onDragOver={(e) => e.preventDefault()} onDrop={handleCanvasDrop}
           onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseDown={handleCanvasMouseDown}>
           {/* Grid */}
           <div className="absolute inset-0 opacity-30 bg-grid" style={{ backgroundSize: `${20 * zoom}px ${20 * zoom}px`, transform: `translate(${pan.x % (20 * zoom)}px, ${pan.y % (20 * zoom)}px)` }} />
@@ -756,7 +845,7 @@ export default function WorkflowBuilder() {
                 </div>
               )}
               <div className="flex items-center gap-2 pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                <button className="btn-ghost text-xs py-1.5 flex items-center gap-1"><Power className="w-3.5 h-3.5" />禁用</button>
+                <button onClick={() => addToast({ type: 'info', title: '节点禁用功能开发中' })} className="btn-ghost text-xs py-1.5 flex items-center gap-1"><Power className="w-3.5 h-3.5" />禁用</button>
               </div>
             </div>
           </div>

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { User, BookOpen, Bot, Brain, HardDrive, Workflow, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
-import { useSettings, useVectorSettings, useAgentSettings } from '@/hooks/useSettings';
+import { useSettings, useVectorSettings, useAgentSettings, useStorageSettings, useAppearanceSettings } from '@/hooks/useSettings';
 import { trpcClient } from '@/providers/trpc';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -20,9 +20,12 @@ const SETTINGS_NAV = [
 
 export default function Settings() {
   const { category = 'personal' } = useParams();
+  const { user, logout } = useAuth();
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
-  const { user, logout } = useAuth();
+  const addToast = useAppStore((s) => s.addToast);
+  const storageSettings = useStorageSettings();
+  const appearanceSettings = useAppearanceSettings();
   const [showApiKey, setShowApiKey] = useState(false);
   const [showAgentToken, setShowAgentToken] = useState(false);
   const [testResult, setTestResult] = useState<'success' | 'fail' | null>(null);
@@ -44,11 +47,20 @@ export default function Settings() {
   const [changePwdError, setChangePwdError] = useState('');
   const [changePwdSuccess, setChangePwdSuccess] = useState(false);
   const [changePwdLoading, setChangePwdLoading] = useState(false);
-
-  // Vector settings from backend
+  const [personalForm, setPersonalForm] = useState({
+    nickname: '',
+    email: '',
+    timezone: 'Asia/Shanghai',
+    language: 'zh-CN',
+  });
+  const [appearanceForm, setAppearanceForm] = useState({
+    fontSize: '14',
+    codeFont: 'JetBrains Mono',
+  });
+  const [appearanceSaved, setAppearanceSaved] = useState(false);
   const vectorSettings = useVectorSettings();
   const agentSettings = useAgentSettings();
-  const { setMany, isSetting } = useSettings();
+  const { setSetting, setMany, isSetting } = useSettings();
 
   // Local form state for vectorization
   const [vectorForm, setVectorForm] = useState({
@@ -58,6 +70,32 @@ export default function Settings() {
     model: 'text-embedding-3-small',
     dimension: '1536',
   });
+  const [indexMode, setIndexMode] = useState('realtime');
+  const [similarityThreshold, setSimilarityThreshold] = useState(75);
+  const [vectorSaved, setVectorSaved] = useState(false);
+
+  useEffect(() => {
+    setPersonalForm((prev) => ({
+      ...prev,
+      nickname: user?.name ?? '管理员',
+      email: user?.email ?? 'admin@xuanji.io',
+    }));
+  }, [user?.name, user?.email]);
+
+  useEffect(() => {
+    if (!appearanceSettings.isLoading) {
+      setAppearanceForm({
+        fontSize: appearanceSettings.fontSize || '14',
+        codeFont: appearanceSettings.codeFont || 'JetBrains Mono',
+      });
+    }
+  }, [appearanceSettings.isLoading, appearanceSettings.fontSize, appearanceSettings.codeFont]);
+
+  useEffect(() => {
+    if (!vectorSaved) return;
+    const id = setTimeout(() => setVectorSaved(false), 3000);
+    return () => clearTimeout(id);
+  }, [vectorSaved]);
 
   // Local form state for agent
   const [agentForm, setAgentForm] = useState({
@@ -77,8 +115,11 @@ export default function Settings() {
         model: vectorSettings.model || 'text-embedding-3-small',
         dimension: vectorSettings.dimension || '1536',
       });
+      setIndexMode(vectorSettings.indexMode || 'realtime');
+      const parsed = Number.parseFloat(vectorSettings.similarityThreshold);
+      setSimilarityThreshold(Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed * 100))) : 75);
     }
-  }, [vectorSettings.isLoading, vectorSettings.provider, vectorSettings.apiUrl, vectorSettings.apiKey, vectorSettings.model, vectorSettings.dimension]);
+  }, [vectorSettings.isLoading, vectorSettings.provider, vectorSettings.apiUrl, vectorSettings.apiKey, vectorSettings.model, vectorSettings.dimension, vectorSettings.indexMode, vectorSettings.similarityThreshold]);
 
   useEffect(() => {
     if (!agentSettings.isLoading) {
@@ -115,7 +156,10 @@ export default function Settings() {
       { key: 'embedding_api_key', value: vectorForm.apiKey, category: 'vectorization' },
       { key: 'embedding_model', value: vectorForm.model, category: 'vectorization' },
       { key: 'embedding_dimension', value: vectorForm.dimension, category: 'vectorization' },
+      { key: 'embedding_index_mode', value: indexMode, category: 'vectorization' },
+      { key: 'embedding_similarity_threshold', value: (similarityThreshold / 100).toFixed(2), category: 'vectorization' },
     ]);
+    setVectorSaved(true);
   };
 
   const saveAgentSettings = async () => {
@@ -125,6 +169,18 @@ export default function Settings() {
       { key: 'heartbeat_interval', value: agentForm.heartbeat, category: 'agent' },
       { key: 'auto_reconnect', value: String(agentForm.autoReconnect), category: 'agent' },
     ]);
+  };
+
+  const saveAppearanceSettings = async () => {
+    await setMany([
+      { key: 'appearance_font_size', value: appearanceForm.fontSize, category: 'appearance' },
+      { key: 'appearance_code_font', value: appearanceForm.codeFont, category: 'appearance' },
+    ]);
+    setAppearanceSaved(true);
+  };
+
+  const saveAutoCleanupSetting = async (key: string, value: boolean) => {
+    await setSetting(key, String(value), 'storage');
   };
 
   const ToggleSwitch = ({ checked, onChange }: { checked: boolean; onChange: () => void }) => (
@@ -151,33 +207,68 @@ export default function Settings() {
                 <div>
                   <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>头像</label>
                   <div className="flex items-center gap-3">
-                    <div className="w-14 h-14 rounded-full flex items-center justify-center text-xl font-bold" style={{ background: 'linear-gradient(135deg, #22D3EE, #A78BFA)', color: '#0A0E1A' }}>U</div>
+                    <div className="w-14 h-14 rounded-full flex items-center justify-center text-xl font-bold" style={{ background: 'linear-gradient(135deg, #22D3EE, #A78BFA)', color: '#0A0E1A' }}>{user?.name?.[0] ?? 'U'}</div>
                     <button className="btn-secondary text-xs py-1.5 px-3">更换头像</button>
                   </div>
                 </div>
                 <div>
                   <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>昵称</label>
-                  <input type="text" defaultValue="管理员" className="input-base text-sm" />
+                  <input
+                    type="text"
+                    value={personalForm.nickname}
+                    onChange={(e) => setPersonalForm((prev) => ({ ...prev, nickname: e.target.value }))}
+                    className="input-base text-sm"
+                  />
                 </div>
                 <div>
                   <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>邮箱</label>
-                  <input type="email" defaultValue="admin@xuanji.io" className="input-base text-sm" />
+                  <input
+                    type="email"
+                    value={personalForm.email}
+                    onChange={(e) => setPersonalForm((prev) => ({ ...prev, email: e.target.value }))}
+                    className="input-base text-sm"
+                  />
                 </div>
                 <div>
                   <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>时区</label>
-                  <select className="input-base text-sm">
-                    <option>Asia/Shanghai (UTC+8)</option>
-                    <option>Asia/Tokyo (UTC+9)</option>
-                    <option>America/New_York (UTC-5)</option>
+                  <select
+                    value={personalForm.timezone}
+                    onChange={(e) => setPersonalForm((prev) => ({ ...prev, timezone: e.target.value }))}
+                    className="input-base text-sm"
+                  >
+                    <option value="Asia/Shanghai">Asia/Shanghai (UTC+8)</option>
+                    <option value="Asia/Tokyo">Asia/Tokyo (UTC+9)</option>
+                    <option value="America/New_York">America/New_York (UTC-5)</option>
                   </select>
                 </div>
                 <div>
                   <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>界面语言</label>
-                  <select className="input-base text-sm">
-                    <option>简体中文</option>
-                    <option>English</option>
-                    <option>日本語</option>
+                  <select
+                    value={personalForm.language}
+                    onChange={(e) => setPersonalForm((prev) => ({ ...prev, language: e.target.value }))}
+                    className="input-base text-sm"
+                  >
+                    <option value="zh-CN">简体中文</option>
+                    <option value="en-US">English</option>
+                    <option value="ja-JP">日本語</option>
                   </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'knowledge':
+        return (
+          <div className="space-y-6">
+            <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>知识库设置</h3>
+            <div className="max-w-lg space-y-4">
+              <div className="card-base p-4">
+                <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  知识库设置即将上线
+                </div>
+                <div className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+                  默认文件夹、默认文档格式等高级配置将在后续版本开放。
                 </div>
               </div>
             </div>
@@ -321,10 +412,21 @@ export default function Settings() {
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>索引更新模式</label>
                 <div className="flex gap-3">
-                  {['实时', '定时', '手动'].map((m) => (
-                    <label key={m} className="flex items-center gap-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                      <input type="radio" name="indexMode" defaultChecked={m === '实时'} className="accent-cyan" />
-                      {m}
+                  {[
+                    { label: '实时', value: 'realtime' },
+                    { label: '定时', value: 'scheduled' },
+                    { label: '手动', value: 'manual' },
+                  ].map((m) => (
+                    <label key={m.value} className="flex items-center gap-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                      <input
+                        type="radio"
+                        name="indexMode"
+                        value={m.value}
+                        checked={indexMode === m.value}
+                        onChange={() => setIndexMode(m.value)}
+                        className="accent-cyan"
+                      />
+                      {m.label}
                     </label>
                   ))}
                 </div>
@@ -332,8 +434,16 @@ export default function Settings() {
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>相似度阈值</label>
                 <div className="flex items-center gap-3">
-                  <input type="range" min={0} max={100} defaultValue={75} className="flex-1" style={{ accentColor: 'var(--accent-cyan)' }} />
-                  <span className="text-xs w-12" style={{ color: 'var(--accent-cyan)' }}>0.75</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={similarityThreshold}
+                    onChange={(e) => setSimilarityThreshold(Number(e.target.value))}
+                    className="flex-1"
+                    style={{ accentColor: 'var(--accent-cyan)' }}
+                  />
+                  <span className="text-xs w-12" style={{ color: 'var(--accent-cyan)' }}>{(similarityThreshold / 100).toFixed(2)}</span>
                 </div>
               </div>
               <div className="flex items-center gap-3 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
@@ -353,7 +463,11 @@ export default function Settings() {
                     <span className="flex items-center gap-1">
                       <Loader2 className="w-3.5 h-3.5 animate-spin" /> 保存中...
                     </span>
-                  ) : '保存'}
+                  ) : vectorSaved ? (
+                    <span className="flex items-center gap-1" style={{ color: 'var(--accent-emerald)' }}>
+                      <Check className="w-3.5 h-3.5" /> 已保存
+                    </span>
+                  ) : '保存设置'}
                 </button>
               </div>
             </div>
@@ -368,27 +482,36 @@ export default function Settings() {
               {/* Usage Pie */}
               <div className="card-base p-4">
                 <h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>存储使用</h4>
-                <div className="flex items-center gap-6">
-                  <svg viewBox="0 0 100 100" className="w-24 h-24">
-                    <circle cx="50" cy="50" r="40" fill="none" stroke="var(--bg-tertiary)" strokeWidth="12" />
-                    <circle cx="50" cy="50" r="40" fill="none" stroke="var(--accent-cyan)" strokeWidth="12" strokeDasharray={`${25 * 2.51} ${100 * 2.51}`} strokeDashoffset="0" transform="rotate(-90 50 50)" />
-                    <circle cx="50" cy="50" r="40" fill="none" stroke="var(--accent-violet)" strokeWidth="12" strokeDasharray={`${15 * 2.51} ${100 * 2.51}`} strokeDashoffset={-25 * 2.51} transform="rotate(-90 50 50)" />
-                    <circle cx="50" cy="50" r="40" fill="none" stroke="var(--accent-emerald)" strokeWidth="12" strokeDasharray={`${10 * 2.51} ${100 * 2.51}`} strokeDashoffset={-(25 + 15) * 2.51} transform="rotate(-90 50 50)" />
-                  </svg>
-                  <div className="space-y-1.5">
-                    {[
-                      { label: '文档', color: 'var(--accent-cyan)', value: '12.5 GB' },
-                      { label: '图片', color: 'var(--accent-violet)', value: '8.3 GB' },
-                      { label: '其他', color: 'var(--accent-emerald)', value: '5.2 GB' },
-                    ].map((item) => (
-                      <div key={item.label} className="flex items-center gap-2 text-xs">
-                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }} />
-                        <span style={{ color: 'var(--text-secondary)' }}>{item.label}</span>
-                        <span style={{ color: 'var(--text-muted)' }}>{item.value}</span>
-                      </div>
-                    ))}
+                {storageSettings.isLoading ? (
+                  <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-muted)' }}>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    加载中...
                   </div>
-                </div>
+                ) : !storageSettings.documents && !storageSettings.vectors && !storageSettings.backups ? (
+                  <div className="text-sm" style={{ color: 'var(--text-muted)' }}>暂无存储统计数据</div>
+                ) : (
+                  <div className="flex items-center gap-6">
+                    <svg viewBox="0 0 100 100" className="w-24 h-24">
+                      <circle cx="50" cy="50" r="40" fill="none" stroke="var(--bg-tertiary)" strokeWidth="12" />
+                      <circle cx="50" cy="50" r="40" fill="none" stroke="var(--accent-cyan)" strokeWidth="12" strokeDasharray={`${25 * 2.51} ${100 * 2.51}`} strokeDashoffset="0" transform="rotate(-90 50 50)" />
+                      <circle cx="50" cy="50" r="40" fill="none" stroke="var(--accent-violet)" strokeWidth="12" strokeDasharray={`${15 * 2.51} ${100 * 2.51}`} strokeDashoffset={-25 * 2.51} transform="rotate(-90 50 50)" />
+                      <circle cx="50" cy="50" r="40" fill="none" stroke="var(--accent-emerald)" strokeWidth="12" strokeDasharray={`${10 * 2.51} ${100 * 2.51}`} strokeDashoffset={-(25 + 15) * 2.51} transform="rotate(-90 50 50)" />
+                    </svg>
+                    <div className="space-y-1.5">
+                      {[
+                        { label: '文档', color: 'var(--accent-cyan)', value: storageSettings.documents || '—' },
+                        { label: '向量', color: 'var(--accent-violet)', value: storageSettings.vectors || '—' },
+                        { label: '备份', color: 'var(--accent-emerald)', value: storageSettings.backups || '—' },
+                      ].map((item) => (
+                        <div key={item.label} className="flex items-center gap-2 text-xs">
+                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }} />
+                          <span style={{ color: 'var(--text-secondary)' }}>{item.label}</span>
+                          <span style={{ color: 'var(--text-muted)' }}>{item.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Auto cleanup */}
@@ -400,19 +523,36 @@ export default function Settings() {
                       <div className="text-sm" style={{ color: 'var(--text-primary)' }}>删除回收站文件</div>
                       <div className="text-xs" style={{ color: 'var(--text-muted)' }}>超过 30 天自动删除</div>
                     </div>
-                    <ToggleSwitch checked={toggles.autoClassify} onChange={() => toggle('autoClassify')} />
+                    <ToggleSwitch
+                      checked={toggles.autoClassify}
+                      onChange={() => {
+                        toggle('autoClassify');
+                        void saveAutoCleanupSetting('storage_auto_cleanup_trash', !toggles.autoClassify);
+                      }}
+                    />
                   </div>
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="text-sm" style={{ color: 'var(--text-primary)' }}>压缩大文件</div>
                       <div className="text-xs" style={{ color: 'var(--text-muted)' }}>90 天未访问的文件自动压缩</div>
                     </div>
-                    <ToggleSwitch checked={false} onChange={() => {}} />
+                    <ToggleSwitch
+                      checked={toggles.autoVectorize}
+                      onChange={() => {
+                        toggle('autoVectorize');
+                        void saveAutoCleanupSetting('storage_auto_compress', !toggles.autoVectorize);
+                      }}
+                    />
                   </div>
                 </div>
               </div>
 
-              <button className="btn-danger text-xs py-2 px-4">立即清理缓存</button>
+              <button
+                onClick={() => addToast({ type: 'info', title: '请通过备份管理页面操作', description: '缓存清理功能请前往备份管理页面执行。' })}
+                className="btn-danger text-xs py-2 px-4"
+              >
+                立即清理缓存
+              </button>
             </div>
           </div>
         );
@@ -649,18 +789,44 @@ export default function Settings() {
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>界面字体大小</label>
                 <div className="flex items-center gap-2">
                   <span className="text-xs" style={{ color: 'var(--text-muted)' }}>A</span>
-                  <input type="range" min={12} max={18} defaultValue={14} className="flex-1" style={{ accentColor: 'var(--accent-cyan)' }} />
+                  <input
+                    type="range"
+                    min={12}
+                    max={18}
+                    value={appearanceForm.fontSize}
+                    onChange={(e) => setAppearanceForm((prev) => ({ ...prev, fontSize: e.target.value }))}
+                    className="flex-1"
+                    style={{ accentColor: 'var(--accent-cyan)' }}
+                  />
                   <span className="text-lg" style={{ color: 'var(--text-muted)' }}>A</span>
                 </div>
+                <div className="text-xs mt-1" style={{ color: 'var(--accent-cyan)' }}>{appearanceForm.fontSize}px</div>
               </div>
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>代码字体</label>
-                <select className="input-base text-sm">
+                <select
+                  value={appearanceForm.codeFont}
+                  onChange={(e) => setAppearanceForm((prev) => ({ ...prev, codeFont: e.target.value }))}
+                  className="input-base text-sm"
+                >
                   <option>JetBrains Mono</option>
                   <option>Fira Code</option>
                   <option>SF Mono</option>
                   <option>Consolas</option>
                 </select>
+              </div>
+              <div className="flex items-center gap-3 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                <button onClick={saveAppearanceSettings} disabled={isSetting} className="btn-primary text-xs py-2 px-4">
+                  {isSetting ? (
+                    <span className="flex items-center gap-1">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> 保存中...
+                    </span>
+                  ) : appearanceSaved ? (
+                    <span className="flex items-center gap-1" style={{ color: 'var(--accent-emerald)' }}>
+                      <Check className="w-3.5 h-3.5" /> 已保存
+                    </span>
+                  ) : '保存设置'}
+                </button>
               </div>
             </div>
           </div>

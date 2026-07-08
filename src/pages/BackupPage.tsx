@@ -322,6 +322,15 @@ export default function BackupPage() {
                     />
                   </div>
                 </div>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => addToast({ type: 'info', title: '请通过数据源管理页面测试连接' })}
+                    className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5"
+                  >
+                    <Wifi className="w-3.5 h-3.5" />测试连接
+                  </button>
+                </div>
                 {connectionStatus.result && (
                   <div className={`flex items-center gap-1.5 text-[10px] ${connectionStatus.result.success ? 'text-emerald-400' : 'text-rose-400'}`}>
                     {connectionStatus.result.success ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}

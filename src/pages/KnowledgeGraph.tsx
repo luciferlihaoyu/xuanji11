@@ -59,6 +59,8 @@ export default function KnowledgeGraph() {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const simulationRef = useRef<d3.Simulation<RenderNode, RenderEdge> | null>(null);
+  const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const visibleNodesRef = useRef<RenderNode[]>([]);
   const { agents, graphBgImage } = useAppStore();
   const {
     nodes: backendNodes,
@@ -86,6 +88,7 @@ export default function KnowledgeGraph() {
   );
   const [gravityStrength, setGravityStrength] = useState(50);
   const [nodeSpacing, setNodeSpacing] = useState(50);
+  const [viewMode, setViewMode] = useState<'nodes' | 'edges'>('nodes');
   const [isLoading, setIsLoading] = useState(true);
   const [entranceDone, setEntranceDone] = useState(false);
 
@@ -155,6 +158,7 @@ export default function KnowledgeGraph() {
         ...n,
         radius: Math.max(8, Math.min(28, 8 + n.tags.length * 3)),
       }));
+    visibleNodesRef.current = nodes;
 
     const nodeIds = new Set(nodes.map((n) => n.id));
     const links = renderEdges
@@ -165,6 +169,7 @@ export default function KnowledgeGraph() {
     const zoom = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.25, 2])
       .on('zoom', (event) => { g.attr('transform', event.transform.toString()); });
+    zoomRef.current = zoom;
     svg.call(zoom);
 
     // Arrow marker
@@ -194,11 +199,11 @@ export default function KnowledgeGraph() {
       .join('line')
       .attr('stroke', 'var(--border-active)')
       .attr('stroke-width', (d: RenderEdge) => d.strength * 0.5 + 1)
-      .attr('opacity', 0.4)
+      .attr('opacity', viewMode === 'edges' ? 0.55 : 0.25)
       .transition()
       .delay((_: unknown, i: number) => i * 30 + 500)
       .duration(800)
-      .attr('opacity', 0.6);
+      .attr('opacity', viewMode === 'edges' ? 0.85 : 0.45);
 
     // Flow dots
     const flowG = g.append('g');
@@ -207,7 +212,7 @@ export default function KnowledgeGraph() {
       .join('circle')
       .attr('r', 2)
       .attr('fill', 'var(--accent-cyan)')
-      .style('opacity', 0.5);
+      .style('opacity', viewMode === 'edges' ? 0.75 : 0.35);
 
     // Node groups
     // Drag behavior (must be defined before .call())
@@ -231,6 +236,7 @@ export default function KnowledgeGraph() {
       .selectAll('g')
       .data(nodes)
       .join('g')
+      .style('opacity', viewMode === 'edges' ? 0.55 : 1)
       .style('cursor', 'pointer')
       .call(dragHandler);
 
@@ -364,10 +370,75 @@ export default function KnowledgeGraph() {
     return () => {
       simulation.stop();
       simulationRef.current = null;
+      zoomRef.current = null;
+      visibleNodesRef.current = [];
       svg.on('.zoom', null); // remove zoom event listeners
       svg.selectAll('*').remove();
     };
-  }, [isLoading, isGraphLoading, renderNodes.length, renderEdges.length, gravityStrength, nodeSpacing, filteredCategories]);
+  }, [isLoading, isGraphLoading, renderNodes.length, renderEdges.length, gravityStrength, nodeSpacing, filteredCategories, viewMode]);
+
+  const handleFocusSelected = useCallback(() => {
+    const svgElement = svgRef.current;
+    const container = containerRef.current;
+    const zoom = zoomRef.current;
+    if (!svgElement || !container || !zoom || !selectedNodeId) {
+      addToastRef.current({ type: 'info', title: '请先选择一个节点' });
+      return;
+    }
+    const node = visibleNodesRef.current.find((n) => n.id === selectedNodeId);
+    if (!node) {
+      addToastRef.current({ type: 'warning', title: '选中节点当前不可见' });
+      return;
+    }
+    const scale = 1.2;
+    const transform = d3.zoomIdentity
+      .translate(container.clientWidth / 2 - (node.x ?? node.posX) * scale, container.clientHeight / 2 - (node.y ?? node.posY) * scale)
+      .scale(scale);
+    d3.select(svgElement).transition().duration(450).call(zoom.transform, transform);
+  }, [selectedNodeId]);
+
+  const handleResetView = useCallback(() => {
+    const svgElement = svgRef.current;
+    const zoom = zoomRef.current;
+    if (!svgElement || !zoom) return;
+    d3.select(svgElement).transition().duration(450).call(zoom.transform, d3.zoomIdentity);
+  }, []);
+
+  const handleExportGraph = useCallback(() => {
+    const svgElement = svgRef.current;
+    const container = containerRef.current;
+    if (!svgElement || !container) return;
+
+    const width = Math.max(1, container.clientWidth);
+    const height = Math.max(1, container.clientHeight);
+    const serializedSvg = new XMLSerializer().serializeToString(svgElement);
+    const svgBlob = new Blob([serializedSvg], { type: 'image/svg+xml;charset=utf-8' });
+    const objectUrl = URL.createObjectURL(svgBlob);
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        URL.revokeObjectURL(objectUrl);
+        return;
+      }
+      context.fillStyle = '#0a0e1a';
+      context.fillRect(0, 0, width, height);
+      context.drawImage(image, 0, 0, width, height);
+      const link = document.createElement('a');
+      link.download = `knowledge-graph-${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+      URL.revokeObjectURL(objectUrl);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      addToastRef.current({ type: 'error', title: '导出图谱失败' });
+    };
+    image.src = objectUrl;
+  }, []);
 
   const toggleCategory = useCallback((cat: string) => {
     setFilteredCategories((prev) => {
@@ -572,8 +643,8 @@ export default function KnowledgeGraph() {
           )}
         </div>
         <GraphControlPanel
-          viewMode="2D"
-          onViewModeChange={() => {}}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
           filteredCategories={filteredCategories}
           onToggleCategory={toggleCategory}
           gravityStrength={gravityStrength}
@@ -583,6 +654,9 @@ export default function KnowledgeGraph() {
           categoryLabels={CATEGORY_LABELS}
           categoryColors={CATEGORY_COLORS}
           nodeCounts={Object.fromEntries(Object.keys(CATEGORY_COLORS).map((cat) => [cat, renderNodes.filter((n) => n.category === cat).length]))}
+          onFocusSelected={handleFocusSelected}
+          onResetView={handleResetView}
+          onExportGraph={handleExportGraph}
         />
         {/* Background Upload */}
         <div className="mt-3 panel-floating p-3 w-[200px]">
@@ -733,6 +807,17 @@ export default function KnowledgeGraph() {
           >
             <Trash2 className="w-3.5 h-3.5" />
             删除节点
+          </button>
+          <button
+            onClick={() => {
+              setContextMenu(null);
+              addToast({ type: 'info', title: '节点禁用功能开发中' });
+            }}
+            className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <X className="w-3.5 h-3.5" />
+            禁用节点
           </button>
         </div>
       )}

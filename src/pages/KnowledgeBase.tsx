@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, type CSSProperties, type ReactNode } from 'react';
+import { useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import { marked, Renderer } from 'marked';
 import type { Token, Tokens } from 'marked';
@@ -226,6 +227,27 @@ function parseFolderId(id: string): number | null {
   return isNaN(n) ? null : n;
 }
 
+function extractInternalLinks(md: string): string[] {
+  const labels = new Set<string>();
+  for (const match of md.matchAll(/\[\[(.*?)\]\]/g)) {
+    const label = match[1]?.trim();
+    if (label) labels.add(label);
+  }
+  return [...labels];
+}
+
+function resolveInternalLink(label: string, documents: KbDocument[]): KbDocument | null {
+  const normalized = label.trim().toLowerCase();
+  return (
+    documents.find((doc) => {
+      const title = doc.title.trim().toLowerCase();
+      if (title === normalized) return true;
+      const titleWithoutExt = title.replace(/\.md$/, '');
+      return titleWithoutExt === normalized;
+    }) ?? null
+  );
+}
+
 // ===================== Tree Item Component =====================
 function TreeItem({ node, depth = 0, activeFile, onSelect, onRename, onDelete, onAdd, onMove }: {
   node: TreeNode; depth?: number; activeFile: string | null; onSelect: (id: string) => void;
@@ -297,10 +319,18 @@ function TreeItem({ node, depth = 0, activeFile, onSelect, onRename, onDelete, o
 
 // ===================== Main Page =====================
 export default function KnowledgeBase() {
+  const { path } = useParams<{ path: string }>();
   const { addToast } = useAppStore();
   const { folders, documents, isLoading, createFolder, updateFolder, deleteFolder, createDocument, updateDocument, deleteDocument } = useKbTree();
 
   const [activeFile, setActiveFile] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (path?.startsWith('doc-') || path?.startsWith('folder-')) {
+      setActiveFile(path);
+    }
+  }, [path]);
+
   const [editMode, setEditMode] = useState<'edit' | 'preview' | 'split'>('preview');
   const [rightPanel, setRightPanel] = useState<'outline' | 'links' | 'tags'>('outline');
   const [sidebarVisible, setSidebarVisible] = useState(true);
@@ -642,7 +672,28 @@ export default function KnowledgeBase() {
               </div>
             )}
             {rightPanel === 'links' && (
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>链接功能即将上线</div>
+              <div className="space-y-1">
+                {extractInternalLinks(localContent).map((label) => {
+                  const doc = resolveInternalLink(label, documents);
+                  return doc ? (
+                    <button
+                      key={label}
+                      onClick={() => setActiveFile(`doc-${doc.id}`)}
+                      className="block w-full text-left text-xs py-1 px-2 rounded hover:bg-white/5"
+                      style={{ color: 'var(--accent-cyan)' }}
+                    >
+                      {label}
+                    </button>
+                  ) : (
+                    <div key={label} className="text-xs py-1 px-2" style={{ color: 'var(--text-muted)' }}>
+                      {label}
+                    </div>
+                  );
+                })}
+                {extractInternalLinks(localContent).length === 0 && (
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>暂无内部链接</div>
+                )}
+              </div>
             )}
             {rightPanel === 'tags' && (
               <div className="flex flex-wrap gap-1.5">
