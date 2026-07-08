@@ -2,6 +2,9 @@
  * 璇玑向量引擎 — Zvec 持久化优先，未配置时回退到内置余弦相似度
  */
 
+// allow: SIZE_OK — 向量引擎是持有私有可变状态（collection / zvecInitialized / fallbackStore）的单体模块，
+// 嵌入配置、请求、解析逻辑是 vectorEngine 的私有辅助函数；拆分会暴露内部状态并增加耦合。
+
 import * as fs from "fs";
 import * as path from "path";
 import zvec from "@zvec/zvec";
@@ -53,11 +56,27 @@ interface EmbeddingConfig {
   dimension: number;
 }
 
+type EmbeddingProvider = "openai" | "volcengine";
+
+function detectProvider(url: string): EmbeddingProvider {
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes("ark.cn-beijing.volces.com")) return "volcengine";
+  } catch {
+    // fall through to default
+  }
+  return "openai";
+}
+
+function defaultEmbeddingDimension(model: string): number {
+  return model.includes("doubao-embedding-vision") ? 2048 : 1536;
+}
+
 function getEmbeddingConfig(): EmbeddingConfig {
   const url = process.env.LLM_API_URL || "";
   const key = process.env.LLM_API_KEY || "";
   const model = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
-  const dimension = parseInt(process.env.EMBEDDING_DIMENSION || "1536", 10) || 1536;
+  const dimension = parseInt(process.env.EMBEDDING_DIMENSION || String(defaultEmbeddingDimension(model)), 10) || defaultEmbeddingDimension(model);
   return { enabled: Boolean(url && key), url, key, model, dimension };
 }
 
@@ -73,7 +92,8 @@ async function loadEmbeddingConfig(): Promise<EmbeddingConfig> {
     const url = settings.get("embedding_api_url") || process.env.LLM_API_URL || "";
     const key = settings.get("embedding_api_key") || process.env.LLM_API_KEY || "";
     const model = settings.get("embedding_model") || process.env.EMBEDDING_MODEL || "text-embedding-3-small";
-    const dimension = parseInt(settings.get("embedding_dimension") || process.env.EMBEDDING_DIMENSION || "1536", 10) || 1536;
+    const rawDimension = settings.get("embedding_dimension") || process.env.EMBEDDING_DIMENSION;
+    const dimension = rawDimension ? parseInt(rawDimension, 10) || defaultEmbeddingDimension(model) : defaultEmbeddingDimension(model);
     return { enabled: Boolean(url && key), url, key, model, dimension };
   } catch (err) {
     console.warn("[VectorEngine] Failed to load embedding config from DB, falling back to env:", err instanceof Error ? err.message : String(err));
@@ -84,18 +104,29 @@ async function loadEmbeddingConfig(): Promise<EmbeddingConfig> {
 async function fetchEmbeddings(texts: string[]): Promise<number[][]> {
   const cfg = await loadEmbeddingConfig();
   if (!cfg.enabled) throw new Error("Embedding provider not configured");
-  const res = await fetch(new URL("/embeddings", cfg.url).toString(), {
+  const isVolcengine = detectProvider(cfg.url) === "volcengine";
+  const endpoint = isVolcengine ? new URL("/embeddings/multimodal", cfg.url) : new URL("/embeddings", cfg.url);
+  const body = isVolcengine
+    ? { model: cfg.model, input: texts.map((text) => ({ type: "text", text })), encoding_format: "float", ...(cfg.model.includes("doubao-embedding-vision") ? { dimensions: cfg.dimension } : {}) }
+    : { input: texts, model: cfg.model, encoding_format: "float" };
+  const res = await fetch(endpoint.toString(), {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.key}` },
-    body: JSON.stringify({ input: texts, model: cfg.model, encoding_format: "float" }),
+    body: JSON.stringify(body),
   });
+  const rawText = await res.text().catch(() => "");
+  const payload = (() => { try { return JSON.parse(rawText); } catch { return undefined; } })();
+  const errPayload = payload as { error?: { code?: string; message?: string } } | undefined;
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Embedding API ${res.status}: ${body.slice(0, 200)}`);
+    throw new Error(`Embedding API ${res.status}: ${errPayload?.error?.message ? `${errPayload.error.code ?? "error"}: ${errPayload.error.message}` : rawText.slice(0, 200)}`);
   }
-  const data = (await res.json()) as { data?: Array<{ embedding?: number[]; index?: number }>; error?: { message?: string } };
-  if (data.error?.message) throw new Error(data.error.message);
-  const embeddings = (data.data ?? []).slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map((d) => d.embedding ?? []);
+  if (errPayload?.error?.message) throw new Error(`${errPayload.error.code ?? "Embedding API error"}: ${errPayload.error.message}`);
+  const data = payload as { data?: Array<{ embedding?: number[] | number[][]; index?: number }> } | undefined;
+  const embeddings = (data?.data ?? []).slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map((d) => {
+    if (!isVolcengine) return Array.isArray(d.embedding) ? (d.embedding as number[]) : [];
+    const nested = Array.isArray(d.embedding) ? (d.embedding as number[][])[0] : undefined;
+    return Array.isArray(nested) ? nested : [];
+  });
   if (embeddings.length !== texts.length) throw new Error(`Embedding API returned ${embeddings.length} vectors for ${texts.length} texts`);
   return embeddings;
 }
