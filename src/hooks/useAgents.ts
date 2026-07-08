@@ -1,3 +1,5 @@
+import { useMemo } from "react";
+import { trpcClient } from "@/providers/trpc";
 import { trpc } from "@/providers/trpc";
 import type { Agent, AgentPermission, AgentStatus, AgentType } from "@/store/useAppStore";
 
@@ -8,6 +10,7 @@ type CreateAgentInput = Omit<Agent, "id" | "status" | "lastHeartbeat"> & {
 
 export interface UiAgent extends Agent {
   config: Record<string, unknown>;
+  createdAt: Date | string;
 }
 
 function toUiAgent(dbAgent: {
@@ -16,6 +19,7 @@ function toUiAgent(dbAgent: {
   description: string | null;
   type: AgentType;
   status: AgentStatus;
+  createdAt: Date | string;
   updatedAt: Date | string;
   config: Record<string, unknown> | null;
   permissions: Record<string, unknown> | null;
@@ -52,6 +56,7 @@ function toUiAgent(dbAgent: {
       : ["知识管理"],
     avatar: dbAgent.name?.charAt(0) || "A",
     knowledgeAccess: String(config.knowledgeAccess || "指定文件夹"),
+    createdAt: dbAgent.createdAt,
     permissions: {
       read: perms.read !== false,
       write: perms.write !== false,
@@ -129,6 +134,26 @@ function toUpdateInput(
   };
 }
 
+export interface ApiKey {
+  id: number;
+  name: string;
+  keyPrefix: string | null;
+  scopes: string[] | null;
+  isActive: "true" | "false" | string;
+  expiresAt: Date | string | null;
+  lastUsedAt: Date | string | null;
+  createdAt: Date | string;
+}
+
+export interface GeneratedApiKey {
+  id: number;
+  key: string;
+  keyPrefix: string;
+  name: string;
+  scopes: string[];
+  message: string;
+}
+
 export function useAgents() {
   const utils = trpc.useUtils();
 
@@ -148,9 +173,11 @@ export function useAgents() {
     onSuccess: () => utils.agent.list.invalidate(),
   });
   const testLlmMutation = trpc.agent.testLlmConnection.useMutation();
+  const generateApiKeyMutation = trpc.agent.generateApiKey.useMutation();
+  const revokeApiKeyMutation = trpc.agent.revokeApiKey.useMutation();
 
   return {
-    agents: (listQuery.data ?? []).map(toUiAgent),
+    agents: useMemo(() => (listQuery.data ?? []).map(toUiAgent), [listQuery.data]),
     isLoading: listQuery.isLoading,
     create: async (
       data: CreateAgentInput,
@@ -179,11 +206,26 @@ export function useAgents() {
     }) => {
       return testLlmMutation.mutateAsync(params);
     },
+    listApiKeys: async (agentId: string) => {
+      const keys = await trpcClient.agent.listApiKeys.query({ agentId: Number(agentId) });
+      return keys as ApiKey[];
+    },
+    generateApiKey: async (agentId: string, name: string) => {
+      return generateApiKeyMutation.mutateAsync({
+        agentId: Number(agentId),
+        name: name.trim(),
+      }) as Promise<GeneratedApiKey>;
+    },
+    revokeApiKey: async (keyId: number) => {
+      return revokeApiKeyMutation.mutateAsync({ keyId });
+    },
     isCreating: createMutation.isPending,
     isUpdating: updateMutation.isPending,
     isDeleting: deleteMutation.isPending,
     isUpdatingPermissions: updatePermissionsMutation.isPending,
     isTestingLlm: testLlmMutation.isPending,
+    isGeneratingApiKey: generateApiKeyMutation.isPending,
+    isRevokingApiKey: revokeApiKeyMutation.isPending,
   };
 }
 

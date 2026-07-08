@@ -7,6 +7,8 @@ const VECTOR_KEYS = [
   "embedding_api_key",
   "embedding_model",
   "embedding_dimension",
+  "embedding_index_mode",
+  "embedding_similarity_threshold",
 ] as const;
 
 const AGENT_KEYS = [
@@ -68,6 +70,8 @@ export function useVectorSettings() {
   const apiKey = useSettingValue("embedding_api_key");
   const model = useSettingValue("embedding_model");
   const dimension = useSettingValue("embedding_dimension");
+  const indexMode = useSettingValue("embedding_index_mode");
+  const similarityThreshold = useSettingValue("embedding_similarity_threshold");
 
   return {
     provider: provider.data?.value ?? "",
@@ -75,12 +79,40 @@ export function useVectorSettings() {
     apiKey: apiKey.data?.value ?? "",
     model: model.data?.value ?? "",
     dimension: dimension.data?.value ?? "",
+    indexMode: indexMode.data?.value ?? "",
+    similarityThreshold: similarityThreshold.data?.value ?? "",
     isLoading:
       provider.isLoading ||
       apiUrl.isLoading ||
       apiKey.isLoading ||
       model.isLoading ||
-      dimension.isLoading,
+      dimension.isLoading ||
+      indexMode.isLoading ||
+      similarityThreshold.isLoading,
+  };
+}
+
+export function useAppearanceSettings() {
+  const fontSize = useSettingValue("appearance_font_size");
+  const codeFont = useSettingValue("appearance_code_font");
+
+  return {
+    fontSize: fontSize.data?.value ?? "14",
+    codeFont: codeFont.data?.value ?? "JetBrains Mono",
+    isLoading: fontSize.isLoading || codeFont.isLoading,
+  };
+}
+
+export function useStorageSettings() {
+  const documents = useSettingValue("storage_documents_size");
+  const vectors = useSettingValue("storage_vectors_size");
+  const backups = useSettingValue("storage_backups_size");
+
+  return {
+    documents: documents.data?.value ?? "",
+    vectors: vectors.data?.value ?? "",
+    backups: backups.data?.value ?? "",
+    isLoading: documents.isLoading || vectors.isLoading || backups.isLoading,
   };
 }
 

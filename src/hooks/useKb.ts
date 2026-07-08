@@ -36,6 +36,6 @@ export function useKbTree() {
   };
 }
 
-export function useDocument(id: number) {
-  return trpc.kb.getDocument.useQuery({ id });
+export function useDocument(id: number, options?: { enabled?: boolean }) {
+  return trpc.kb.getDocument.useQuery({ id }, { enabled: options?.enabled ?? id > 0 });
 }
