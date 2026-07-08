@@ -1,8 +1,8 @@
 import { RotateCcw, Focus, Download, Hexagon } from 'lucide-react';
 
 interface GraphControlPanelProps {
-  viewMode: '2D';
-  onViewModeChange: (mode: '2D') => void;
+  viewMode: 'nodes' | 'edges';
+  onViewModeChange: (mode: 'nodes' | 'edges') => void;
   filteredCategories: Set<string>;
   onToggleCategory: (cat: string) => void;
   gravityStrength: number;
@@ -12,11 +12,15 @@ interface GraphControlPanelProps {
   categoryLabels: Record<string, string>;
   categoryColors: Record<string, string>;
   nodeCounts: Record<string, number>;
+  onFocusSelected: () => void;
+  onResetView: () => void;
+  onExportGraph: () => void;
 }
 
 export default function GraphControlPanel({
-  filteredCategories, onToggleCategory, gravityStrength, onGravityChange,
+  viewMode, onViewModeChange, filteredCategories, onToggleCategory, gravityStrength, onGravityChange,
   nodeSpacing, onSpacingChange, categoryLabels, categoryColors, nodeCounts,
+  onFocusSelected, onResetView, onExportGraph,
 }: GraphControlPanelProps) {
   return (
     <div className="panel-floating p-3 w-[200px] sci-corner">
@@ -56,6 +60,10 @@ export default function GraphControlPanel({
       <div className="pt-3 mb-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>
         <span className="text-[10px] font-medium uppercase tracking-wide block mb-2" style={{ color: 'var(--text-muted)' }}>布局参数</span>
         <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-1">
+            <button type="button" onClick={() => onViewModeChange('nodes')} className={`text-[10px] py-1 rounded ${viewMode === 'nodes' ? 'btn-secondary' : 'btn-ghost'}`}>节点</button>
+            <button type="button" onClick={() => onViewModeChange('edges')} className={`text-[10px] py-1 rounded ${viewMode === 'edges' ? 'btn-secondary' : 'btn-ghost'}`}>边</button>
+          </div>
           <div>
             <div className="flex justify-between text-[10px] mb-1 font-mono" style={{ color: 'var(--text-muted)' }}>
               <span>引力</span><span>{gravityStrength}%</span>
@@ -77,9 +85,9 @@ export default function GraphControlPanel({
 
       {/* Actions */}
       <div className="pt-2 space-y-1" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-        <button className="btn-secondary w-full text-xs py-1.5 flex items-center justify-center gap-1.5"><Focus className="w-3.5 h-3.5" />聚焦选中</button>
-        <button className="btn-ghost w-full text-xs py-1.5 flex items-center justify-center gap-1.5"><RotateCcw className="w-3.5 h-3.5" />重置视图</button>
-        <button className="btn-ghost w-full text-xs py-1.5 flex items-center justify-center gap-1.5"><Download className="w-3.5 h-3.5" />导出图谱</button>
+        <button type="button" onClick={onFocusSelected} className="btn-secondary w-full text-xs py-1.5 flex items-center justify-center gap-1.5"><Focus className="w-3.5 h-3.5" />聚焦选中</button>
+        <button type="button" onClick={onResetView} className="btn-ghost w-full text-xs py-1.5 flex items-center justify-center gap-1.5"><RotateCcw className="w-3.5 h-3.5" />重置视图</button>
+        <button type="button" onClick={onExportGraph} className="btn-ghost w-full text-xs py-1.5 flex items-center justify-center gap-1.5"><Download className="w-3.5 h-3.5" />导出图谱</button>
       </div>
     </div>
   );

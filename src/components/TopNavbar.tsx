@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Search, Bell, Settings, Command, Menu, X, Orbit } from 'lucide-react';
+import { trpc } from '@/providers/trpc';
+import { useAppStore } from '@/store/useAppStore';
 import ThemeSwitch from './ThemeSwitch';
 
 const navItems = [
@@ -17,8 +19,20 @@ const navItems = [
 
 export default function TopNavbar() {
   const location = useLocation();
+  const [searchQuery, setSearchQuery] = useState('');
   const [searchFocus, setSearchFocus] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const addToast = useAppStore((state) => state.addToast);
+  const { data: user } = trpc.auth.me.useQuery();
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return;
+    const trimmed = searchQuery.trim();
+    if (!trimmed) return;
+    window.location.hash = '/search?q=' + encodeURIComponent(trimmed);
+  };
+
+  const userInitial = (user?.name?.charAt(0).toUpperCase() ?? 'U');
 
   return (
     <nav
@@ -95,8 +109,11 @@ export default function TopNavbar() {
             placeholder="搜索知识、文件、Agent..."
             className="flex-1 bg-transparent text-sm outline-none"
             style={{ color: 'var(--text-primary)' }}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
             onFocus={() => setSearchFocus(true)}
             onBlur={() => setSearchFocus(false)}
+            onKeyDown={handleSearchKeyDown}
           />
           <span
             className="flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] rounded font-mono"
@@ -116,6 +133,8 @@ export default function TopNavbar() {
           style={{ color: 'var(--text-muted)' }}
           onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--accent-cyan)')}
           onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
+          onClick={() => addToast({ type: 'info', title: '通知功能开发中' })}
+          aria-label="通知"
         >
           <Bell className="w-4 h-4" />
           <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--accent-red)', boxShadow: '0 0 4px var(--accent-red)' }} />
@@ -140,7 +159,7 @@ export default function TopNavbar() {
             boxShadow: '0 0 6px var(--accent-cyan-dim)',
           }}
         >
-          U
+          {userInitial}
         </div>
 
         <button className="lg:hidden p-2 rounded-md ml-1" style={{ color: 'var(--text-muted)' }} onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
