@@ -131,3 +131,56 @@
   - `Permissions-Policy: camera=(), microphone=(), geolocation=()`
 - 由于线上环境为 production（经 Zeabur 代理），且 hostname 非 localhost，HSTS 正确添加。
 
+## 2026-07-08 向量化模型设置：索引更新模式与相似度阈值控件 wired-up
+
+### 背景
+`src/pages/Settings.tsx` 的「向量化模型」tab 中，「索引更新模式」（实时/定时/手动）radio 和「相似度阈值」slider 只有视觉表现，没有 state、onChange 或保存逻辑。
+
+### 修改内容
+1. `src/hooks/useSettings.ts`：
+   - `VECTOR_KEYS` 增加 `embedding_index_mode`、`embedding_similarity_threshold`。
+   - `useVectorSettings()` 增加这两个 key 的 `useSettingValue` 查询并返回对应字符串值。
+
+2. `src/pages/Settings.tsx`：
+   - 新增 `indexMode` state（默认 `"realtime"`）、`similarityThreshold` state（默认 `75`）。
+   - `useEffect` 在 `vectorSettings` 加载完成后，将后端值写入 state；阈值字符串解析为 0-100 整数并 clamp。
+   - 索引模式 radio 改为受控：`checked={indexMode === value}`，`onChange={() => setIndexMode(value)}`。
+   - 相似度阈值 slider 改为受控：`value={similarityThreshold}`，`onChange` 更新 state，显示文本实时更新为 `(value / 100).toFixed(2)`。
+   - `saveVectorSettings` 将 `indexMode` 保存为 `embedding_index_mode`，将阈值保存为 `embedding_similarity_threshold`（小数字符串，如 `"0.75"`）。
+   - 保存按钮增加成功反馈：保存完成后显示绿色勾 + "已保存"，3 秒后自动恢复为 "保存设置"；使用 `useEffect` 管理并清理定时器。
+
+### 验证
+- `npm run check`：通过。
+- `npm test -- --run`：5 个测试文件、13 个测试全部通过。
+- `npm run build`：成功。
+- 未引入新 npm 依赖。
+
+## 2026-07-08 向量引擎：支持火山引擎 Volcengine Ark `doubao-embedding-vision` 嵌入模型
+
+### 背景
+原有 `api/lib/vector.ts` 的 `fetchEmbeddings()` 仅兼容 OpenAI 格式（`/embeddings` + `string[]` input + 扁平 `embedding` 数组）。火山引擎 Ark 的 `doubao-embedding-vision` 模型需要：
+- 端点 `/embeddings/multimodal`
+- 请求体 `input: [{ type: "text", text: ... }]`
+- 响应 `embedding` 为嵌套数组 `[[...]]`，需取第一个元素
+- 错误格式 `{ error: { code, message } }`
+
+### 修改内容
+1. `api/lib/vector.ts`：
+   - 新增 `detectProvider(url)`：基于 URL hostname 判断，若包含 `ark.cn-beijing.volces.com` 返回 `"volcengine"`，否则 `"openai"`。
+   - 新增 `defaultEmbeddingDimension(model)`：当模型名包含 `doubao-embedding-vision` 且未显式设置 dimension 时默认 `2048`，其余模型保持 `1536`。
+   - 修改 `getEmbeddingConfig()` 与 `loadEmbeddingConfig()`：未设置 `EMBEDDING_DIMENSION` / `embedding_dimension` 时调用 `defaultEmbeddingDimension(model)`。
+   - 修改 `fetchEmbeddings()`：
+     - Volcengine 分支：请求 `/embeddings/multimodal`，body 为 `{ model, input: [{ type: "text", text }], encoding_format: "float", dimensions? }`（仅 `doubao-embedding-vision` 模型且未显式降维时附加 `dimensions`）。
+     - 解析响应时安全取 `data[i].embedding[0]`，避免嵌套数组缺失时崩溃。
+     - OpenAI 分支保持原有逻辑不变。
+   - 统一错误解析：先读取响应文本并尝试解析 JSON，非 2xx 响应优先提取 `error.code` / `error.message`；2xx 响应也会检查 `error.message`。
+
+### 环境说明
+- 若使用 `dimensions: 1024` 降维，需同步将 `ZVEC_DIMENSION` 环境变量设为对应值（如 `1024`），否则 `normalizeVector` 会截断或补零。
+
+### 验证
+- `npm run check`：通过。
+- `npm test -- --run`：5 个测试文件、13 个测试全部通过。
+- `npm run build`：成功。
+- 未引入新 npm 依赖，未修改 schema / 数据库。
+
