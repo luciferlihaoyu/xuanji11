@@ -30,6 +30,7 @@ export default function Settings() {
   const [showAgentToken, setShowAgentToken] = useState(false);
   const [testResult, setTestResult] = useState<'success' | 'fail' | null>(null);
   const [testLoading, setTestLoading] = useState(false);
+  const [testError, setTestError] = useState('');
   const [toggles, setToggles] = useState<Record<string, boolean>>({
     autoClassify: true,
     autoVectorize: true,
@@ -138,12 +139,19 @@ export default function Settings() {
 
   const testConnection = async () => {
     setTestResult(null);
+    setTestError('');
     setTestLoading(true);
     try {
       const result = await trpcClient.knowledge.vectorHealth.query();
-      setTestResult(result.ok ? 'success' : 'fail');
-    } catch {
+      if (result.ok) {
+        setTestResult('success');
+      } else {
+        setTestResult('fail');
+        setTestError((result as { error?: string }).error || '连接失败，请检查配置');
+      }
+    } catch (err: unknown) {
       setTestResult('fail');
+      setTestError(err && typeof err === 'object' && 'message' in err ? String(err.message) : '连接失败，请检查配置');
     } finally {
       setTestLoading(false);
     }
@@ -334,6 +342,10 @@ export default function Settings() {
                     <span className="flex items-center gap-1" style={{ color: 'var(--accent-emerald)' }}>
                       <Check className="w-3.5 h-3.5" /> 连接成功
                     </span>
+                  ) : testResult === 'fail' ? (
+                    <span className="flex items-center gap-1" style={{ color: '#ef4444' }} title={testError}>
+                      ✕ 连接失败
+                    </span>
                   ) : '测试连接'}
                 </button>
                 <button onClick={saveAgentSettings} disabled={isSetting} className="btn-primary text-xs py-2 px-4">
@@ -455,6 +467,10 @@ export default function Settings() {
                   ) : testResult === 'success' ? (
                     <span className="flex items-center gap-1" style={{ color: 'var(--accent-emerald)' }}>
                       <Check className="w-3.5 h-3.5" /> 连接成功
+                    </span>
+                  ) : testResult === 'fail' ? (
+                    <span className="flex items-center gap-1" style={{ color: '#ef4444' }} title={testError}>
+                      ✕ 连接失败
                     </span>
                   ) : '测试连接'}
                 </button>
