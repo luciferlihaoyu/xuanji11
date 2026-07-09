@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useBackups, useBackup } from '@/hooks/useBackups';
+import { useConnectorConfig } from '@/hooks/useConnectorConfig';
 import { useAppStore } from '@/store/useAppStore';
-import { Archive, RotateCcw, Plus, Loader2, CheckCircle2, AlertCircle, Clock, ChevronDown, ChevronUp, X, HardDrive, FolderOpen, Server, Trash2, Calendar, Wifi, WifiOff } from 'lucide-react';
+import { Archive, RotateCcw, Plus, Loader2, CheckCircle2, AlertCircle, Clock, ChevronDown, ChevronUp, X, HardDrive, FolderOpen, Server, Trash2, Calendar, Wifi, WifiOff, RefreshCw, Save } from 'lucide-react';
 
 const TARGET_ICONS: Record<string, typeof HardDrive> = {
   local: HardDrive,
@@ -115,6 +116,53 @@ export default function BackupPage() {
 
   const { data: selectedBackup } = useBackup(selectedBackupId ?? 0);
 
+  const connector = useConnectorConfig(target);
+
+  useEffect(() => {
+    if (connector.config) {
+      setAccessToken((connector.config.accessToken as string) ?? '');
+      setRefreshToken((connector.config.refreshToken as string) ?? '');
+      setConnectionStatus({ testing: false });
+    }
+  }, [connector.config]);
+
+  const handleTestConnection = async () => {
+    setConnectionStatus({ testing: true });
+    try {
+      const result = await connector.test({ accessToken, refreshToken });
+      setConnectionStatus({ testing: false, result });
+    } catch (err) {
+      setConnectionStatus({
+        testing: false,
+        result: { success: false, message: err instanceof Error ? err.message : String(err) },
+      });
+    }
+  };
+
+  const handleSaveConfig = async () => {
+    try {
+      await connector.save({ accessToken, refreshToken });
+      addToast({ type: 'success', title: '配置已保存' });
+    } catch (err) {
+      addToast({ type: 'error', title: '保存失败', description: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const handleRefreshToken = async () => {
+    try {
+      const result = await connector.refresh({ accessToken, refreshToken });
+      if (result.success && result.accessToken && result.refreshToken) {
+        setAccessToken(result.accessToken);
+        setRefreshToken(result.refreshToken);
+        addToast({ type: 'success', title: 'Token 已刷新' });
+      } else {
+        addToast({ type: 'error', title: '刷新失败', description: result.message });
+      }
+    } catch (err) {
+      addToast({ type: 'error', title: '刷新失败', description: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
   const availableTargets = targets.filter((t) => t.available);
 
   const isCloudDrive = target === '115' || target === 'aliyundrive';
@@ -143,8 +191,6 @@ export default function BackupPage() {
       await create(payload as { target: typeof target; sourcePath: string; config?: Record<string, string>; cron?: string; enabled?: boolean; keepLastN?: number });
       addToast({ type: 'success', title: mode === 'scheduled' ? '备份策略已创建' : '备份任务已创建' });
       setShowCreate(false);
-      setAccessToken('');
-      setRefreshToken('');
       setConnectionStatus({ testing: false });
     } catch (err) {
       addToast({ type: 'error', title: '创建失败', description: err instanceof Error ? err.message : String(err) });
@@ -322,13 +368,33 @@ export default function BackupPage() {
                     />
                   </div>
                 </div>
-                <div className="flex justify-end">
+                <div className="flex justify-end gap-2">
                   <button
                     type="button"
-                    onClick={() => addToast({ type: 'info', title: '请通过数据源管理页面测试连接' })}
-                    className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5"
+                    onClick={handleRefreshToken}
+                    disabled={connector.isRefreshing || !refreshToken}
+                    className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50"
                   >
-                    <Wifi className="w-3.5 h-3.5" />测试连接
+                    {connector.isRefreshing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                    刷新 Token
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveConfig}
+                    disabled={connector.isSaving || (!accessToken && !refreshToken)}
+                    className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    {connector.isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                    保存配置
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleTestConnection}
+                    disabled={connectionStatus.testing || (!accessToken && !refreshToken)}
+                    className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    {connectionStatus.testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}
+                    测试连接
                   </button>
                 </div>
                 {connectionStatus.result && (
