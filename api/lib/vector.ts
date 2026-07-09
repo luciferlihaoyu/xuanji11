@@ -301,7 +301,7 @@ export const vectorEngine = {
   async healthCheck(): Promise<{ ok: boolean; engine: string; size: number; mode: "empty" | "indexed"; provider: string; model: string; error?: string; dimension?: number }> {
     const cfg = await loadEmbeddingConfig();
     const size = this.size;
-    const base = { engine: env.zvecEnabled ? "zvec" : cfg.enabled ? "embedding-api" : "cosine-fallback", size, mode: size === 0 ? "empty" : "indexed", provider: cfg.enabled ? cfg.url : "hash-fallback", model: cfg.enabled ? cfg.model : "simple-hash-64" as const };
+    const base = { engine: env.zvecEnabled ? "zvec" : cfg.enabled ? "embedding-api" : "cosine-fallback", size, mode: (size === 0 ? "empty" : "indexed") as "empty" | "indexed", provider: cfg.enabled ? cfg.url : "hash-fallback", model: cfg.enabled ? cfg.model : "simple-hash-64" as const };
     if (!cfg.enabled) return { ...base, ok: true };
     try {
       const [vector] = await fetchEmbeddings(["ping"]);
