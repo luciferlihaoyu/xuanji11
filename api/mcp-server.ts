@@ -12,6 +12,7 @@ import { clean } from "./lib/clean";
 import { runDueBackupSchedules } from "./lib/backup-scheduler";
 import { executeWorkflow } from "./lib/workflow-runtime";
 import { zvecTools, handleZvecTool } from "./mcp-zvec-tools";
+import { hybridSearchTool, handleHybridSearch } from "./mcp-hybrid-search";
 import type { AuthenticatedIdentity, AuthInfo } from "./lib/auth";
 import { authenticateApiKey, hasScope, sessionAuth } from "./lib/auth";
 import { authenticateLocalRequest } from "./local-auth";
@@ -63,6 +64,7 @@ const tools: readonly McpTool[] = [
   { name: "workflow_list", description: "List workflows", inputSchema: { type: "object", properties: { status: { type: "string", description: "Optional workflow status filter" } } } },
   { name: "workflow_execute", description: "Execute a workflow", inputSchema: { type: "object", properties: { id: { type: "number", description: "Workflow id" }, input: { type: "object", description: "Workflow input payload" } }, required: ["id"] } },
   ...zvecTools,
+  hybridSearchTool,
 ];
 
 function ok(id: JsonRpcId, result: unknown): JsonRpcResponse {
@@ -191,6 +193,8 @@ async function callTool(call: McpToolCall, user: User, auth: AuthInfo): Promise<
     case "zvec.addDocuments":
     case "zvec.deleteCollection":
       return handleZvecTool(call.name, call.arguments, auth);
+    case "search.hybrid":
+      return handleHybridSearch(call.arguments, auth);
     default: return { content: [{ type: "text", text: `Unknown tool: ${call.name}` }], isError: true };
   }
 }
