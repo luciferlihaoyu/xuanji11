@@ -2,8 +2,9 @@ import { Hono, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { HttpBindings } from "@hono/node-server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { appRouter } from "./router";
+import { appRouter, zvecRouter } from "./router";
 import { createContext } from "./context";
+import type { AuthInfo } from "./lib/auth";
 import { env } from "./lib/env";
 import { Paths } from "@contracts/constants";
 import { saveUploadedFile, deleteUploadedFile, getFileStream } from "./upload-handler";
@@ -24,6 +25,7 @@ initializeZvec();
 declare module "hono" {
   interface ContextVariableMap {
     user: User;
+    auth: AuthInfo;
   }
 }
 
@@ -69,7 +71,7 @@ function parsePositiveIntParam(value: string | undefined): number | undefined {
 }
 
 function isCsrfExemptPath(path: string): boolean {
-  return path === "/api/mcp" || path === "/api/mcp/sse" || /^\/api\/workflows\/[^/]+\/webhook$/.test(path);
+  return path === "/api/mcp" || path === "/api/mcp/sse" || path.startsWith("/api/zvec/") || /^\/api\/workflows\/[^/]+\/webhook$/.test(path);
 }
 
 const csrfMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> = async (c, next) => {
@@ -102,6 +104,7 @@ const authMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> = async (c, 
     path === "/health" ||
     path === "/api/mcp" ||
     path === "/api/mcp/sse" ||
+    path.startsWith("/api/zvec/") ||
     path.startsWith("/api/trpc/") ||
     path === Paths.oauthCallback
   ) {
@@ -132,6 +135,9 @@ app.post("/api/mcp", async (c) => {
 app.get("/api/mcp/sse", (c) => {
   return mcp.createMcpSseResponse(c.req.raw.headers);
 });
+
+// ZVec REST API
+app.route("/api/zvec", zvecRouter);
 
 // ========== 认证状态路由 ==========
 app.get("/api/auth/me", async (c) => {

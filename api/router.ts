@@ -10,6 +10,7 @@ import { settingRouter } from "./setting-router";
 import { backupRouter } from "./backup-router";
 import { ingestionRouter } from "./ingestion-router";
 import { connectorRouter } from "./connector-router";
+import { zvecRouter } from "./zvec-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -27,5 +28,7 @@ export const appRouter = createRouter({
   ingestion: ingestionRouter,
   connector: connectorRouter,
 });
+
+export { zvecRouter };
 
 export type AppRouter = typeof appRouter;

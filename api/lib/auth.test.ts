@@ -19,6 +19,8 @@ describe("API key scope helpers", () => {
     expect(scopes).toContain("documents:write");
     expect(scopes).toContain("backups:write");
     expect(scopes).toContain("workflows:execute");
+    expect(scopes).toContain("zvec:read");
+    expect(scopes).toContain("zvec:write");
     expect(scopes).not.toContain("knowledge:delete");
   });
 

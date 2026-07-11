@@ -32,11 +32,13 @@ export const MANAGEMENT_SCOPES = [
   "backups:read",
   "backups:write",
   "system:manage",
+  "zvec:read",
+  "zvec:write",
 ] as const;
 
 const PERMISSION_SCOPES: Readonly<Record<string, readonly string[]>> = {
-  read: ["knowledge:read", "documents:read", "workflows:read", "agents:read", "backups:read"],
-  write: ["knowledge:write", "documents:write", "workflows:write", "backups:write"],
+  read: ["knowledge:read", "documents:read", "workflows:read", "agents:read", "backups:read", "zvec:read"],
+  write: ["knowledge:write", "documents:write", "workflows:write", "backups:write", "zvec:write"],
   delete: ["knowledge:delete", "documents:delete", "workflows:delete"],
   manage: ["system:manage"],
   triggerWorkflow: ["workflows:execute"],
