@@ -2,7 +2,7 @@ import { Hono, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { HttpBindings } from "@hono/node-server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { appRouter, zvecRouter, searchRouter, kbBackupRouter } from "./router";
+import { appRouter, zvecRouter, searchRouter, kbBackupRouter, keywordRouter } from "./router";
 import { createContext } from "./context";
 import type { AuthInfo } from "./lib/auth";
 import { env } from "./lib/env";
@@ -77,6 +77,7 @@ function isCsrfExemptPath(path: string): boolean {
     path === "/api/search" ||
     path.startsWith("/api/zvec/") ||
     path.startsWith("/api/kb/") ||
+    path.startsWith("/api/keywords/") ||
     /^\/api\/workflows\/[^/]+\/webhook$/.test(path)
   );
 }
@@ -114,6 +115,7 @@ const authMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> = async (c, 
     path === "/api/search" ||
     path.startsWith("/api/zvec/") ||
     path.startsWith("/api/kb/") ||
+    path.startsWith("/api/keywords/") ||
     path.startsWith("/api/trpc/") ||
     path === Paths.oauthCallback
   ) {
@@ -153,6 +155,9 @@ app.route("/api/search", searchRouter);
 
 // Knowledge base backup REST API
 app.route("/api/kb", kbBackupRouter);
+
+// Keyword extraction REST API
+app.route("/api/keywords", keywordRouter);
 
 // ========== 认证状态路由 ==========
 app.get("/api/auth/me", async (c) => {

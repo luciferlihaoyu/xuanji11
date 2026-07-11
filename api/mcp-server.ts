@@ -14,6 +14,7 @@ import { executeWorkflow } from "./lib/workflow-runtime";
 import { zvecTools, handleZvecTool } from "./mcp-zvec-tools";
 import { hybridSearchTool, handleHybridSearch } from "./mcp-hybrid-search";
 import { kbBackupTools, handleKbBackupTool } from "./mcp-kb-backup";
+import { keywordTools, handleKeywordTool } from "./mcp-keyword";
 import type { AuthenticatedIdentity, AuthInfo } from "./lib/auth";
 import { authenticateApiKey, hasScope, sessionAuth } from "./lib/auth";
 import { authenticateLocalRequest } from "./local-auth";
@@ -67,6 +68,7 @@ const tools: readonly McpTool[] = [
   ...zvecTools,
   hybridSearchTool,
   ...kbBackupTools,
+  ...keywordTools,
 ];
 
 function ok(id: JsonRpcId, result: unknown): JsonRpcResponse {
@@ -200,6 +202,9 @@ async function callTool(call: McpToolCall, user: User, auth: AuthInfo): Promise<
     case "kb.export":
     case "kb.import":
       return handleKbBackupTool(call.name, call.arguments, auth);
+    case "keywords.extract":
+    case "keywords.autoTag":
+      return handleKeywordTool(call.name, call.arguments, auth, user.id);
     default: return { content: [{ type: "text", text: `Unknown tool: ${call.name}` }], isError: true };
   }
 }
