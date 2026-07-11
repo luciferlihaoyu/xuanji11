@@ -7,6 +7,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { randomUUID } from "crypto";
 import zvec from "@zvec/zvec";
 import type { ZVecCollection, ZVecCollectionSchema, ZVecDataType, ZVecDocInput, ZVecStatus } from "@zvec/zvec";
 import { eq, desc } from "drizzle-orm";
@@ -285,6 +286,18 @@ export const vectorEngine = {
     return normalizeVector(vector ?? []);
   },
 
+  async addDocuments(docs: Array<{ content: string; metadata?: Record<string, unknown> }>): Promise<number> {
+    if (docs.length === 0) return 0;
+    const embeddings = await embedWithFallback(docs.map((doc) => doc.content));
+    const entries = docs.map((doc, i) => ({
+      id: randomUUID(),
+      vector: embeddings[i] ?? [],
+      metadata: { ...doc.metadata, content: doc.content },
+    }));
+    await this.insertBatch(entries);
+    return entries.length;
+  },
+
   get size(): number {
     return env.zvecEnabled ? getCollection().stats.docCount : fallbackStore.length;
   },
@@ -354,6 +367,37 @@ export async function createCollection(input: CreateCollectionInput): Promise<{ 
 export async function deleteCollection(name: string): Promise<void> {
   const db = getDb();
   await db.delete(vectorCollections).where(eq(vectorCollections.name, name));
+}
+
+export interface AddDocumentInput {
+  readonly content: string;
+  readonly metadata?: Record<string, unknown>;
+}
+
+export interface AddDocumentsResult {
+  readonly added: number;
+}
+
+export interface CollectionStats {
+  readonly name: string;
+  readonly count: number;
+  readonly dimension: number;
+}
+
+export async function addDocumentsToCollection(name: string, docs: AddDocumentInput[]): Promise<AddDocumentsResult> {
+  const db = getDb();
+  const [collection] = await db.select().from(vectorCollections).where(eq(vectorCollections.name, name));
+  if (!collection) throw new Error(`Collection not found: ${name}`);
+  const added = await vectorEngine.addDocuments(docs.map((doc) => ({ ...doc, metadata: { ...doc.metadata, collectionName: name } })));
+  await db.update(vectorCollections).set({ documentCount: (collection.documentCount ?? 0) + added }).where(eq(vectorCollections.name, name));
+  return { added };
+}
+
+export async function getCollectionStats(name: string): Promise<CollectionStats> {
+  const db = getDb();
+  const [collection] = await db.select().from(vectorCollections).where(eq(vectorCollections.name, name));
+  if (!collection) throw new Error(`Collection not found: ${name}`);
+  return { name: collection.name, count: collection.documentCount ?? 0, dimension: collection.dimension ?? 0 };
 }
 
 export async function getStats(): Promise<{ ok: boolean; engine: string; size: number; mode: "empty" | "indexed"; provider: string; model: string; error?: string; dimension?: number }> {

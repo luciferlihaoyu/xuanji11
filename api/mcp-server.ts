@@ -11,7 +11,7 @@ import {
 import { clean } from "./lib/clean";
 import { runDueBackupSchedules } from "./lib/backup-scheduler";
 import { executeWorkflow } from "./lib/workflow-runtime";
-import * as vectorService from "./lib/vector-service";
+import { zvecTools, handleZvecTool } from "./mcp-zvec-tools";
 import type { AuthenticatedIdentity, AuthInfo } from "./lib/auth";
 import { authenticateApiKey, hasScope, sessionAuth } from "./lib/auth";
 import { authenticateLocalRequest } from "./local-auth";
@@ -62,9 +62,7 @@ const tools: readonly McpTool[] = [
   { name: "backup_trigger", description: "Trigger a scheduled backup job immediately", inputSchema: { type: "object", properties: { jobId: { type: "number", description: "Scheduled backup job id" } }, required: ["jobId"] } },
   { name: "workflow_list", description: "List workflows", inputSchema: { type: "object", properties: { status: { type: "string", description: "Optional workflow status filter" } } } },
   { name: "workflow_execute", description: "Execute a workflow", inputSchema: { type: "object", properties: { id: { type: "number", description: "Workflow id" }, input: { type: "object", description: "Workflow input payload" } }, required: ["id"] } },
-  { name: "zvec.embed", description: "Generate vector embeddings for one or more texts", inputSchema: { type: "object", properties: { texts: { type: "array", description: "Array of texts to embed (max 100)" } }, required: ["texts"] } },
-  { name: "zvec.search", description: "Semantic search over indexed document chunks", inputSchema: { type: "object", properties: { query: { type: "string", description: "Search query text" }, topK: { type: "number", description: "Maximum number of results (1-50, default 10)" } }, required: ["query"] } },
-  { name: "zvec.stats", description: "Get ZVec vector engine status and health", inputSchema: { type: "object", properties: {} } },
+  ...zvecTools,
 ];
 
 function ok(id: JsonRpcId, result: unknown): JsonRpcResponse {
@@ -176,27 +174,6 @@ async function handleWorkflowExecute(args: Record<string, unknown>, user: User, 
   return textResult({ runId });
 }
 
-async function handleZvecEmbed(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
-  assertScope(auth, "zvec:read");
-  const input = z.object({ texts: z.array(z.string().min(1)).max(100) }).parse(args);
-  const vectors = await vectorService.embedTexts(input.texts);
-  return textResult({ vectors });
-}
-
-async function handleZvecSearch(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
-  assertScope(auth, "zvec:read");
-  const input = z.object({ query: z.string().min(1).max(500), topK: z.number().int().min(1).max(50).default(10) }).parse(args);
-  const results = await vectorService.searchVectors(input.query, input.topK);
-  return textResult({ results });
-}
-
-async function handleZvecStats(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
-  assertScope(auth, "zvec:read");
-  z.object({}).parse(args);
-  const stats = await vectorService.getStats();
-  return textResult(stats);
-}
-
 async function callTool(call: McpToolCall, user: User, auth: AuthInfo): Promise<McpToolResult> {
   switch (call.name) {
     case "knowledge_search": return handleKnowledgeSearch(call.arguments, auth);
@@ -207,9 +184,13 @@ async function callTool(call: McpToolCall, user: User, auth: AuthInfo): Promise<
     case "backup_trigger": return handleBackupTrigger(call.arguments, auth);
     case "workflow_list": return handleWorkflowList(call.arguments, auth);
     case "workflow_execute": return handleWorkflowExecute(call.arguments, user, auth);
-    case "zvec.embed": return handleZvecEmbed(call.arguments, auth);
-    case "zvec.search": return handleZvecSearch(call.arguments, auth);
-    case "zvec.stats": return handleZvecStats(call.arguments, auth);
+    case "zvec.embed":
+    case "zvec.search":
+    case "zvec.stats":
+    case "zvec.listCollections":
+    case "zvec.addDocuments":
+    case "zvec.deleteCollection":
+      return handleZvecTool(call.name, call.arguments, auth);
     default: return { content: [{ type: "text", text: `Unknown tool: ${call.name}` }], isError: true };
   }
 }

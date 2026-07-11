@@ -30,6 +30,8 @@ vi.mock("./lib/vector-service", () => ({
   listCollections: vi.fn(),
   createCollection: vi.fn(),
   deleteCollection: vi.fn(),
+  getCollectionStats: vi.fn(),
+  addDocumentsToCollection: vi.fn(),
 }));
 
 function fakeUser(): User {
@@ -98,5 +100,35 @@ describe("ZVec REST API", () => {
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ vectors: [[0.1, 0.2, 0.3]] });
     expect(vectorService.embedTexts).toHaveBeenCalledWith(["hello"]);
+  });
+
+  it("returns collection stats when authenticated with read scope", async () => {
+    const { zvecRouter } = await import("./zvec-router");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(user);
+    vi.mocked(vectorService.getCollectionStats).mockResolvedValue({ name: "test-collection", count: 42, dimension: 1536 });
+
+    const res = await zvecRouter.request("/collections/test-collection/stats", {
+      method: "GET",
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ name: "test-collection", count: 42, dimension: 1536 });
+    expect(vectorService.getCollectionStats).toHaveBeenCalledWith("test-collection");
+  });
+
+  it("forbids collection stats with only write scope", async () => {
+    const { zvecRouter } = await import("./zvec-router");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue({ user, auth: { type: "apiKey", userId: 1, agentId: 2, scopes: ["zvec:write"] } });
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
+
+    const res = await zvecRouter.request("/collections/test-collection/stats", {
+      method: "GET",
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({ error: "Forbidden" });
   });
 });

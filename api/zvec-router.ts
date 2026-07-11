@@ -61,6 +61,10 @@ const deleteCollectionParamsSchema = z.object({
   name: z.string().min(1).max(255).regex(/^[a-zA-Z0-9_-]+$/),
 });
 
+const collectionStatsParamsSchema = z.object({
+  name: z.string().min(1).max(255).regex(/^[a-zA-Z0-9_-]+$/),
+});
+
 export const zvecRouter = new Hono();
 
 zvecRouter.use(zvecAuthMiddleware);
@@ -137,5 +141,22 @@ zvecRouter.delete("/collections/:name", requireScope("zvec:write"), async (c) =>
     }
     console.error("[ZVec] Delete collection error:", err); // no-excuse-ok: catch — top-level HTTP handler
     return c.json({ error: "Failed to delete collection" }, 500);
+  }
+});
+
+zvecRouter.get("/collections/:name/stats", requireScope("zvec:read"), async (c) => {
+  try {
+    const { name } = collectionStatsParamsSchema.parse(c.req.param());
+    const stats = await vectorService.getCollectionStats(name);
+    return c.json(stats);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return c.json({ error: "Invalid request" }, 400);
+    }
+    if (err instanceof Error && err.message.startsWith("Collection not found")) {
+      return c.json({ error: "Collection not found" }, 404);
+    }
+    console.error("[ZVec] Collection stats error:", err); // no-excuse-ok: catch — top-level HTTP handler
+    return c.json({ error: "Failed to get collection stats" }, 500);
   }
 });
