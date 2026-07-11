@@ -13,6 +13,7 @@ import { runDueBackupSchedules } from "./lib/backup-scheduler";
 import { executeWorkflow } from "./lib/workflow-runtime";
 import { zvecTools, handleZvecTool } from "./mcp-zvec-tools";
 import { hybridSearchTool, handleHybridSearch } from "./mcp-hybrid-search";
+import { kbBackupTools, handleKbBackupTool } from "./mcp-kb-backup";
 import type { AuthenticatedIdentity, AuthInfo } from "./lib/auth";
 import { authenticateApiKey, hasScope, sessionAuth } from "./lib/auth";
 import { authenticateLocalRequest } from "./local-auth";
@@ -65,6 +66,7 @@ const tools: readonly McpTool[] = [
   { name: "workflow_execute", description: "Execute a workflow", inputSchema: { type: "object", properties: { id: { type: "number", description: "Workflow id" }, input: { type: "object", description: "Workflow input payload" } }, required: ["id"] } },
   ...zvecTools,
   hybridSearchTool,
+  ...kbBackupTools,
 ];
 
 function ok(id: JsonRpcId, result: unknown): JsonRpcResponse {
@@ -195,6 +197,9 @@ async function callTool(call: McpToolCall, user: User, auth: AuthInfo): Promise<
       return handleZvecTool(call.name, call.arguments, auth);
     case "search.hybrid":
       return handleHybridSearch(call.arguments, auth);
+    case "kb.export":
+    case "kb.import":
+      return handleKbBackupTool(call.name, call.arguments, auth);
     default: return { content: [{ type: "text", text: `Unknown tool: ${call.name}` }], isError: true };
   }
 }
