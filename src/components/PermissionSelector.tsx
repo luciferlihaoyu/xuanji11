@@ -1,8 +1,8 @@
-import { Eye, Pencil, Trash2, Settings, Zap, Play, Workflow } from 'lucide-react';
+import { Eye, Pencil, Trash2, Settings, Zap, Play, Workflow, type LucideIcon } from 'lucide-react';
 import type { AgentPermission } from '@/store/useAppStore';
 import { PERMISSION_LABELS, PERMISSION_PRESETS } from '@/store/useAppStore';
 
-const PERMISSION_ICONS: Record<string, React.ElementType> = {
+const PERMISSION_ICONS: Record<string, LucideIcon> = {
   read: Eye,
   write: Pencil,
   delete: Trash2,

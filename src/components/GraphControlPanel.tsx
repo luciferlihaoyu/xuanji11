@@ -1,8 +1,10 @@
-import { RotateCcw, Focus, Download, Hexagon } from 'lucide-react';
+import { RotateCcw, Focus, Download, Hexagon, Box } from 'lucide-react';
 
 interface GraphControlPanelProps {
   viewMode: 'nodes' | 'edges';
   onViewModeChange: (mode: 'nodes' | 'edges') => void;
+  spatialMode: '2d' | '3d';
+  onSpatialModeChange: (mode: '2d' | '3d') => void;
   filteredCategories: Set<string>;
   onToggleCategory: (cat: string) => void;
   gravityStrength: number;
@@ -18,7 +20,7 @@ interface GraphControlPanelProps {
 }
 
 export default function GraphControlPanel({
-  viewMode, onViewModeChange, filteredCategories, onToggleCategory, gravityStrength, onGravityChange,
+  viewMode, onViewModeChange, spatialMode, onSpatialModeChange, filteredCategories, onToggleCategory, gravityStrength, onGravityChange,
   nodeSpacing, onSpacingChange, categoryLabels, categoryColors, nodeCounts,
   onFocusSelected, onResetView, onExportGraph,
 }: GraphControlPanelProps) {
@@ -28,6 +30,32 @@ export default function GraphControlPanel({
       <div className="flex items-center gap-1.5 mb-3 pb-2" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
         <Hexagon className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
         <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--accent-cyan)' }}>图谱控制</span>
+      </div>
+
+      {/* View dimension toggle */}
+      <div className="mb-3">
+        <span className="text-[10px] font-medium uppercase tracking-wide block mb-2" style={{ color: 'var(--text-muted)' }}>视图模式</span>
+        <div className="grid grid-cols-2 gap-1">
+          <button
+            type="button"
+            onClick={() => onSpatialModeChange('2d')}
+            className={`text-[10px] py-1 rounded flex items-center justify-center gap-1 ${
+              spatialMode === '2d' ? 'btn-secondary' : 'btn-ghost'
+            }`}
+          >
+            2D 力导图
+          </button>
+          <button
+            type="button"
+            onClick={() => onSpatialModeChange('3d')}
+            className={`text-[10px] py-1 rounded flex items-center justify-center gap-1 ${
+              spatialMode === '3d' ? 'btn-secondary' : 'btn-ghost'
+            }`}
+          >
+            <Box className="w-3 h-3" />
+            3D 星图
+          </button>
+        </div>
       </div>
 
       {/* Category filters */}

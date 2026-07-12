@@ -1,10 +1,13 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useKnowledgeGraph } from '@/hooks/useKnowledge';
 import { useAppStore } from '@/store/useAppStore';
 import GraphControlPanel from '@/components/GraphControlPanel';
 import NodeDetailPanel from '@/components/NodeDetailPanel';
 import BottomInfoBar from '@/components/BottomInfoBar';
 import BgImageUpload from '@/components/BgImageUpload';
+import KnowledgeGraph3D from '@/components/KnowledgeGraph3D';
+import { calculate3DLayout, findNodeByName, type LayoutEdge, type LayoutNode } from '@/lib/graph-layout-3d';
+import { isWebGLAvailable, shouldUse2DByDefault, parseGraphHash } from '@/components/KnowledgeGraph3D/webgl';
 import * as d3 from 'd3';
 import { Plus, Link2, X, ExternalLink, Edit3, Trash2 } from 'lucide-react';
 
@@ -89,8 +92,24 @@ export default function KnowledgeGraph() {
   const [gravityStrength, setGravityStrength] = useState(50);
   const [nodeSpacing, setNodeSpacing] = useState(50);
   const [viewMode, setViewMode] = useState<'nodes' | 'edges'>('nodes');
+  const [spatialMode, setSpatialMode] = useState<'2d' | '3d'>(() => {
+    if (typeof window === 'undefined') return '2d';
+    if (!isWebGLAvailable()) return '2d';
+    return shouldUse2DByDefault() ? '2d' : '3d';
+  });
+  const [flyToTarget, setFlyToTarget] = useState<{ id: string; x: number; y: number; z: number } | null>(null);
+  const [exportPng3D, setExportPng3D] = useState<(() => void) | null>(null);
+  const [reset3D, setReset3D] = useState<(() => void) | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [entranceDone, setEntranceDone] = useState(false);
+
+  // Restore selected node from URL hash on mount
+  useEffect(() => {
+    const hash = parseGraphHash();
+    if (hash.selectedNodeId) {
+      setSelectedNodeId(hash.selectedNodeId);
+    }
+  }, []);
 
   // Right-click context menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
@@ -123,6 +142,47 @@ export default function KnowledgeGraph() {
     strength: e.weight ?? 1,
     label: e.label,
   }));
+
+  // 3D layout for filtered nodes
+  const layoutNodes3D = useMemo(() => {
+    const filtered = renderNodes.filter((n) => filteredCategories.has(n.category));
+    const layoutNodes: LayoutNode[] = filtered.map((n) => ({
+      id: n.id,
+      name: n.name,
+      category: n.category,
+      x: n.x,
+      y: n.y,
+      edgeCount: renderEdges.filter((e) => e.source === n.id || e.target === n.id).length,
+    }));
+    const layoutEdges: LayoutEdge[] = renderEdges
+      .filter((e) => layoutNodes.some((n) => n.id === e.source) && layoutNodes.some((n) => n.id === e.target))
+      .map((e) => ({ source: e.source, target: e.target, strength: e.strength }));
+    return calculate3DLayout(layoutNodes, layoutEdges);
+  }, [renderNodes, renderEdges, filteredCategories]);
+
+  const layoutEdges3D = useMemo(() => {
+    const nodeIds = new Set(layoutNodes3D.map((n) => n.id));
+    return renderEdges
+      .filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target))
+      .map((e) => ({ source: e.source, target: e.target, strength: e.strength }));
+  }, [layoutNodes3D, renderEdges]);
+
+  // Listen for graph search events from TopNavbar
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const query = (event as CustomEvent<string>).detail;
+      if (!query || spatialMode !== '3d') return;
+      const target = findNodeByName(layoutNodes3D, query);
+      if (!target) {
+        addToastRef.current({ type: 'warning', title: '未找到匹配节点' });
+        return;
+      }
+      setFlyToTarget({ id: target.id, x: target.x, y: target.y, z: target.z });
+      setSelectedNodeId(target.id);
+    };
+    window.addEventListener('knowledge-graph-search', handler);
+    return () => window.removeEventListener('knowledge-graph-search', handler);
+  }, [layoutNodes3D, spatialMode]);
 
   // Entrance animation
   useEffect(() => {
@@ -375,16 +435,26 @@ export default function KnowledgeGraph() {
       svg.on('.zoom', null); // remove zoom event listeners
       svg.selectAll('*').remove();
     };
-  }, [isLoading, isGraphLoading, renderNodes.length, renderEdges.length, gravityStrength, nodeSpacing, filteredCategories, viewMode]);
+  }, [isLoading, isGraphLoading, renderNodes.length, renderEdges.length, gravityStrength, nodeSpacing, filteredCategories, viewMode, spatialMode]);
 
   const handleFocusSelected = useCallback(() => {
-    const svgElement = svgRef.current;
-    const container = containerRef.current;
-    const zoom = zoomRef.current;
-    if (!svgElement || !container || !zoom || !selectedNodeId) {
+    if (!selectedNodeId) {
       addToastRef.current({ type: 'info', title: '请先选择一个节点' });
       return;
     }
+    if (spatialMode === '3d') {
+      const node = layoutNodes3D.find((n) => n.id === selectedNodeId);
+      if (!node) {
+        addToastRef.current({ type: 'warning', title: '选中节点当前不可见' });
+        return;
+      }
+      setFlyToTarget({ id: node.id, x: node.x, y: node.y, z: node.z });
+      return;
+    }
+    const svgElement = svgRef.current;
+    const container = containerRef.current;
+    const zoom = zoomRef.current;
+    if (!svgElement || !container || !zoom) return;
     const node = visibleNodesRef.current.find((n) => n.id === selectedNodeId);
     if (!node) {
       addToastRef.current({ type: 'warning', title: '选中节点当前不可见' });
@@ -395,16 +465,24 @@ export default function KnowledgeGraph() {
       .translate(container.clientWidth / 2 - (node.x ?? node.posX) * scale, container.clientHeight / 2 - (node.y ?? node.posY) * scale)
       .scale(scale);
     d3.select(svgElement).transition().duration(450).call(zoom.transform, transform);
-  }, [selectedNodeId]);
+  }, [selectedNodeId, spatialMode, layoutNodes3D]);
 
   const handleResetView = useCallback(() => {
+    if (spatialMode === '3d') {
+      reset3D?.();
+      return;
+    }
     const svgElement = svgRef.current;
     const zoom = zoomRef.current;
     if (!svgElement || !zoom) return;
     d3.select(svgElement).transition().duration(450).call(zoom.transform, d3.zoomIdentity);
-  }, []);
+  }, [spatialMode, reset3D]);
 
   const handleExportGraph = useCallback(() => {
+    if (spatialMode === '3d') {
+      exportPng3D?.();
+      return;
+    }
     const svgElement = svgRef.current;
     const container = containerRef.current;
     if (!svgElement || !container) return;
@@ -438,7 +516,7 @@ export default function KnowledgeGraph() {
       addToastRef.current({ type: 'error', title: '导出图谱失败' });
     };
     image.src = objectUrl;
-  }, []);
+  }, [spatialMode, exportPng3D]);
 
   const toggleCategory = useCallback((cat: string) => {
     setFilteredCategories((prev) => {
@@ -599,13 +677,26 @@ export default function KnowledgeGraph() {
         </div>
       )}
 
-      {/* SVG */}
-      <svg ref={svgRef} className="absolute inset-0 w-full h-full" style={{ zIndex: 1 }} />
+      {/* SVG or 3D Canvas */}
+      {spatialMode === '2d' ? (
+        <svg ref={svgRef} className="absolute inset-0 w-full h-full" style={{ zIndex: 1 }} />
+      ) : (
+        <KnowledgeGraph3D
+          nodes={layoutNodes3D}
+          edges={layoutEdges3D}
+          onNodeSelect={setSelectedNodeId}
+          selectedNodeId={selectedNodeId}
+          flyToTarget={flyToTarget}
+          onRegisterExport={setExportPng3D}
+          onRegisterReset={setReset3D}
+          initialCamera={parseGraphHash().camera}
+        />
+      )}
 
       {/* Top badge */}
       <div className={`absolute top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-xs font-medium border z-10 transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'}`}
         style={{ backgroundColor: 'var(--bg-glass)', backdropFilter: 'blur(12px)', borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-        2D 力导向图 · {renderNodes.length} 节点 · {renderEdges.length} 连接
+        {spatialMode === '3d' ? '3D 知识星图' : '2D 力导向图'} · {renderNodes.length} 节点 · {renderEdges.length} 连接
       </div>
 
       {/* Control Panel */}
@@ -645,6 +736,8 @@ export default function KnowledgeGraph() {
         <GraphControlPanel
           viewMode={viewMode}
           onViewModeChange={setViewMode}
+          spatialMode={spatialMode}
+          onSpatialModeChange={setSpatialMode}
           filteredCategories={filteredCategories}
           onToggleCategory={toggleCategory}
           gravityStrength={gravityStrength}

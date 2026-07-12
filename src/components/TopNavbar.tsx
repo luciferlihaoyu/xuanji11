@@ -30,6 +30,11 @@ export default function TopNavbar() {
     if (e.key !== 'Enter') return;
     const trimmed = searchQuery.trim();
     if (!trimmed) return;
+    if (location.pathname === '/') {
+      window.dispatchEvent(new CustomEvent('knowledge-graph-search', { detail: trimmed }));
+      setSearchQuery('');
+      return;
+    }
     window.location.hash = '/search?q=' + encodeURIComponent(trimmed);
   };
 
