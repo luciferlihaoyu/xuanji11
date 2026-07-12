@@ -5,7 +5,7 @@ import { getDb } from "./queries/connection";
 import { knowledgeNodes, knowledgeEdges, documentChunks } from "@db/schema";
 import { clean } from "./lib/clean";
 import { vectorEngine } from "./lib/vector";
-import { logAudit } from "./lib/audit";
+import { logAudit, logAction } from "./lib/audit";
 
 export const knowledgeRouter = createRouter({
   listNodes: authedQuery.query(async () => {
@@ -101,7 +101,10 @@ export const knowledgeRouter = createRouter({
         sql`${knowledgeEdges.sourceId} = ${input.id} OR ${knowledgeEdges.targetId} = ${input.id}`
       );
       await db.delete(knowledgeNodes).where(eq(knowledgeNodes.id, input.id));
-      await logAudit(ctx, "knowledge_node", "delete", input.id, input as Record<string, unknown>);
+      await logAction(ctx.user?.id ?? null, "delete", {
+        entityType: "knowledge_node",
+        entityId: input.id,
+      });
       return { success: true };
     }),
 

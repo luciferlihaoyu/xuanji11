@@ -5,7 +5,7 @@ import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { agents, apiKeys } from "@db/schema";
 import { clean } from "./lib/clean";
-import { logAudit } from "./lib/audit";
+import { logAudit, logAction } from "./lib/audit";
 import { scopesFromPermissions } from "./lib/auth";
 
 export const agentRouter = createRouter({
@@ -152,8 +152,16 @@ export const agentRouter = createRouter({
         createdBy: ctx.user?.id ?? null,
       }));
 
+      const keyId = Number(result[0].insertId);
+      await logAction(ctx.user?.id ?? null, "create", {
+        entityType: "api_key",
+        entityId: keyId,
+        agentId: input.agentId,
+        name: input.name,
+      });
+
       return {
-        id: Number(result[0].insertId),
+        id: keyId,
         key: rawKey,
         keyPrefix,
         name: input.name,

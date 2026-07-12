@@ -9,7 +9,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
 import { promises as fsp } from "fs";
-import { logAudit } from "./lib/audit";
+import { logAudit, logAction } from "./lib/audit";
 import { clean } from "./lib/clean";
 import { env } from "./lib/env";
 import { hasPathTraversal, sanitizeRelativePath, resolveRestoreDestPath } from "./lib/backup-path";
@@ -350,7 +350,11 @@ export const backupRouter = createRouter({
       }
 
       const [job] = await db.select().from(backupJobs).where(eq(backupJobs.id, jobId));
-      await logAudit(ctx, "backup_job", isScheduled ? "create" : "run", jobId, input as Record<string, unknown>);
+      await logAction(ctx.user?.id ?? null, isScheduled ? "create" : "run", {
+        entityType: "backup_job",
+        entityId: jobId,
+        ...input,
+      });
       return job;
     }),
 

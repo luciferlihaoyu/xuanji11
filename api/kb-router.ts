@@ -4,7 +4,7 @@ import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { kbFolders, kbDocuments, documentChunks } from "@db/schema";
 import { clean } from "./lib/clean";
-import { logAudit } from "./lib/audit";
+import { logAudit, logAction } from "./lib/audit";
 import { vectorEngine } from "./lib/vector";
 
 function chunkText(text: string, maxChars = 800, overlap = 100): string[] {
@@ -175,7 +175,11 @@ export const kbRouter = createRouter({
         createdBy: ctx.user?.id ?? null,
       }));
       const id = Number(result[0].insertId);
-      await logAudit(ctx, "kb_document", "create", id, input as Record<string, unknown>);
+      await logAction(ctx.user?.id ?? null, "create", {
+        entityType: "kb_document",
+        entityId: id,
+        ...input,
+      });
       return { id };
     }),
 

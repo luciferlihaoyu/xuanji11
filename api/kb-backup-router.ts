@@ -5,6 +5,7 @@ import type { AuthInfo } from "./lib/auth";
 import { authenticateApiKey, hasScope, sessionAuth } from "./lib/auth";
 import { authenticateLocalRequest } from "./local-auth";
 import { exportKnowledgeBase, importKnowledgeBase } from "./lib/kb-backup";
+import { logAction } from "./lib/audit";
 
 declare module "hono" {
   interface ContextVariableMap {
@@ -52,6 +53,12 @@ kbBackupRouter.onError((err, c) => {
 kbBackupRouter.post("/export", requireScope("knowledge:read"), async (c) => {
   try {
     const result = await exportKnowledgeBase();
+    const user = c.get("user");
+    await logAction(user.id, "run", {
+      entityType: "kb_backup",
+      entityId: 0,
+      action: "export",
+    });
     return c.json(result);
   } catch (err) {
     console.error("[KB Backup] Export failed:", err); // no-excuse-ok: catch — top-level HTTP handler

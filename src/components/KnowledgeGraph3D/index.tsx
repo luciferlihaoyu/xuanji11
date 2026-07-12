@@ -1,1 +1,1 @@
-export { default } from "../KnowledgeGraph3D";
+export { default } from "../KnowledgeGraph3DScene";
