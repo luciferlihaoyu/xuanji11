@@ -13,6 +13,7 @@ import { connectorRouter } from "./connector-router";
 import { zvecRouter } from "./zvec-router";
 import { searchRouter } from "./search-router";
 import { kbBackupRouter } from "./kb-backup-router";
+import { relationRouter } from "./relation-router";
 import { keywordRouter } from "./keyword-router";
 import { createRouter, publicQuery } from "./middleware";
 
@@ -36,5 +37,6 @@ export { zvecRouter };
 export { searchRouter };
 export { kbBackupRouter };
 export { keywordRouter };
+export { relationRouter };
 
 export type AppRouter = typeof appRouter;
