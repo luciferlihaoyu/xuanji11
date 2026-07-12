@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { User, BookOpen, Bot, Brain, HardDrive, Workflow, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound } from 'lucide-react';
+import { User, BookOpen, Bot, Brain, HardDrive, Workflow, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { useSettings, useVectorSettings, useAgentSettings, useStorageSettings, useAppearanceSettings } from '@/hooks/useSettings';
-import { trpcClient } from '@/providers/trpc';
+import { useConnectorConfig } from '@/hooks/useConnectorConfig';
+import { trpc, trpcClient } from '@/providers/trpc';
 import { useAuth } from '@/hooks/useAuth';
 
 const SETTINGS_NAV = [
@@ -13,10 +14,126 @@ const SETTINGS_NAV = [
   { key: 'vectorization', label: '向量化模型', icon: Brain },
   { key: 'storage', label: '存储管理', icon: HardDrive },
   { key: 'workflow', label: '工作流默认', icon: Workflow },
+  { key: 'connector', label: '连接器', icon: Plug },
   { key: 'security', label: '安全', icon: Shield },
   { key: 'appearance', label: '外观', icon: Palette },
   { key: 'about', label: '关于', icon: Info },
 ];
+
+interface ConnectorCardProps {
+  connector: {
+    key: string;
+    name: string;
+    configured: boolean;
+    status: string;
+  };
+}
+
+function ConnectorCard({ connector }: ConnectorCardProps) {
+  const addToast = useAppStore((s) => s.addToast);
+  const { config, isLoading, save, test, isSaving, isTesting } = useConnectorConfig(connector.key);
+  const [form, setForm] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (config && typeof config === 'object') {
+      const cfg = config as Record<string, unknown>;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 从已加载配置同步表单初始值
+      setForm({
+        accessToken: String(cfg.accessToken ?? ''),
+        refreshToken: String(cfg.refreshToken ?? ''),
+        path: String(cfg.path ?? ''),
+      });
+    }
+  }, [config]);
+
+  const fields = connector.key === 'nas'
+    ? [{ key: 'path', label: '路径' }]
+    : [
+        { key: 'accessToken', label: 'Access Token' },
+        { key: 'refreshToken', label: 'Refresh Token' },
+      ];
+
+  const handleTest = async () => {
+    const result = await test(form as Record<string, unknown>);
+    addToast({
+      type: result.success ? 'success' : 'error',
+      title: result.success ? '连接成功' : result.message || '连接失败',
+    });
+  };
+
+  const handleSave = async () => {
+    await save(form as Record<string, unknown>);
+    addToast({ type: 'success', title: '配置已保存' });
+  };
+
+  return (
+    <div className="card-base p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{connector.name}</h4>
+        <span
+          className={`chip text-[10px] py-0.5 px-2 ${connector.status === 'connected' ? 'chip-emerald' : 'chip-rose'}`}
+          style={{ color: connector.status === 'connected' ? 'var(--accent-emerald)' : '#ef4444' }}
+        >
+          {connector.status === 'connected' ? '已连接' : '未连接'}
+        </span>
+      </div>
+      {isLoading ? (
+        <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+          <Loader2 className="w-3.5 h-3.5 animate-spin" /> 加载配置中...
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {fields.map((f) => (
+            <div key={f.key}>
+              <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>{f.label}</label>
+              <input
+                type="text"
+                value={form[f.key] ?? ''}
+                onChange={(e) => setForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                className="input-base text-xs w-full"
+              />
+            </div>
+          ))}
+          <div className="flex items-center gap-3 pt-2">
+            <button onClick={handleTest} disabled={isTesting} className="btn-secondary text-xs py-2 px-4">
+              {isTesting ? (
+                <span className="flex items-center gap-1">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> 测试中...
+                </span>
+              ) : '测试连接'}
+            </button>
+            <button onClick={handleSave} disabled={isSaving} className="btn-primary text-xs py-2 px-4">
+              {isSaving ? (
+                <span className="flex items-center gap-1">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> 保存中...
+                </span>
+              ) : '保存'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConnectorSettings() {
+  const { data: connectors, isLoading } = trpc.connector.listConnectors.useQuery();
+
+  return (
+    <div className="space-y-6">
+      <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>连接器</h3>
+      <div className="max-w-lg space-y-4">
+        {isLoading ? (
+          <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-muted)' }}>
+            <Loader2 className="w-4 h-4 animate-spin" /> 加载中...
+          </div>
+        ) : (
+          connectors?.map((c) => <ConnectorCard key={c.key} connector={c} />)
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function Settings() {
   const { category = 'personal' } = useParams();
@@ -572,6 +689,9 @@ export default function Settings() {
             </div>
           </div>
         );
+
+      case 'connector':
+        return <ConnectorSettings />;
 
       case 'security':
         return (

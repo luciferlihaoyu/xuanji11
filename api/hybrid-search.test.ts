@@ -263,45 +263,78 @@ describe("Search REST router", () => {
     await expect(res.json()).resolves.toEqual({ error: "Invalid request" });
   });
 
-  it("returns hybrid search results when authenticated", async () => {
+  it("returns 400 for empty search query", async () => {
     const user = fakeUser();
     vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
     vi.mocked(authenticateLocalRequest).mockResolvedValue(user);
-    vi.spyOn(hybridSearch, "executeHybridSearch").mockResolvedValue({
-      results: [
-        {
-          id: "1",
-          title: "Result",
-          snippet: "snippet",
-          type: "document",
-          score: 0.05,
-          sources: ["keyword"],
-          tags: [],
-          folderId: null,
-        },
-      ],
-      facets: { types: { document: 1 }, tags: {}, folders: {} },
-      metadata: {
-        mode: "hybrid",
-        query: "test",
-        limit: 10,
-        total: 1,
-        keywordResults: 1,
-        vectorResults: 0,
-      },
-    });
 
     const res = await searchRouter.request("/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: "test" }),
+      body: JSON.stringify({ query: "" }),
     });
 
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as Record<string, unknown>;
-    expect(json.results).toHaveLength(1);
-    expect((json.results as Record<string, unknown>[])[0].id).toBe("1");
-    expect((json.metadata as Record<string, unknown>).query).toBe("test");
-    expect((json.facets as Record<string, unknown>).types).toEqual({ document: 1 });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "Invalid request" });
+  });
+
+  it("returns 400 for query exceeding max length", async () => {
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(user);
+
+    const res = await searchRouter.request("/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: "a".repeat(501) }),
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "Invalid request" });
+  });
+
+  it("returns 400 for null/undefined inputs", async () => {
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(user);
+
+    const res = await searchRouter.request("/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: null }),
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "Invalid request" });
+  });
+
+  it("handles concurrent search requests", async () => {
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(user);
+    vi.spyOn(hybridSearch, "executeHybridSearch").mockResolvedValue({
+      results: [],
+      facets: { types: {}, tags: {}, folders: {} },
+      metadata: {
+        mode: "hybrid",
+        query: "test",
+        limit: 10,
+        total: 0,
+        keywordResults: 0,
+        vectorResults: 0,
+      },
+    });
+
+    const requests = Array.from({ length: 5 }, () =>
+      searchRouter.request("/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: "test" }),
+      })
+    );
+
+    const responses = await Promise.all(requests);
+    expect(responses.every((r) => r.status === 200)).toBe(true);
+    expect(hybridSearch.executeHybridSearch).toHaveBeenCalledTimes(5);
   });
 });

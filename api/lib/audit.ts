@@ -14,14 +14,26 @@ export async function logAudit(
   entityId: number | null,
   input?: Record<string, unknown>
 ): Promise<void> {
+  await logAction(ctx.user?.id ?? null, action, {
+    entityType,
+    entityId: entityId ?? null,
+    input: input ?? {},
+  });
+}
+
+export async function logAction(
+  userId: number | null,
+  action: AuditAction,
+  details?: Record<string, unknown>
+): Promise<void> {
   try {
     const db = getDb();
     await db.insert(auditLogs).values({
-      entityType,
-      entityId: entityId ?? 0,
+      entityType: "action",
+      entityId: 0,
       action,
-      actorId: ctx.user?.id ?? null,
-      details: input ? { input } : {},
+      actorId: userId,
+      details: details ?? {},
       createdAt: new Date(),
     });
   } catch (err) {

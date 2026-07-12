@@ -131,4 +131,67 @@ describe("ZVec REST API", () => {
     expect(res.status).toBe(403);
     await expect(res.json()).resolves.toEqual({ error: "Forbidden" });
   });
+
+  it("returns 400 for empty search query", async () => {
+    const { zvecRouter } = await import("./zvec-router");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(user);
+
+    const res = await zvecRouter.request("/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: "" }),
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "Invalid request" });
+  });
+
+  it("returns 400 for query exceeding max length", async () => {
+    const { zvecRouter } = await import("./zvec-router");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(user);
+
+    const res = await zvecRouter.request("/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: "a".repeat(501) }),
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "Invalid request" });
+  });
+
+  it("returns 500 for invalid JSON body", async () => {
+    const { zvecRouter } = await import("./zvec-router");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(user);
+
+    const res = await zvecRouter.request("/embed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "not valid json",
+    });
+
+    expect(res.status).toBe(500);
+  });
+
+  it("returns 400 for null/undefined inputs", async () => {
+    const { zvecRouter } = await import("./zvec-router");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(user);
+
+    const res = await zvecRouter.request("/embed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ texts: null }),
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "Invalid request" });
+  });
 });

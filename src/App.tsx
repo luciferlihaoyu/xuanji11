@@ -25,6 +25,7 @@ const Settings = lazy(() => import('@/pages/Settings'));
 const Login = lazy(() => import('@/pages/Login'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 const AnalysisDashboard = lazy(() => import('@/pages/AnalysisDashboard'));
+const AuditLog = lazy(() => import('@/pages/AuditLog'));
 
 function ThemeInit() {
   const theme = useAppStore((s) => s.theme);
@@ -57,6 +58,7 @@ function App() {
           <Route path="/upload" element={<UploadPage />} />
           <Route path="/search" element={<SearchResults />} />
           <Route path="/analytics" element={<AnalysisDashboard />} />
+          <Route path="/audit" element={<AuditLog />} />
           <Route path="/doc/:id" element={<DocumentDetail />} />
           <Route path="/settings/:category" element={<Settings />} />
         </Route>

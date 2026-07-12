@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { systemSettings } from "@db/schema";
 import { clean } from "./lib/clean";
-import { getConnector } from "./connectors";
+import { getConnector, listConnectors as listRegisteredConnectors } from "./connectors";
 import { logAudit } from "./lib/audit";
 
 const connectorConfigKey = (platform: string) => `connector_${platform}_config`;
@@ -58,6 +58,32 @@ export const connectorRouter = createRouter({
       await logAudit(ctx, "connector_config", "update", null, input as Record<string, unknown>);
       return { success: true };
     }),
+
+  listConnectors: authedQuery.query(async () => {
+    const db = getDb();
+    const registered = listRegisteredConnectors();
+    const rows = await db
+      .select({ key: systemSettings.key, value: systemSettings.value })
+      .from(systemSettings)
+      .where(sql`${systemSettings.key} LIKE ${"connector_%_config"}`);
+
+    const configuredKeys = new Set(rows.map((r) => r.key));
+
+    return registered.map((c) => {
+      const configKey = connectorConfigKey(c.key);
+      const configRow = rows.find((r) => r.key === configKey);
+      let status: "connected" | "disconnected" | "error" = "disconnected";
+      if (configuredKeys.has(configKey)) {
+        status = configRow?.value ? "connected" : "disconnected";
+      }
+      return {
+        key: c.key,
+        name: c.name,
+        configured: configuredKeys.has(configKey),
+        status,
+      };
+    });
+  }),
 
   testConnection: authedQuery
     .input(

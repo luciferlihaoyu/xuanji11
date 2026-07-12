@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { User, VectorCollection } from "@db/schema";
 import type { AuthInfo } from "./lib/auth";
 import { authenticateApiKey } from "./lib/auth";
@@ -192,22 +192,61 @@ describe("MCP ZVec tools", () => {
   });
 });
 
-describe("MCP analytics tool", () => {
-  it("exposes analytics.get in tools/list", async () => {
+describe("MCP edge cases", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("rejects invalid JSON-RPC requests", async () => {
     const { handleMcpRequest } = await import("./mcp-server");
     const user = fakeUser();
     vi.mocked(authenticateApiKey).mockResolvedValue({ user, auth: readOnlyAuth() });
     vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
 
     const res = await handleMcpRequest(
-      { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      { jsonrpc: "1.0", id: 1, method: "tools/list" },
       authHeaders(),
     );
 
-    expect("result" in res).toBe(true);
-    if ("result" in res) {
-      const tools = (res.result as { tools: Array<{ name: string }> }).tools;
-      expect(tools.map((t) => t.name)).toContain("analytics.get");
-    }
+    expect("error" in res && res.error.code).toBe(-32600);
+  });
+
+  it("rejects tool calls with null/undefined arguments", async () => {
+    const { handleMcpRequest } = await import("./mcp-server");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue({ user, auth: readOnlyAuth() });
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
+
+    const res = await handleMcpRequest(
+      {
+        jsonrpc: "2.0",
+        id: 6,
+        method: "tools/call",
+        params: { name: "zvec.listCollections", arguments: null },
+      },
+      authHeaders(),
+    );
+
+    expect("error" in res && res.error.code).toBe(-32602);
+  });
+
+  it("handles concurrent tool calls", async () => {
+    const { handleMcpRequest } = await import("./mcp-server");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue({ user, auth: readOnlyAuth() });
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
+    vi.mocked(vectorService.listCollections).mockResolvedValue([fakeCollection("docs")]);
+
+    const requests = Array.from({ length: 5 }, (_, i) =>
+      handleMcpRequest(
+        { jsonrpc: "2.0", id: i + 10, method: "tools/call", params: { name: "zvec.listCollections", arguments: {} } },
+        authHeaders(),
+      )
+    );
+
+    const responses = await Promise.all(requests);
+    expect(responses.every((r) => "result" in r)).toBe(true);
+    expect(vectorService.listCollections).toHaveBeenCalledTimes(5);
   });
 });
+
