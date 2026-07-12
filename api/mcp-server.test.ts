@@ -187,6 +187,27 @@ describe("MCP ZVec tools", () => {
       expect(tools.map((t) => t.name)).toContain("zvec.listCollections");
       expect(tools.map((t) => t.name)).toContain("zvec.addDocuments");
       expect(tools.map((t) => t.name)).toContain("zvec.deleteCollection");
+      expect(tools.map((t) => t.name)).toContain("analytics.get");
+    }
+  });
+});
+
+describe("MCP analytics tool", () => {
+  it("exposes analytics.get in tools/list", async () => {
+    const { handleMcpRequest } = await import("./mcp-server");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue({ user, auth: readOnlyAuth() });
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
+
+    const res = await handleMcpRequest(
+      { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      authHeaders(),
+    );
+
+    expect("result" in res).toBe(true);
+    if ("result" in res) {
+      const tools = (res.result as { tools: Array<{ name: string }> }).tools;
+      expect(tools.map((t) => t.name)).toContain("analytics.get");
     }
   });
 });

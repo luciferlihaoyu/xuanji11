@@ -15,6 +15,7 @@ const navItems = [
   { label: 'API 中心', path: '/api' },
   { label: '数据源', path: '/sources' },
   { label: '上传', path: '/upload' },
+  { label: '分析', path: '/analytics' },
 ];
 
 export default function TopNavbar() {

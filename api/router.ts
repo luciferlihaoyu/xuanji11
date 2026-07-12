@@ -15,10 +15,12 @@ import { searchRouter } from "./search-router";
 import { kbBackupRouter } from "./kb-backup-router";
 import { relationRouter } from "./relation-router";
 import { keywordRouter } from "./keyword-router";
+import { analyticsRouter } from "./analytics-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
   ping: publicQuery.query(() => ({ ok: true, ts: Date.now() })),
+  analytics: analyticsRouter,
   auth: authRouter,
   agent: agentRouter,
   knowledge: knowledgeRouter,
