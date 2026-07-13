@@ -69,15 +69,20 @@ function detectProvider(url: string): EmbeddingProvider {
   return "openai";
 }
 
-function defaultEmbeddingDimension(model: string): number {
-  return model.includes("doubao-embedding-vision") ? 2048 : 1536;
+function defaultEmbeddingDimension(_model: string): number {
+  // Return a sensible default that can always be overridden by the user's setting.
+  // We don't force the dimension to any specific value for any model anymore —
+  // the user controls it via the `embedding_dimension` setting.
+  return 1536;
 }
 
 function getEmbeddingConfig(): EmbeddingConfig {
   const url = process.env.LLM_API_URL || "";
   const key = process.env.LLM_API_KEY || "";
   const model = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
-  const dimension = parseInt(process.env.EMBEDDING_DIMENSION || String(defaultEmbeddingDimension(model)), 10) || defaultEmbeddingDimension(model);
+  const rawDim = process.env.EMBEDDING_DIMENSION;
+  const parsed = rawDim != null ? parseInt(rawDim, 10) : 0;
+  const dimension = parsed > 0 ? parsed : defaultEmbeddingDimension(model);
   return { enabled: Boolean(url && key), url, key, model, dimension };
 }
 
@@ -94,7 +99,8 @@ async function loadEmbeddingConfig(): Promise<EmbeddingConfig> {
     const key = settings.get("embedding_api_key") || process.env.LLM_API_KEY || "";
     const model = settings.get("embedding_model") || process.env.EMBEDDING_MODEL || "text-embedding-3-small";
     const rawDimension = settings.get("embedding_dimension") || process.env.EMBEDDING_DIMENSION;
-    const dimension = rawDimension ? parseInt(rawDimension, 10) || defaultEmbeddingDimension(model) : defaultEmbeddingDimension(model);
+    const parsed = rawDimension != null ? parseInt(rawDimension, 10) : 0;
+    const dimension = parsed > 0 ? parsed : defaultEmbeddingDimension(model);
     return { enabled: Boolean(url && key), url, key, model, dimension };
   } catch (err) {
     console.warn("[VectorEngine] Failed to load embedding config from DB, falling back to env:", err instanceof Error ? err.message : String(err));
@@ -106,7 +112,9 @@ async function fetchEmbeddings(texts: string[]): Promise<number[][]> {
   const cfg = await loadEmbeddingConfig();
   if (!cfg.enabled) throw new Error("Embedding provider not configured");
   const isVolcengine = detectProvider(cfg.url) === "volcengine";
-  const endpoint = isVolcengine ? new URL("/embeddings/multimodal", cfg.url) : new URL("/embeddings", cfg.url);
+  const endpoint = isVolcengine
+    ? cfg.url.replace(/\/?$/, "/embeddings/multimodal")
+    : cfg.url.replace(/\/?$/, "/embeddings");
   const body = isVolcengine
     ? { model: cfg.model, input: texts.map((text) => ({ type: "text", text })), encoding_format: "float", ...(cfg.model.includes("doubao-embedding-vision") ? { dimensions: cfg.dimension } : {}) }
     : { input: texts, model: cfg.model, encoding_format: "float" };
