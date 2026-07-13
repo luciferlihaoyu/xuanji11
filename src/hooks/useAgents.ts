@@ -33,7 +33,7 @@ function toUiAgent(dbAgent: {
     type: dbAgent.type,
     role: dbAgent.description || "助手",
     department: String(config.department || "技术部"),
-    platform: String(config.platform || "天宫"),
+    platform: String(config.platform || ''),
     status: dbAgent.status,
     lastHeartbeat:
       typeof dbAgent.updatedAt === "string"

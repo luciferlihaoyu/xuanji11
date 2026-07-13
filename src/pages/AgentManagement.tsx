@@ -8,6 +8,7 @@ import { isSameDay, isWithinInterval, startOfDay, endOfDay, subDays } from 'date
 import { Search, Grid3X3, List, Plus, X, Activity, Shield, Zap, Users, Pencil, Trash2, Eye, EyeOff, KeyRound, Copy } from 'lucide-react';
 
 const ABILITY_LABELS = ['知识管理', '内容创作', '编程', '数据分析', '沟通', '学习'];
+const PLATFORM_PRESETS: ReadonlyArray<string> = ['天宫', 'OpenCode', 'OpenClaw', 'Dify'];
 const AGENT_STATUS_OPTIONS: ReadonlyArray<{ value: AgentStatus; label: string }> = [
   { value: 'active', label: '活跃' },
   { value: 'inactive', label: '停用' },
@@ -229,7 +230,7 @@ export default function AgentManagement() {
         type: formData.type || 'custom',
         status: formData.status || 'active',
         department: formData.department,
-        platform: formData.platform || '天宫',
+        platform: formData.platform || '',
         capabilities: (formData.capabilities?.length ? formData.capabilities : ['知识管理']).filter(Boolean),
         avatar: formData.name.charAt(0),
         knowledgeAccess: formData.knowledgeAccess || '指定文件夹',
@@ -802,10 +803,29 @@ export default function AgentManagement() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>平台</label>
-                  <select value={formData.platform || '天宫'} onChange={(e) => setFormData({ ...formData, platform: e.target.value })} className="input-base text-xs">
-                    <option value="天宫">天宫 Hub</option>
-                    <option value="自定义">自定义 API</option>
+                  <select
+                    value={PLATFORM_PRESETS.includes(formData.platform ?? '') ? (formData.platform ?? '天宫') : '___custom___'}
+                    onChange={(e) => {
+                      if (e.target.value === '___custom___') {
+                        setFormData({ ...formData, platform: '' });
+                      } else {
+                        setFormData({ ...formData, platform: e.target.value });
+                      }
+                    }}
+                    className="input-base text-xs"
+                  >
+                    {PLATFORM_PRESETS.map((p) => <option key={p} value={p}>{p}</option>)}
+                    <option value="___custom___">自定义</option>
                   </select>
+                  {!PLATFORM_PRESETS.includes(formData.platform ?? '') && formData.platform !== undefined && (
+                    <input
+                      type="text"
+                      value={formData.platform ?? ''}
+                      onChange={(e) => setFormData({ ...formData, platform: e.target.value })}
+                      placeholder="输入平台名称，如 opencode"
+                      className="input-base text-xs mt-2"
+                    />
+                  )}
                 </div>
                 <div><label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>状态</label>
                   <select value={formData.status || 'active'} onChange={(e) => setFormData({ ...formData, status: e.target.value as AgentStatus })} className="input-base text-xs">
