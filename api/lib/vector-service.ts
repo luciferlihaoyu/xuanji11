@@ -62,7 +62,12 @@ type EmbeddingProvider = "openai" | "volcengine";
 function detectProvider(url: string): EmbeddingProvider {
   try {
     const u = new URL(url);
-    if (u.hostname.includes("ark.cn-beijing.volces.com")) return "volcengine";
+    if (u.hostname.includes("ark.cn-beijing.volces.com")) {
+      // Agent Plan uses its own OpenAI-compatible endpoint (/api/plan/v3/embeddings)
+      // with standard string-array input, NOT Volcengine's multimodal format.
+      if (u.pathname.includes("/api/plan")) return "openai";
+      return "volcengine";
+    }
   } catch {
     // fall through to default
   }
