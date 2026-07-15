@@ -65,6 +65,35 @@ const collectionStatsParamsSchema = z.object({
   name: z.string().min(1).max(255).regex(/^[a-zA-Z0-9_-]+$/),
 });
 
+const vectorModelProviderSchema = z.enum(["openai", "minimax", "local", "custom"]);
+
+const vectorModelTemplateIdParamsSchema = z.object({
+  id: z.string().min(1).max(255),
+});
+
+const vectorModelTemplateSaveInputSchema = z.object({
+  id: z.string().min(1).max(255).optional(),
+  name: z.string().min(1).max(255),
+  provider: vectorModelProviderSchema.optional(),
+  customProviderName: z.string().max(255).optional(),
+  apiUrl: z.string().url().max(2048),
+  apiKey: z.string().max(4096),
+  model: z.string().min(1).max(255),
+  dimension: z.number().int().min(1).max(8192).optional(),
+  indexMode: z.string().max(100).optional(),
+  similarityThreshold: z.string().max(100).optional(),
+});
+
+const vectorModelTemplateTestInputSchema = z.object({
+  id: z.string().min(1).max(255).optional(),
+  provider: vectorModelProviderSchema.optional(),
+  customProviderName: z.string().max(255).optional(),
+  apiUrl: z.string().url().max(2048),
+  apiKey: z.string().max(4096),
+  model: z.string().min(1).max(255),
+  dimension: z.number().int().min(1).max(8192).optional(),
+});
+
 export const zvecRouter = new Hono();
 
 zvecRouter.use(zvecAuthMiddleware);
@@ -158,5 +187,95 @@ zvecRouter.get("/collections/:name/stats", requireScope("zvec:read"), async (c) 
     }
     console.error("[ZVec] Collection stats error:", err); // no-excuse-ok: catch — top-level HTTP handler
     return c.json({ error: "Failed to get collection stats" }, 500);
+  }
+});
+
+zvecRouter.get("/model-templates", requireScope("zvec:read"), async (c) => {
+  try {
+    const templates = await vectorService.listVectorModelTemplates();
+    return c.json({ templates });
+  } catch (err) {
+    console.error("[ZVec] List model templates error:", err); // no-excuse-ok: catch — top-level HTTP handler
+    return c.json({ error: "Failed to list model templates" }, 500);
+  }
+});
+
+zvecRouter.get("/model-templates/:id", requireScope("zvec:read"), async (c) => {
+  try {
+    const { id } = vectorModelTemplateIdParamsSchema.parse(c.req.param());
+    const template = await vectorService.getVectorModelTemplate(id);
+    if (!template) {
+      return c.json({ error: "Model template not found" }, 404);
+    }
+    return c.json(template);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return c.json({ error: "Invalid request" }, 400);
+    }
+    console.error("[ZVec] Get model template error:", err); // no-excuse-ok: catch — top-level HTTP handler
+    return c.json({ error: "Failed to get model template" }, 500);
+  }
+});
+
+zvecRouter.post("/model-templates", requireScope("zvec:write"), async (c) => {
+  try {
+    const input = vectorModelTemplateSaveInputSchema.parse(await c.req.json());
+    const summary = await vectorService.saveVectorModelTemplate(input);
+    return c.json(summary, 201);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return c.json({ error: "Invalid request" }, 400);
+    }
+    console.error("[ZVec] Save model template error:", err); // no-excuse-ok: catch — top-level HTTP handler
+    return c.json({ error: "Failed to save model template" }, 500);
+  }
+});
+
+zvecRouter.delete("/model-templates/:id", requireScope("zvec:write"), async (c) => {
+  try {
+    const { id } = vectorModelTemplateIdParamsSchema.parse(c.req.param());
+    await vectorService.deleteVectorModelTemplate(id);
+    return c.json({ success: true });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return c.json({ error: "Invalid request" }, 400);
+    }
+    console.error("[ZVec] Delete model template error:", err); // no-excuse-ok: catch — top-level HTTP handler
+    return c.json({ error: "Failed to delete model template" }, 500);
+  }
+});
+
+zvecRouter.post("/model-templates/:id/select", requireScope("zvec:write"), async (c) => {
+  try {
+    const { id } = vectorModelTemplateIdParamsSchema.parse(c.req.param());
+    const summary = await vectorService.selectVectorModelTemplate(id);
+    return c.json(summary);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return c.json({ error: "Invalid request" }, 400);
+    }
+    if (err instanceof Error && err.message.startsWith("Vector model template not found")) {
+      return c.json({ error: "Model template not found" }, 404);
+    }
+    console.error("[ZVec] Select model template error:", err); // no-excuse-ok: catch — top-level HTTP handler
+    return c.json({ error: "Failed to select model template" }, 500);
+  }
+});
+
+zvecRouter.post("/model-templates/test", requireScope("zvec:write"), async (c) => {
+  try {
+    const input = vectorModelTemplateTestInputSchema.parse(await c.req.json());
+    const { id, ...config } = input;
+    const result = await vectorService.testEmbeddingConfig(config);
+    if (id) {
+      await vectorService.markVectorModelTemplateTest(id, result);
+    }
+    return c.json(result);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return c.json({ error: "Invalid request" }, 400);
+    }
+    console.error("[ZVec] Test model template error:", err); // no-excuse-ok: catch — top-level HTTP handler
+    return c.json({ error: "Failed to test model template" }, 500);
   }
 });

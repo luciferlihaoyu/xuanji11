@@ -134,3 +134,57 @@ export function useAgentSettings() {
       autoReconnect.isLoading,
   };
 }
+
+export function useVectorModelTemplates() {
+  return trpc.setting.listVectorModelTemplates.useQuery(undefined, {
+    staleTime: 1000 * 30,
+  });
+}
+
+export function useVectorModelTemplate(id: string) {
+  return trpc.setting.getVectorModelTemplate.useQuery(
+    { id },
+    { enabled: id.length > 0 }
+  );
+}
+
+export function useSaveVectorModelTemplate() {
+  const utils = trpc.useUtils();
+  return trpc.setting.saveVectorModelTemplate.useMutation({
+    onSuccess: () => {
+      utils.setting.listVectorModelTemplates.invalidate();
+    },
+  });
+}
+
+export function useDeleteVectorModelTemplate() {
+  const utils = trpc.useUtils();
+  return trpc.setting.deleteVectorModelTemplate.useMutation({
+    onSuccess: () => {
+      utils.setting.listVectorModelTemplates.invalidate();
+    },
+  });
+}
+
+export function useSelectVectorModelTemplate() {
+  const utils = trpc.useUtils();
+  return trpc.setting.selectVectorModelTemplate.useMutation({
+    onSuccess: () => {
+      utils.setting.listVectorModelTemplates.invalidate();
+      for (const key of VECTOR_KEYS) {
+        utils.setting.getByKey.invalidate({ key });
+      }
+    },
+  });
+}
+
+export function useTestVectorModelTemplate() {
+  const utils = trpc.useUtils();
+  return trpc.setting.testVectorModelTemplate.useMutation({
+    onSuccess: (result) => {
+      if (result.ok) {
+        utils.setting.listVectorModelTemplates.invalidate();
+      }
+    },
+  });
+}

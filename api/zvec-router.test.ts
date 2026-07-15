@@ -32,6 +32,13 @@ vi.mock("./lib/vector-service", () => ({
   deleteCollection: vi.fn(),
   getCollectionStats: vi.fn(),
   addDocumentsToCollection: vi.fn(),
+  testEmbeddingConfig: vi.fn(),
+  listVectorModelTemplates: vi.fn(),
+  getVectorModelTemplate: vi.fn(),
+  saveVectorModelTemplate: vi.fn(),
+  deleteVectorModelTemplate: vi.fn(),
+  selectVectorModelTemplate: vi.fn(),
+  markVectorModelTemplateTest: vi.fn(),
 }));
 
 function fakeUser(): User {
@@ -193,5 +200,158 @@ describe("ZVec REST API", () => {
 
     expect(res.status).toBe(400);
     await expect(res.json()).resolves.toEqual({ error: "Invalid request" });
+  });
+
+  it("lists model templates with read scope", async () => {
+    const { zvecRouter } = await import("./zvec-router");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(user);
+    vi.mocked(vectorService.listVectorModelTemplates).mockResolvedValue([
+      {
+        id: "template-1",
+        name: "OpenAI Embedding",
+        provider: "openai" as const,
+        apiUrl: "https://api.openai.com/v1",
+        model: "text-embedding-3-small",
+        dimension: 1536,
+        hasApiKey: true,
+        isActive: true,
+      },
+    ]);
+
+    const res = await zvecRouter.request("/model-templates", { method: "GET" });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      templates: [
+        {
+          id: "template-1",
+          name: "OpenAI Embedding",
+          provider: "openai",
+          apiUrl: "https://api.openai.com/v1",
+          model: "text-embedding-3-small",
+          dimension: 1536,
+          hasApiKey: true,
+          isActive: true,
+        },
+      ],
+    });
+    expect(vectorService.listVectorModelTemplates).toHaveBeenCalled();
+  });
+
+  it("saves a model template with write scope", async () => {
+    const { zvecRouter } = await import("./zvec-router");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(user);
+    vi.mocked(vectorService.saveVectorModelTemplate).mockResolvedValue({
+      id: "template-1",
+      name: "OpenAI Embedding",
+      provider: "openai" as const,
+      apiUrl: "https://api.openai.com/v1",
+      model: "text-embedding-3-small",
+      dimension: 1536,
+      hasApiKey: true,
+      isActive: false,
+    });
+
+    const res = await zvecRouter.request("/model-templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "OpenAI Embedding",
+        apiUrl: "https://api.openai.com/v1",
+        apiKey: "sk-test",
+        model: "text-embedding-3-small",
+        dimension: 1536,
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    await expect(res.json()).resolves.toEqual({
+      id: "template-1",
+      name: "OpenAI Embedding",
+      provider: "openai",
+      apiUrl: "https://api.openai.com/v1",
+      model: "text-embedding-3-small",
+      dimension: 1536,
+      hasApiKey: true,
+      isActive: false,
+    });
+    expect(vectorService.saveVectorModelTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "OpenAI Embedding",
+        apiUrl: "https://api.openai.com/v1",
+        apiKey: "sk-test",
+        model: "text-embedding-3-small",
+        dimension: 1536,
+      })
+    );
+  });
+
+  it("tests a persisted model template and marks the result", async () => {
+    const { zvecRouter } = await import("./zvec-router");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(user);
+    vi.mocked(vectorService.testEmbeddingConfig).mockResolvedValue({
+      ok: true,
+      provider: "openai",
+      model: "text-embedding-3-small",
+      dimension: 1536,
+    });
+    vi.mocked(vectorService.markVectorModelTemplateTest).mockResolvedValue(undefined);
+
+    const res = await zvecRouter.request("/model-templates/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: "template-1",
+        apiUrl: "https://api.openai.com/v1",
+        apiKey: "sk-test",
+        model: "text-embedding-3-small",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      ok: true,
+      provider: "openai",
+      model: "text-embedding-3-small",
+      dimension: 1536,
+    });
+    expect(vectorService.testEmbeddingConfig).toHaveBeenCalledWith({
+      apiUrl: "https://api.openai.com/v1",
+      apiKey: "sk-test",
+      model: "text-embedding-3-small",
+    });
+    expect(vectorService.markVectorModelTemplateTest).toHaveBeenCalledWith("template-1", {
+      ok: true,
+      provider: "openai",
+      model: "text-embedding-3-small",
+      dimension: 1536,
+    });
+  });
+
+  it("forbids model template writes with only read scope", async () => {
+    const { zvecRouter } = await import("./zvec-router");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue({ user, auth: readOnlyAuth() });
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
+
+    const res = await zvecRouter.request("/model-templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "OpenAI Embedding",
+        apiUrl: "https://api.openai.com/v1",
+        apiKey: "sk-test",
+        model: "text-embedding-3-small",
+      }),
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({ error: "Forbidden" });
   });
 });

@@ -2,7 +2,17 @@ import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { User, BookOpen, Bot, Brain, HardDrive, Workflow, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
-import { useSettings, useVectorSettings, useAgentSettings, useStorageSettings, useAppearanceSettings } from '@/hooks/useSettings';
+import {
+  useSettings,
+  useVectorSettings,
+  useAgentSettings,
+  useStorageSettings,
+  useAppearanceSettings,
+  useVectorModelTemplates,
+  useSaveVectorModelTemplate,
+  useDeleteVectorModelTemplate,
+  useSelectVectorModelTemplate,
+} from '@/hooks/useSettings';
 import { useConnectorConfig } from '@/hooks/useConnectorConfig';
 import { trpc, trpcClient } from '@/providers/trpc';
 import { useAuth } from '@/hooks/useAuth';
@@ -135,6 +145,11 @@ function ConnectorSettings() {
   );
 }
 
+function toVectorProvider(value: string): 'openai' | 'minimax' | 'local' | 'custom' {
+  if (value === 'openai' || value === 'minimax' || value === 'local' || value === 'custom') return value;
+  return 'openai';
+}
+
 export default function Settings() {
   const { category = 'personal' } = useParams();
   const { user, logout } = useAuth();
@@ -179,15 +194,21 @@ export default function Settings() {
   const vectorSettings = useVectorSettings();
   const agentSettings = useAgentSettings();
   const { setSetting, setMany, isSetting } = useSettings();
+  const { data: templates, isLoading: templatesLoading } = useVectorModelTemplates();
+  const saveTemplate = useSaveVectorModelTemplate();
+  const deleteTemplate = useDeleteVectorModelTemplate();
+  const selectTemplate = useSelectVectorModelTemplate();
 
   // Local form state for vectorization
   const [vectorForm, setVectorForm] = useState({
+    name: '',
     provider: 'openai',
     apiUrl: '',
     apiKey: '',
     model: 'text-embedding-3-small',
     dimension: '1536',
   });
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [indexMode, setIndexMode] = useState('realtime');
   const [similarityThreshold, setSimilarityThreshold] = useState(75);
   const [vectorSaved, setVectorSaved] = useState(false);
@@ -226,13 +247,14 @@ export default function Settings() {
   // Sync form state when backend data loads
   useEffect(() => {
     if (!vectorSettings.isLoading) {
-      setVectorForm({
+      setVectorForm((prev) => ({
+        ...prev,
         provider: vectorSettings.provider || 'openai',
         apiUrl: vectorSettings.apiUrl || '',
         apiKey: vectorSettings.apiKey || '',
         model: vectorSettings.model || 'text-embedding-3-small',
         dimension: vectorSettings.dimension || '1536',
-      });
+      }));
       setIndexMode(vectorSettings.indexMode || 'realtime');
       const parsed = Number.parseFloat(vectorSettings.similarityThreshold);
       setSimilarityThreshold(Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed * 100))) : 75);
@@ -254,7 +276,7 @@ export default function Settings() {
     setToggles((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const testConnection = async () => {
+  const testAgentConnection = async () => {
     setTestResult(null);
     setTestError('');
     setTestLoading(true);
@@ -264,7 +286,36 @@ export default function Settings() {
         setTestResult('success');
       } else {
         setTestResult('fail');
-        setTestError((result as { error?: string }).error || '连接失败，请检查配置');
+        setTestError(result.error || '连接失败，请检查配置');
+      }
+    } catch (err: unknown) {
+      setTestResult('fail');
+      setTestError(err && typeof err === 'object' && 'message' in err ? String(err.message) : '连接失败，请检查配置');
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
+  const testConnection = async () => {
+    setTestResult(null);
+    setTestError('');
+    setTestLoading(true);
+    try {
+      const result = await trpcClient.setting.testVectorModelTemplate.mutate({
+        provider: toVectorProvider(vectorForm.provider),
+        apiUrl: vectorForm.apiUrl,
+        apiKey: vectorForm.apiKey,
+        model: vectorForm.model,
+        dimension: Number.parseInt(vectorForm.dimension, 10) || 1536,
+      });
+      if (result.ok) {
+        setTestResult('success');
+      } else {
+        setTestResult('fail');
+        const parts = [result.error];
+        if (result.status) parts.push(`HTTP ${result.status}`);
+        if (result.resolvedUrl) parts.push(result.resolvedUrl);
+        setTestError(parts.filter(Boolean).join(' · '));
       }
     } catch (err: unknown) {
       setTestResult('fail');
@@ -285,6 +336,108 @@ export default function Settings() {
       { key: 'embedding_similarity_threshold', value: (similarityThreshold / 100).toFixed(2), category: 'vectorization' },
     ]);
     setVectorSaved(true);
+  };
+
+  const handleNewTemplate = () => {
+    setEditingTemplateId(null);
+    setVectorForm({
+      name: '',
+      provider: 'openai',
+      apiUrl: '',
+      apiKey: '',
+      model: 'text-embedding-3-small',
+      dimension: '1536',
+    });
+    setIndexMode('realtime');
+    setSimilarityThreshold(75);
+  };
+
+  const handleEditTemplate = async (id: string) => {
+    const template = await trpcClient.setting.getVectorModelTemplate.query({ id });
+    setEditingTemplateId(template.id);
+    setVectorForm({
+      name: template.name,
+      provider: template.provider ?? 'openai',
+      apiUrl: template.apiUrl,
+      apiKey: template.apiKey,
+      model: template.model,
+      dimension: String(template.dimension ?? 1536),
+    });
+    setIndexMode(template.indexMode ?? 'realtime');
+    const parsed = Number.parseFloat(template.similarityThreshold ?? '');
+    setSimilarityThreshold(Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed * 100))) : 75);
+  };
+
+  const handleSaveTemplate = async (activate = false) => {
+    if (!vectorForm.name.trim()) {
+      addToast({ type: 'error', title: '请输入配置名称' });
+      return;
+    }
+    const dimension = Number.parseInt(vectorForm.dimension, 10) || 1536;
+    const summary = await saveTemplate.mutateAsync({
+      id: editingTemplateId ?? undefined,
+      name: vectorForm.name.trim(),
+      provider: toVectorProvider(vectorForm.provider),
+      apiUrl: vectorForm.apiUrl,
+      apiKey: vectorForm.apiKey,
+      model: vectorForm.model,
+      dimension,
+      indexMode,
+      similarityThreshold: (similarityThreshold / 100).toFixed(2),
+    });
+    setEditingTemplateId(summary.id);
+    if (activate) {
+      await selectTemplate.mutateAsync({ id: summary.id });
+    }
+    addToast({ type: 'success', title: activate ? '已保存并激活' : '模板已保存' });
+  };
+
+  const handleSelectTemplate = async (id: string) => {
+    await selectTemplate.mutateAsync({ id });
+    addToast({ type: 'success', title: '已激活' });
+  };
+
+  const handleDeleteTemplate = async (id: string) => {
+    await deleteTemplate.mutateAsync({ id });
+    if (editingTemplateId === id) handleNewTemplate();
+    addToast({ type: 'success', title: '已删除' });
+  };
+
+  const handleTestTemplate = async (id: string) => {
+    setTestLoading(true);
+    setTestResult(null);
+    setTestError('');
+    try {
+      const template = await trpcClient.setting.getVectorModelTemplate.query({ id });
+      const result = await trpcClient.setting.testVectorModelTemplate.mutate({
+        id: template.id,
+        provider: toVectorProvider(template.provider ?? 'openai'),
+        customProviderName: template.customProviderName ?? undefined,
+        apiUrl: template.apiUrl,
+        apiKey: template.apiKey,
+        model: template.model,
+        dimension: template.dimension ?? 1536,
+      });
+      if (result.ok) {
+        setTestResult('success');
+        addToast({ type: 'success', title: '连接成功' });
+      } else {
+        setTestResult('fail');
+        const parts = [result.error];
+        if (result.status) parts.push(`HTTP ${result.status}`);
+        if (result.resolvedUrl) parts.push(result.resolvedUrl);
+        const message = parts.filter(Boolean).join(' · ') || '连接失败';
+        setTestError(message);
+        addToast({ type: 'error', title: message });
+      }
+    } catch (err: unknown) {
+      const message = err && typeof err === 'object' && 'message' in err ? String(err.message) : '测试失败';
+      setTestResult('fail');
+      setTestError(message);
+      addToast({ type: 'error', title: message });
+    } finally {
+      setTestLoading(false);
+    }
   };
 
   const saveAgentSettings = async () => {
@@ -450,7 +603,7 @@ export default function Settings() {
                 />
               </div>
               <div className="flex items-center gap-3 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                <button onClick={testConnection} disabled={testLoading} className="btn-secondary text-xs py-2 px-4">
+                <button onClick={testAgentConnection} disabled={testLoading} className="btn-secondary text-xs py-2 px-4">
                   {testLoading ? (
                     <span className="flex items-center gap-1">
                       <Loader2 className="w-3.5 h-3.5 animate-spin" /> 测试中...
@@ -482,6 +635,16 @@ export default function Settings() {
           <div className="space-y-6">
             <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>向量化模型设置</h3>
             <div className="space-y-4 max-w-lg">
+              <div>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>配置名称</label>
+                <input
+                  type="text"
+                  value={vectorForm.name}
+                  onChange={(e) => setVectorForm((prev) => ({ ...prev, name: e.target.value }))}
+                  placeholder="例如 OpenAI Embedding"
+                  className="input-base text-sm"
+                />
+              </div>
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>模型提供商</label>
                 <select
@@ -575,7 +738,7 @@ export default function Settings() {
                   <span className="text-xs w-12" style={{ color: 'var(--accent-cyan)' }}>{(similarityThreshold / 100).toFixed(2)}</span>
                 </div>
               </div>
-              <div className="flex items-center gap-3 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+              <div className="flex flex-wrap items-center gap-3 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
                 <button onClick={testConnection} disabled={testLoading} className="btn-secondary text-xs py-2 px-4">
                   {testLoading ? (
                     <span className="flex items-center gap-1">
@@ -591,6 +754,28 @@ export default function Settings() {
                     </span>
                   ) : '测试连接'}
                 </button>
+                <button
+                  onClick={() => handleSaveTemplate(false)}
+                  disabled={saveTemplate.isPending}
+                  className="btn-secondary text-xs py-2 px-4"
+                >
+                  {saveTemplate.isPending ? (
+                    <span className="flex items-center gap-1">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> 保存中...
+                    </span>
+                  ) : '保存模板'}
+                </button>
+                <button
+                  onClick={() => handleSaveTemplate(true)}
+                  disabled={saveTemplate.isPending || selectTemplate.isPending}
+                  className="btn-primary text-xs py-2 px-4"
+                >
+                  {saveTemplate.isPending || selectTemplate.isPending ? (
+                    <span className="flex items-center gap-1">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> 保存中...
+                    </span>
+                  ) : '保存并激活'}
+                </button>
                 <button onClick={saveVectorSettings} disabled={isSetting} className="btn-primary text-xs py-2 px-4">
                   {isSetting ? (
                     <span className="flex items-center gap-1">
@@ -600,9 +785,67 @@ export default function Settings() {
                     <span className="flex items-center gap-1" style={{ color: 'var(--accent-emerald)' }}>
                       <Check className="w-3.5 h-3.5" /> 已保存
                     </span>
-                  ) : '保存设置'}
+                  ) : '保存当前设置'}
                 </button>
               </div>
+            </div>
+
+            <div className="card-base p-4 max-w-lg">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>已保存的模板</h4>
+                <button onClick={handleNewTemplate} className="btn-secondary text-xs py-1.5 px-3">新建模板</button>
+              </div>
+              {templatesLoading ? (
+                <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> 加载中...
+                </div>
+              ) : templates?.length === 0 ? (
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>暂无保存的模板</div>
+              ) : (
+                <div className="space-y-2">
+                  {templates?.map((template) => (
+                    <div
+                      key={template.id}
+                      className="flex items-center justify-between p-2 rounded-md"
+                      style={{ backgroundColor: 'var(--bg-secondary)' }}
+                    >
+                      <div className="min-w-0 mr-2">
+                        <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                          {template.name}
+                          {template.isActive && (
+                            <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'rgba(16,185,129,0.15)', color: 'var(--accent-emerald)' }}>已激活</span>
+                          )}
+                        </div>
+                        <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                          {template.provider === 'custom' && template.customProviderName
+                            ? template.customProviderName
+                            : template.provider}
+                          {' · '}
+                          {template.model}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button onClick={() => handleEditTemplate(template.id)} className="btn-secondary text-[10px] py-1 px-2">编辑</button>
+                        <button onClick={() => handleTestTemplate(template.id)} disabled={testLoading} className="btn-secondary text-[10px] py-1 px-2">测试</button>
+                        <button
+                          onClick={() => handleSelectTemplate(template.id)}
+                          disabled={selectTemplate.isPending || template.isActive}
+                          className="btn-primary text-[10px] py-1 px-2"
+                        >
+                          {template.isActive ? '已激活' : '激活'}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteTemplate(template.id)}
+                          disabled={deleteTemplate.isPending}
+                          className="btn-danger text-[10px] py-1 px-2"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         );
