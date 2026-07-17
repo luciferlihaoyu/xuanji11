@@ -8,6 +8,24 @@ import { clean } from "./lib/clean";
 import { logAudit, logAction } from "./lib/audit";
 import { scopesFromPermissions } from "./lib/auth";
 
+async function readSafeResponseBody(res: Response): Promise<string> {
+  try {
+    const text = await res.text();
+    return text.length > 0 ? text : "No response body";
+  } catch {
+    return "No response body";
+  }
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
+function connectionErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.length > 0) return err.message;
+  return "未知错误";
+}
+
 export const agentRouter = createRouter({
   list: authedQuery
     .input(
@@ -229,10 +247,8 @@ export const agentRouter = createRouter({
           signal: controller.signal,
         });
 
-        clearTimeout(timeout);
-
         if (!res.ok) {
-          const text = await res.text().catch(() => 'No response body');
+          const text = await readSafeResponseBody(res);
           return { success: false as const, message: `HTTP ${res.status}: ${text}` };
         }
 
@@ -241,13 +257,13 @@ export const agentRouter = createRouter({
           return { success: true as const, message: '连接成功' };
         }
         return { success: true as const, message: '响应正常' };
-      } catch (err: any) {
-        clearTimeout(timeout);
-        if (err.name === 'AbortError') {
+      } catch (err: unknown) {
+        if (isAbortError(err)) {
           return { success: false as const, message: '请求超时（15秒）' };
         }
-        console.error('[TestLlm] Failed:', err);
-        return { success: false as const, message: '连接测试失败' };
+        return { success: false as const, message: `连接测试失败：${connectionErrorMessage(err)}` };
+      } finally {
+        clearTimeout(timeout);
       }
     }),
 });
