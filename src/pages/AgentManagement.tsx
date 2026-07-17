@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useAppStore, DEFAULT_PERMISSIONS } from '@/store/useAppStore';
 import type { Agent, AgentStatus, AgentType } from '@/store/useAppStore';
 import { useAgents } from '@/hooks/useAgents';
+import { useVectorModelTemplate, useVectorModelTemplates } from '@/hooks/useSettings';
 import { trpcClient } from '@/providers/trpc';
 import PermissionSelector from '@/components/PermissionSelector';
 import { isSameDay, isWithinInterval, startOfDay, endOfDay, subDays } from 'date-fns';
@@ -72,6 +73,7 @@ export default function AgentManagement() {
 
   // LLM config state
   const [llmConfig, setLlmConfig] = useState({
+    llm_template_id: '',
     llm_api_url: '',
     llm_api_key: '',
     llm_model: '',
@@ -81,6 +83,8 @@ export default function AgentManagement() {
   const [showLlmKey, setShowLlmKey] = useState(false);
   const [testLlmStatus, setTestLlmStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [testLlmMessage, setTestLlmMessage] = useState('');
+  const { data: vectorTemplates = [], isLoading: vectorTemplatesLoading } = useVectorModelTemplates();
+  const { data: selectedLlmTemplate } = useVectorModelTemplate(llmConfig.llm_template_id);
 
   // API Key management state
   const [apiKeys, setApiKeys] = useState<Array<{
@@ -122,12 +126,17 @@ export default function AgentManagement() {
     })
   ).length;
   const depts = [...new Set(agents.map((a) => a.department))];
+  const selectedLlmTemplateSummary = useMemo(
+    () => vectorTemplates.find((template) => template.id === llmConfig.llm_template_id),
+    [llmConfig.llm_template_id, vectorTemplates],
+  );
 
   // Sync LLM config when selected agent changes
   useEffect(() => {
     if (selectedAgentData) {
       const cfg = (selectedAgentData as { config?: Record<string, unknown> }).config || {};
       setLlmConfig({
+        llm_template_id: String(cfg.llm_template_id || ''),
         llm_api_url: String(cfg.llm_api_url || ''),
         llm_api_key: String(cfg.llm_api_key || ''),
         llm_model: String(cfg.llm_model || ''),
@@ -138,6 +147,27 @@ export default function AgentManagement() {
       setTestLlmMessage('');
     }
   }, [selectedAgentData]);
+
+  useEffect(() => {
+    if (!selectedLlmTemplate || selectedLlmTemplate.id !== llmConfig.llm_template_id) return;
+    setLlmConfig((current) => {
+      if (current.llm_template_id !== selectedLlmTemplate.id) return current;
+      const nextApiKey = selectedLlmTemplate.apiKey.length > 0 ? selectedLlmTemplate.apiKey : current.llm_api_key;
+      if (
+        current.llm_api_url === selectedLlmTemplate.apiUrl &&
+        current.llm_model === selectedLlmTemplate.model &&
+        current.llm_api_key === nextApiKey
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        llm_api_url: selectedLlmTemplate.apiUrl,
+        llm_api_key: nextApiKey,
+        llm_model: selectedLlmTemplate.model,
+      };
+    });
+  }, [llmConfig.llm_template_id, selectedLlmTemplate]);
 
   // Fetch API keys when selected agent changes
   const refreshApiKeys = useCallback(async (agentId: string) => {
@@ -168,6 +198,22 @@ export default function AgentManagement() {
     if (!date) return '从未';
     const d = typeof date === 'string' ? new Date(date) : date;
     return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  };
+
+  const handleSelectLlmTemplate = (templateId: string) => {
+    const template = vectorTemplates.find((item) => item.id === templateId);
+    setTestLlmStatus('idle');
+    setTestLlmMessage('');
+    setLlmConfig((current) => ({
+      ...current,
+      llm_template_id: templateId,
+      ...(template
+        ? {
+          llm_api_url: template.apiUrl,
+          llm_model: template.model,
+        }
+        : {}),
+    }));
   };
 
   const handleGenerateApiKey = async () => {
@@ -295,6 +341,7 @@ export default function AgentManagement() {
     try {
       await update(selectedAgent, {
         config: {
+          llm_template_id: llmConfig.llm_template_id,
           llm_api_url: llmConfig.llm_api_url,
           llm_api_key: llmConfig.llm_api_key,
           llm_model: llmConfig.llm_model,
@@ -673,6 +720,32 @@ export default function AgentManagement() {
             <div className="mb-6">
               <h4 className="text-sm font-semibold mb-3 flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}><Zap className="w-4 h-4" />LLM 配置</h4>
               <div className="space-y-3">
+                <div>
+                  <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>使用系统模板</label>
+                  <select
+                    value={llmConfig.llm_template_id}
+                    onChange={(e) => handleSelectLlmTemplate(e.target.value)}
+                    className="input-base text-xs w-full"
+                  >
+                    <option value="">手动填写</option>
+                    {vectorTemplates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name} / {template.customProviderName || template.provider} / {template.model}
+                      </option>
+                    ))}
+                  </select>
+                  {vectorTemplatesLoading && (
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>正在加载系统模板...</p>
+                  )}
+                  {!vectorTemplatesLoading && vectorTemplates.length === 0 && (
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>暂无系统模板，可继续手动填写。</p>
+                  )}
+                  {selectedLlmTemplateSummary && (
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                      已套用模板 URL 与模型{selectedLlmTemplateSummary.hasApiKey ? '，并读取模板密钥；也可手动覆盖。' : '；模板未保存密钥，保留当前 API Key。'}
+                    </p>
+                  )}
+                </div>
                 <div>
                   <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>API URL</label>
                   <input
