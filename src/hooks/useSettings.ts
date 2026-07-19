@@ -188,3 +188,15 @@ export function useTestVectorModelTemplate() {
     },
   });
 }
+
+export function useVectorStats() {
+  return trpc.vector.stats.useQuery(undefined, {
+    staleTime: 1000 * 30,
+  });
+}
+
+export function useVectorCollections() {
+  return trpc.vector.list.useQuery(undefined, {
+    staleTime: 1000 * 30,
+  });
+}
