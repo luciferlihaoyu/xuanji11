@@ -112,6 +112,23 @@ export interface VectorModelTestResult {
   readonly error?: string;
 }
 
+export interface VectorHealthStatus {
+  readonly ok: boolean;
+  readonly engine: string;
+  readonly size: number;
+  readonly mode: "empty" | "indexed";
+  readonly provider: string;
+  readonly model: string;
+  readonly dimension?: number;
+  readonly error?: string;
+  readonly fallbackTemplateId?: string;
+  readonly fallbackTemplateName?: string;
+  readonly zvecEnabled: boolean;
+  readonly zvecDataDir: string;
+  readonly zvecDimension: number;
+  readonly collectionName: string;
+}
+
 class EmbeddingApiError extends Error {
   readonly name = "EmbeddingApiError";
   readonly status: number;
@@ -648,10 +665,21 @@ export const vectorEngine = {
     collection = null;
   },
 
-  async healthCheck(): Promise<{ ok: boolean; engine: string; size: number; mode: "empty" | "indexed"; provider: string; model: string; error?: string; dimension?: number; fallbackTemplateId?: string; fallbackTemplateName?: string }> {
+  async healthCheck(): Promise<VectorHealthStatus> {
     const cfg = await loadEmbeddingConfig();
     const { size, error: sizeError } = safeVectorSize();
-    const base = { engine: env.zvecEnabled ? "zvec" : cfg.enabled ? "embedding-api" : "cosine-fallback", size, mode: (size === 0 ? "empty" : "indexed") as "empty" | "indexed", provider: cfg.enabled ? cfg.url : "hash-fallback", model: cfg.enabled ? cfg.model : "simple-hash-64" as const };
+    const mode: "empty" | "indexed" = size === 0 ? "empty" : "indexed";
+    const base = {
+      engine: env.zvecEnabled ? "zvec" : cfg.enabled ? "embedding-api" : "cosine-fallback",
+      size,
+      mode,
+      provider: cfg.enabled ? cfg.url : "hash-fallback",
+      model: cfg.enabled ? cfg.model : "simple-hash-64",
+      zvecEnabled: env.zvecEnabled,
+      zvecDataDir: env.zvecDataDir,
+      zvecDimension: env.zvecDimension,
+      collectionName,
+    };
     if (!cfg.enabled) return { ...base, ok: true };
     try {
       const [vector] = await fetchEmbeddingsWithConfig(["ping"], cfg);
@@ -754,6 +782,6 @@ export async function getCollectionStats(name: string): Promise<CollectionStats>
   return { name: collection.name, count: collection.documentCount ?? 0, dimension: collection.dimension ?? 0 };
 }
 
-export async function getStats(): Promise<{ ok: boolean; engine: string; size: number; mode: "empty" | "indexed"; provider: string; model: string; error?: string; dimension?: number; fallbackTemplateId?: string; fallbackTemplateName?: string }> {
+export async function getStats(): Promise<VectorHealthStatus> {
   return vectorEngine.healthCheck();
 }

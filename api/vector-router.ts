@@ -5,8 +5,11 @@ import { getDb } from "./queries/connection";
 import { vectorCollections } from "@db/schema";
 import { clean } from "./lib/clean";
 import { logAudit } from "./lib/audit";
+import { getStats } from "./lib/vector-service";
 
 export const vectorRouter = createRouter({
+  stats: authedQuery.query(() => getStats()),
+
   list: authedQuery.query(async () => {
     const db = getDb();
     return db.select().from(vectorCollections).orderBy(desc(vectorCollections.updatedAt));
