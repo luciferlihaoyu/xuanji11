@@ -12,7 +12,10 @@ import {
   useSaveVectorModelTemplate,
   useDeleteVectorModelTemplate,
   useSelectVectorModelTemplate,
+  useVectorStats,
+  useVectorCollections,
 } from '@/hooks/useSettings';
+import { ZVecManagementPanel } from './settings/ZVecManagementPanel';
 import { useConnectorConfig } from '@/hooks/useConnectorConfig';
 import { trpc, trpcClient } from '@/providers/trpc';
 import { useAuth } from '@/hooks/useAuth';
@@ -198,6 +201,8 @@ export default function Settings() {
   const saveTemplate = useSaveVectorModelTemplate();
   const deleteTemplate = useDeleteVectorModelTemplate();
   const selectTemplate = useSelectVectorModelTemplate();
+  const vectorStats = useVectorStats();
+  const vectorCollections = useVectorCollections();
 
   // Local form state for vectorization
   const [vectorForm, setVectorForm] = useState({
@@ -847,6 +852,11 @@ export default function Settings() {
                 </div>
               )}
             </div>
+            <ZVecManagementPanel
+              stats={vectorStats.data}
+              collections={vectorCollections.data}
+              isLoading={vectorStats.isLoading || vectorCollections.isLoading}
+            />
           </div>
         );
 
