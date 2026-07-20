@@ -210,7 +210,8 @@ async function callTool(call: McpToolCall, user: User, auth: AuthInfo): Promise<
     case "keywords.autoTag":
       return handleKeywordTool(call.name, call.arguments, auth, user.id);
     case "relations.discover":
-      return handleRelationTool(call.name, call.arguments, auth);
+    case "relations.create":
+      return handleRelationTool(call.name, call.arguments, auth, user);
     case "analytics.get":
       return handleAnalyticsTool(call.arguments, auth);
     default: return { content: [{ type: "text", text: `Unknown tool: ${call.name}` }], isError: true };

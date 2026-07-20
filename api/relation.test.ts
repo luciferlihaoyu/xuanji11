@@ -36,6 +36,7 @@ vi.mock("./lib/vector-service", () => ({
 
 import { relationRouter } from "./relation-router";
 import { discoverRelations } from "./lib/relation-analyzer";
+import type { McpTool } from "./mcp-relation";
 import type { AuthInfo } from "./lib/auth";
 
 function fakeUser(): User {
@@ -398,6 +399,69 @@ describe("relation MCP tool", () => {
     expect(res).toHaveProperty("result");
     const result = res as { result: { tools: Array<{ name: string }> } };
     expect(result.result.tools.some((tool) => tool.name === "relations.discover")).toBe(true);
+  });
+
+  it("includes the relations.create tool definition", async () => {
+    const { handleMcpRequest } = await import("./mcp-server");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue({ user, auth: readAuth() });
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
+
+    const res = await handleMcpRequest(
+      { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      new Headers({ Authorization: "Bearer test-key" }),
+    );
+
+    const result = res as { result: { tools: McpTool[] } };
+    const tool = result.result.tools.find((t) => t.name === "relations.create");
+    expect(tool).toBeDefined();
+    expect(tool?.inputSchema.required).toContain("sourceId");
+    expect(tool?.inputSchema.required).toContain("targetId");
+  });
+
+  it("executes relations.create with knowledge:write scope", async () => {
+    const { handleMcpRequest } = await import("./mcp-server");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue({ user, auth: writeAuth() });
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
+    vi.mocked(getDb).mockReturnValue(createFakeDb() as never);
+
+    const res = await handleMcpRequest(
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "relations.create", arguments: { sourceId: 1, targetId: 2, type: "related" } },
+      },
+      new Headers({ Authorization: "Bearer test-key" }),
+    );
+
+    expect(res).toMatchObject({ jsonrpc: "2.0", id: 3 });
+    expect(res).toHaveProperty("result");
+  });
+
+  it("rejects relations.create without knowledge:write scope", async () => {
+    const { handleMcpRequest } = await import("./mcp-server");
+    const user = fakeUser();
+    vi.mocked(authenticateApiKey).mockResolvedValue({ user, auth: readAuth() });
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
+    vi.mocked(getDb).mockReturnValue(createFakeDb() as never);
+
+    const res = await handleMcpRequest(
+      {
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: { name: "relations.create", arguments: { sourceId: 1, targetId: 2 } },
+      },
+      new Headers({ Authorization: "Bearer test-key" }),
+    );
+
+    expect(res).toMatchObject({
+      jsonrpc: "2.0",
+      id: 4,
+      error: { code: -32603, message: "Internal tool error" },
+    });
   });
 
   it("executes relations.discover with knowledge:read scope", async () => {
