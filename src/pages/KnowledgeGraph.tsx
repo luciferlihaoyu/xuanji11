@@ -117,8 +117,8 @@ export default function KnowledgeGraph() {
   // Edit trigger — when set, NodeDetailPanel starts in edit mode
   const [editTriggerId, setEditTriggerId] = useState<string | null>(null);
 
-  // 将后端数据转为前端渲染格式
-  const renderNodes: RenderNode[] = backendNodes.map((n: any) => ({
+  // 将后端数据转为前端渲染格式（useMemo 稳定引用，避免 layout useMemo 每帧过期）
+  const renderNodes = useMemo(() => backendNodes.map((n: any) => ({
     id: String(n.id),
     name: n.title ?? '未命名',
     category: n.type ?? 'concept',
@@ -134,14 +134,14 @@ export default function KnowledgeGraph() {
     y: (n.posY ?? 0) * 3,
     fx: null,
     fy: null,
-  }));
+  })), [backendNodes]);
 
-  const renderEdges: RenderEdge[] = backendEdges.map((e: any) => ({
+  const renderEdges = useMemo(() => backendEdges.map((e: any) => ({
     source: String(e.sourceId),
     target: String(e.targetId),
     strength: e.weight ?? 1,
     label: e.label,
-  }));
+  })), [backendEdges]);
 
   // 3D layout for filtered nodes
   const layoutNodes3D = useMemo(() => {
@@ -687,9 +687,10 @@ export default function KnowledgeGraph() {
           onNodeSelect={setSelectedNodeId}
           selectedNodeId={selectedNodeId}
           flyToTarget={flyToTarget}
-          onRegisterExport={setExportPng3D}
-          onRegisterReset={setReset3D}
+          onRegisterExport={(handler) => setExportPng3D(() => handler)}
+          onRegisterReset={(handler) => setReset3D(() => handler)}
           initialCamera={parseGraphHash().camera}
+          onFallbackTo2D={() => setSpatialMode('2d')}
         />
       )}
 

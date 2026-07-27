@@ -13,7 +13,13 @@ export default defineConfig({
   server: {
     port: 3000,
   },
+  optimizeDeps: {
+    // 防止 @react-three/fiber 被预打包成与 three 不同的实例，
+    // 消除 "Multiple instances of Three.js" 警告（配合 resolve.dedupe）。
+    exclude: ['@react-three/fiber'],
+  },
   resolve: {
+    dedupe: ['three'],
     alias: {
       "@": path.resolve(__dirname, "./src"),
       "@contracts": path.resolve(__dirname, "./contracts"),

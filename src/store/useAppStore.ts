@@ -214,7 +214,7 @@ export const useAppStore = create<AppState>((set) => ({
   },
   kbTree: initialKbTree,
   activeKbFile: null,
-  theme: 'dark' as ThemeMode,
+  theme: 'light' as ThemeMode,
   graphBgImage: null,
 
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),

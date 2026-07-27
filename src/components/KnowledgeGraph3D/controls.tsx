@@ -45,9 +45,9 @@ const GraphControls = forwardRef<GraphControlsHandle, GraphControlsProps>(
     useImperativeHandle(ref, () => ({
       flyTo: (x: number, y: number, z: number) => {
         const start = camera.position.clone();
-        const target = new THREE.Vector3(x, y, z);
+        const focus = new THREE.Vector3(x, y, z);
+        const cameraTarget = focus.clone().add(new THREE.Vector3(0, 0, 35));
         const startTarget = controlsRef.current?.target.clone() ?? new THREE.Vector3();
-        const endTarget = new THREE.Vector3(x, y, z);
         const startTime = performance.now();
         const duration = 900;
 
@@ -55,9 +55,10 @@ const GraphControls = forwardRef<GraphControlsHandle, GraphControlsProps>(
           const elapsed = now - startTime;
           const t = Math.min(elapsed / duration, 1);
           const eased = t * (2 - t);
-          camera.position.lerpVectors(start, target, eased);
+          camera.position.lerpVectors(start, cameraTarget, eased);
           if (controlsRef.current) {
-            controlsRef.current.target.lerpVectors(startTarget, endTarget, eased);
+            controlsRef.current.target.lerpVectors(startTarget, focus, eased);
+            controlsRef.current.update();
           }
           if (t < 1) {
             requestAnimationFrame(animate);

@@ -33,6 +33,7 @@ export interface KnowledgeGraph3DProps {
   readonly onRegisterExport: (handler: () => void) => void;
   readonly onRegisterReset: (handler: () => void) => void;
   readonly initialCamera?: [number, number, number];
+  readonly onFallbackTo2D?: () => void;
 }
 
 interface GraphSceneProps {
@@ -48,6 +49,9 @@ interface GraphSceneProps {
   readonly controlsRef: React.RefObject<GraphControlsHandle | null>;
 }
 
+/** How long to wait for the Three.js Canvas to mount before giving up (ms). */
+const THREE_LOAD_TIMEOUT_MS = 30_000;
+
 export default function KnowledgeGraph3D({
   nodes,
   edges,
@@ -57,10 +61,19 @@ export default function KnowledgeGraph3D({
   onRegisterExport,
   onRegisterReset,
   initialCamera,
+  onFallbackTo2D,
 }: KnowledgeGraph3DProps) {
   const controlsRef = useRef<GraphControlsHandle>(null);
   const [multiSelectedIds, setMultiSelectedIds] = useState<string[]>([]);
   const [hiddenNodeIds, setHiddenNodeIds] = useState<Set<string>>(new Set());
+  const [canvasReady, setCanvasReady] = useState(false);
+  const [threeTimedOut, setThreeTimedOut] = useState(false);
+
+  // Timeout: if the Canvas never calls onCreated, force fallback.
+  useEffect(() => {
+    const id = setTimeout(() => setThreeTimedOut(true), THREE_LOAD_TIMEOUT_MS);
+    return () => clearTimeout(id);
+  }, []);
 
   const handleNodeClick = useCallback(
     (nodeId: string, event: ThreeEvent<MouseEvent>) => {
@@ -118,7 +131,7 @@ export default function KnowledgeGraph3D({
 
   useEffect(() => {
     if (!flyToTarget) return;
-    controlsRef.current?.flyTo(flyToTarget.x, flyToTarget.y, flyToTarget.z + 25);
+    controlsRef.current?.flyTo(flyToTarget.x, flyToTarget.y, flyToTarget.z);
   }, [flyToTarget]);
 
   const handleCameraChange = useCallback(
@@ -130,13 +143,16 @@ export default function KnowledgeGraph3D({
 
   return (
     <div className="absolute inset-0 w-full h-full" style={{ backgroundColor: '#060a14' }}>
-      <ErrorBoundary fallback={<GraphErrorFallback />}>
-        <Suspense fallback={<GraphLoadingFallback />}>
+      {threeTimedOut ? (
+        <GraphTimedOutFallback onFallbackTo2D={onFallbackTo2D} />
+      ) : (
+        <ErrorBoundary fallback={(error) => <GraphErrorFallback onFallbackTo2D={onFallbackTo2D} message={error?.message} />}>
           <Canvas
             camera={{ position: [0, 0, 120], fov: 60, near: 0.1, far: 1000 }}
             gl={{ antialias: true, preserveDrawingBuffer: true }}
             onCreated={({ gl }) => {
               gl.setClearColor(new THREE.Color('#060a14'));
+              setCanvasReady(true);
             }}
             onPointerMissed={() => onNodeSelect(null)}
           >
@@ -153,8 +169,9 @@ export default function KnowledgeGraph3D({
               controlsRef={controlsRef}
             />
           </Canvas>
-        </Suspense>
-      </ErrorBoundary>
+          {!canvasReady && <GraphLoadingFallback />}
+        </ErrorBoundary>
+      )}
     </div>
   );
 }
@@ -191,7 +208,9 @@ function GraphScene({
         onNodeDoubleClick={onNodeDoubleClick}
         hiddenNodeIds={hiddenNodeIds}
       />
-      <GraphLabels nodes={visibleNodes} hiddenNodeIds={hiddenNodeIds} />
+      <Suspense fallback={null}>
+        <GraphLabels nodes={visibleNodes} hiddenNodeIds={hiddenNodeIds} />
+      </Suspense>
       <GraphControls
         ref={controlsRef}
         onCameraChange={onCameraChange}
@@ -201,14 +220,17 @@ function GraphScene({
   );
 }
 
-class ErrorBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, { hasError: boolean }> {
-  constructor(props: { children: ReactNode; fallback: ReactNode }) {
+class ErrorBoundary extends Component<
+  { children: ReactNode; fallback: (error: Error | null) => ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: ReactNode; fallback: (error: Error | null) => ReactNode }) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { error: null };
   }
 
-  static getDerivedStateFromError(): { hasError: boolean } {
-    return { hasError: true };
+  static getDerivedStateFromError(error: Error): { error: Error } {
+    return { error };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
@@ -216,8 +238,8 @@ class ErrorBoundary extends Component<{ children: ReactNode; fallback: ReactNode
   }
 
   render(): ReactNode {
-    if (this.state.hasError) {
-      return this.props.fallback;
+    if (this.state.error) {
+      return this.props.fallback(this.state.error);
     }
     return this.props.children;
   }
@@ -241,14 +263,48 @@ function GraphLoadingFallback(): JSX.Element {
   );
 }
 
-function GraphErrorFallback(): JSX.Element {
+function GraphTimedOutFallback({ onFallbackTo2D }: { onFallbackTo2D?: () => void }): JSX.Element {
   return (
     <div className="absolute inset-0 flex items-center justify-center" style={{ backgroundColor: '#060a14' }}>
       <div className="text-center p-6 rounded-lg border" style={{ borderColor: 'var(--border-subtle)' }}>
-        <h3 className="text-lg font-bold mb-2" style={{ color: 'var(--accent-rose)' }}>3D 图谱渲染失败</h3>
-        <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-          您的浏览器可能不支持 WebGL，请切换到 2D 视图。
+        <h3 className="text-lg font-bold mb-2" style={{ color: 'var(--accent-amber)' }}>3D 场景加载超时</h3>
+        <p className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>
+          WebGL 渲染器未能及时初始化，可能是浏览器不支持或显卡驱动问题。
         </p>
+        <button
+          onClick={onFallbackTo2D}
+          className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          style={{ backgroundColor: 'var(--accent-cyan)', color: '#060a14' }}
+        >
+          切换到 2D 视图
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function GraphErrorFallback({ onFallbackTo2D, message }: { onFallbackTo2D?: () => void; message?: string }): JSX.Element {
+  return (
+    <div className="absolute inset-0 flex items-center justify-center" style={{ backgroundColor: '#060a14' }}>
+      <div className="text-center p-6 rounded-lg border max-w-md" style={{ borderColor: 'var(--border-subtle)' }}>
+        <h3 className="text-lg font-bold mb-2" style={{ color: 'var(--accent-rose)' }}>3D 图谱渲染失败</h3>
+        <p className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>
+          您的浏览器可能不支持 WebGL，或渲染过程中出现异常。
+        </p>
+        {message && (
+          <p className="text-xs mb-4 font-mono break-all text-left" style={{ color: 'var(--text-tertiary, #7a8699)' }}>
+            {message}
+          </p>
+        )}
+        {onFallbackTo2D && (
+          <button
+            onClick={onFallbackTo2D}
+            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            style={{ backgroundColor: 'var(--accent-cyan)', color: '#060a14' }}
+          >
+            切换到 2D 视图
+          </button>
+        )}
       </div>
     </div>
   );
