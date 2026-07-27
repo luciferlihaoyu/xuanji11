@@ -459,7 +459,42 @@ function getCollection(): ZVecCollection {
   if (collection) return collection;
   initializeZvec();
   fs.mkdirSync(env.zvecDataDir, { recursive: true });
-  collection = zvec.ZVecCreateAndOpen(path.join(env.zvecDataDir, collectionName), createSchema());
+  const collectionPath = path.join(env.zvecDataDir, collectionName);
+  if (fs.existsSync(collectionPath)) {
+    try {
+      const opened = zvec.ZVecOpen(collectionPath);
+      let existingDim: number | undefined;
+      try {
+        existingDim = opened.schema.vector(vectorFieldName).dimension ?? undefined;
+      } catch {
+        // schema 不可读 → 视为不兼容
+      }
+      if (existingDim === env.zvecDimension) {
+        collection = opened;
+        return collection;
+      }
+      // 旧集合维度与当前 embedding 配置不一致（例如历史遗留的 1536 维集合），
+      // 直接写入必然报 dimension mismatch。向量索引可从 MySQL 重算，删除重建。
+      console.warn(
+        `[VectorEngine] Existing collection dimension mismatch (existing=${existingDim ?? "unknown"}, expected=${env.zvecDimension}), recreating.`
+      );
+      try {
+        opened.closeSync();
+      } catch {
+        // ignore close failures
+      }
+      fs.rmSync(collectionPath, { recursive: true, force: true });
+    } catch (err) {
+      // 目录存在但不是可打开的集合（例如上次创建中途失败留下的空壳）。
+      // 向量索引是从 MySQL document_chunks 派生的可重建索引，删除后重建。
+      console.warn(
+        `[VectorEngine] Cannot open existing collection at ${collectionPath}, recreating:`,
+        err instanceof Error ? err.message : String(err)
+      );
+      fs.rmSync(collectionPath, { recursive: true, force: true });
+    }
+  }
+  collection = zvec.ZVecCreateAndOpen(collectionPath, createSchema());
   return collection;
 }
 
@@ -482,7 +517,8 @@ function toZvecDoc(id: string, vector: number[], metadata: Record<string, unknow
 }
 
 function documentFilter(documentId: number | string): string {
-  return `documentId == '${String(documentId).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+  // zvec 过滤文法的等值比较是单个 `=`（`==` 会报语法错误）
+  return `documentId = '${String(documentId).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 }
 
 export interface SearchResult {
