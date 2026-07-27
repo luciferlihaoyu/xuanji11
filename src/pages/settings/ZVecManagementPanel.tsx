@@ -1,5 +1,6 @@
-import { AlertTriangle, Info, Loader2 } from 'lucide-react';
+import { AlertTriangle, Info, Loader2, RefreshCw } from 'lucide-react';
 import type { useVectorCollections, useVectorStats } from '@/hooks/useSettings';
+import { useReindexAll, useReindexStatus } from '@/hooks/useSettings';
 
 interface ZVecManagementPanelProps {
   readonly stats: ReturnType<typeof useVectorStats>['data'];
@@ -20,6 +21,24 @@ function statusChipClass(status: string): string {
 }
 
 export function ZVecManagementPanel({ stats, collections, isLoading }: ZVecManagementPanelProps) {
+  const reindexAll = useReindexAll();
+  const reindexStatus = useReindexStatus();
+  const progress = reindexStatus.data;
+  const running = progress?.running === true;
+  const hasProgress = progress != null && (running || progress.total > 0);
+  const pct = progress != null && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
+
+  const handleReindex = () => {
+    if (running || reindexAll.isPending) return;
+    if (
+      typeof window !== 'undefined' &&
+      !window.confirm('将重建所有文档的向量索引，过程可能需要数分钟并消耗 embedding 额度。确定继续？')
+    ) {
+      return;
+    }
+    reindexAll.mutate();
+  };
+
   const hasDimensionMismatch =
     stats?.dimension != null &&
     stats.zvecDimension != null &&
@@ -83,6 +102,48 @@ export function ZVecManagementPanel({ stats, collections, isLoading }: ZVecManag
               <div style={{ color: 'var(--text-muted)' }}>集合名称</div>
               <div className="font-medium truncate" style={{ color: 'var(--text-primary)' }}>{stats.collectionName}</div>
             </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h5 className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>
+                索引重建
+              </h5>
+              <button
+                type="button"
+                onClick={handleReindex}
+                disabled={running || reindexAll.isPending}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ backgroundColor: 'var(--accent-cyan)', color: '#060a14' }}
+              >
+                {(running || reindexAll.isPending) && <Loader2 className="w-3 h-3 animate-spin" />}
+                {!running && !reindexAll.isPending && <RefreshCw className="w-3 h-3" />}
+                {running ? '重建中…' : reindexAll.isPending ? '启动中…' : '重建全部索引'}
+              </button>
+            </div>
+            {hasProgress && progress != null && (
+              <div className="space-y-1.5">
+                <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{ width: `${pct}%`, backgroundColor: 'var(--accent-cyan)' }}
+                  />
+                </div>
+                <div className="text-xs flex items-center justify-between" style={{ color: 'var(--text-muted)' }}>
+                  <span>
+                    {running ? `正在处理 ${progress.done}/${progress.total} 篇` : `已完成 ${progress.done}/${progress.total} 篇`}
+                  </span>
+                  <span>
+                    {progress.chunksTotal} 分块{progress.failed > 0 ? ` · ${progress.failed} 失败` : ''}
+                  </span>
+                </div>
+                {progress.lastError && (
+                  <div className="text-xs truncate" style={{ color: 'var(--accent-red)' }} title={progress.lastError}>
+                    最近错误：{progress.lastError}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {stats.error && (

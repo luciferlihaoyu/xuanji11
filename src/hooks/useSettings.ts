@@ -1,5 +1,5 @@
 import { trpc } from "@/providers/trpc";
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 const VECTOR_KEYS = [
   "embedding_provider",
@@ -199,4 +199,35 @@ export function useVectorCollections() {
   return trpc.vector.list.useQuery(undefined, {
     staleTime: 1000 * 30,
   });
+}
+
+/** 触发全量向量索引重建；成功后刷新进度查询。 */
+export function useReindexAll() {
+  const utils = trpc.useUtils();
+  return trpc.kb.reindexAll.useMutation({
+    onSuccess: () => {
+      void utils.kb.reindexStatus.invalidate();
+    },
+  });
+}
+
+/**
+ * 查询重建进度。运行期间每 2 秒轮询一次；当一次运行从 running 变为结束时，
+ * 自动刷新向量统计，让索引大小及时反映最新结果。
+ */
+export function useReindexStatus() {
+  const utils = trpc.useUtils();
+  const query = trpc.kb.reindexStatus.useQuery(undefined, {
+    staleTime: 0,
+    refetchInterval: (q) => (q.state.data?.running ? 2000 : false),
+  });
+  const prevRunning = useRef<boolean | undefined>(undefined);
+  useEffect(() => {
+    const running = query.data?.running;
+    if (prevRunning.current === true && running === false) {
+      void utils.vector.stats.invalidate();
+    }
+    prevRunning.current = running;
+  }, [query.data?.running, utils]);
+  return query;
 }
