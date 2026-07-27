@@ -6,26 +6,7 @@ import { kbFolders, kbDocuments, documentChunks } from "@db/schema";
 import { clean } from "./lib/clean";
 import { logAudit, logAction } from "./lib/audit";
 import { vectorEngine } from "./lib/vector";
-
-function chunkText(text: string, maxChars = 800, overlap = 100): string[] {
-  const normalized = text.replace(/\r\n/g, "\n").trim();
-  if (normalized.length <= maxChars) return normalized ? [normalized] : [];
-  const chunks: string[] = [];
-  let start = 0;
-  while (start < normalized.length) {
-    const end = Math.min(start + maxChars, normalized.length);
-    let slice = normalized.slice(start, end);
-    if (end < normalized.length) {
-      const lastBreak = Math.max(slice.lastIndexOf("\n"), slice.lastIndexOf("。"), slice.lastIndexOf(". "));
-      if (lastBreak > overlap) {
-        slice = slice.slice(0, lastBreak + 1);
-      }
-    }
-    chunks.push(slice.trim());
-    start += Math.max(slice.length - overlap, 1);
-  }
-  return chunks.filter((c) => c.length > 0);
-}
+import { indexDocumentById, tryIndexDocumentById, startReindexAll, getReindexProgress } from "./lib/document-indexer";
 
 async function deleteDocumentVectors(documentId: number): Promise<void> {
   const db = getDb();
@@ -180,7 +161,9 @@ export const kbRouter = createRouter({
         entityId: id,
         ...input,
       });
-      return { id };
+      // 自动索引：有内容即入向量库；索引失败不影响文档创建
+      const indexed = input.content ? await tryIndexDocumentById(id) : { chunks: 0, skipped: true };
+      return { id, chunks: indexed.chunks };
     }),
 
   updateDocument: adminQuery
@@ -200,6 +183,10 @@ export const kbRouter = createRouter({
       const { id, ...data } = input;
       await db.update(kbDocuments).set(clean(data as Record<string, unknown>)).where(eq(kbDocuments.id, id));
       await logAudit(ctx, "kb_document", "update", id, input as Record<string, unknown>);
+      // 内容变更时自动重建索引；索引失败不影响文档更新
+      if (input.content !== undefined) {
+        await tryIndexDocumentById(id);
+      }
       return { success: true };
     }),
 
@@ -232,36 +219,18 @@ export const kbRouter = createRouter({
   reindexDocument: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
-      const db = getDb();
-      const [doc] = await db.select().from(kbDocuments).where(eq(kbDocuments.id, input.id));
-      if (!doc) throw new Error("文档不存在");
-      if (!doc.content) return { success: true, chunks: 0 };
-
-      // 删除旧分块和向量
-      await deleteDocumentVectors(input.id);
-
-      const chunks = chunkText(doc.content).map((content, index) => ({ content, index }));
-      if (chunks.length === 0) return { success: true, chunks: 0 };
-
-      await db.insert(documentChunks).values(chunks.map((chunk) => ({
-        documentId: input.id,
-        content: chunk.content,
-        chunkIndex: chunk.index,
-      })));
-
-      await vectorEngine.indexDocumentChunks(
-        input.id,
-        chunks,
-        { title: doc.title, format: doc.format }
-      );
-
-      await db.update(kbDocuments)
-        .set({ metadata: { ...(doc.metadata ?? {}), vectorized: true } })
-        .where(eq(kbDocuments.id, input.id));
-
+      const result = await indexDocumentById(input.id);
       await logAudit(ctx, "kb_document", "update", input.id, { action: "reindex" } as Record<string, unknown>);
-      return { success: true, chunks: chunks.length };
+      return { success: true, chunks: result.chunks };
     }),
+
+  reindexAll: adminQuery.mutation(async () => {
+    return startReindexAll();
+  }),
+
+  reindexStatus: authedQuery.query(async () => {
+    return { ...getReindexProgress(), vectorSize: vectorEngine.size };
+  }),
 
   getTree: authedQuery.query(async () => {
     const db = getDb();

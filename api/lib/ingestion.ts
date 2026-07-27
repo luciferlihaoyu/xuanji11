@@ -12,6 +12,7 @@ import {
   type InsertDocumentChunk,
 } from "@db/schema";
 import { vectorEngine } from "./vector";
+import { chunkText } from "./document-indexer";
 import * as fs from "fs";
 import * as path from "path";
 import { env } from "./env";
@@ -70,26 +71,6 @@ async function ensureLocalPath(options: IngestFileOptions): Promise<{ localPath:
   const tempPath = path.join(TEMP_DIR, `ds-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
   fs.writeFileSync(tempPath, buffer);
   return { localPath: tempPath, isTemp: true };
-}
-
-function chunkText(text: string, maxChars = 800, overlap = 100): string[] {
-  const normalized = text.replace(/\r\n/g, "\n").trim();
-  if (normalized.length <= maxChars) return normalized ? [normalized] : [];
-  const chunks: string[] = [];
-  let start = 0;
-  while (start < normalized.length) {
-    const end = Math.min(start + maxChars, normalized.length);
-    let slice = normalized.slice(start, end);
-    if (end < normalized.length) {
-      const lastBreak = Math.max(slice.lastIndexOf("\n"), slice.lastIndexOf("。"), slice.lastIndexOf(". "));
-      if (lastBreak > overlap) {
-        slice = slice.slice(0, lastBreak + 1);
-      }
-    }
-    chunks.push(slice.trim());
-    start += Math.max(slice.length - overlap, 1);
-  }
-  return chunks.filter((c) => c.length > 0);
 }
 
 async function parseFileToText(storagePath: string, mimeType: string): Promise<{ text: string; supported: boolean }> {

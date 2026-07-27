@@ -17,6 +17,8 @@ import { kbBackupTools, handleKbBackupTool } from "./mcp-kb-backup";
 import { keywordTools, handleKeywordTool } from "./mcp-keyword";
 import { relationTools, handleRelationTool } from "./mcp-relation";
 import { analyticsTool, handleAnalyticsTool } from "./mcp-analytics";
+import { tryIndexDocumentById, startReindexAll, getReindexProgress } from "./lib/document-indexer";
+import { vectorEngine } from "./lib/vector";
 import type { AuthenticatedIdentity, AuthInfo } from "./lib/auth";
 import { authenticateApiKey, hasScope, sessionAuth } from "./lib/auth";
 import { authenticateLocalRequest } from "./local-auth";
@@ -62,7 +64,9 @@ const tools: readonly McpTool[] = [
   { name: "knowledge_search", description: "Search knowledge graph nodes and edges", inputSchema: { type: "object", properties: { query: { type: "string", description: "Title, content, or edge label search text" }, type: { type: "string", description: "Optional node type filter", enum: knowledgeTypeSchema.options } } } },
   { name: "knowledge_create", description: "Create a new knowledge graph node", inputSchema: { type: "object", properties: { title: { type: "string", description: "Node title" }, content: { type: "string", description: "Node content" }, type: { type: "string", description: "Node type", enum: knowledgeTypeSchema.options } }, required: ["title"] } },
   { name: "document_read", description: "Read a knowledge base document", inputSchema: { type: "object", properties: { id: { type: "number", description: "Document id" } }, required: ["id"] } },
-  { name: "document_write", description: "Create or update a knowledge base document", inputSchema: { type: "object", properties: { id: { type: "number", description: "Existing document id; omit to create" }, folderId: { type: "number", description: "Folder id" }, title: { type: "string", description: "Document title; required when creating" }, content: { type: "string", description: "Document content" }, format: { type: "string", description: "Document format", enum: documentFormatSchema.options } } } },
+  { name: "document_write", description: "Create or update a knowledge base document. Content is automatically chunked and indexed into the vector store.", inputSchema: { type: "object", properties: { id: { type: "number", description: "Existing document id; omit to create" }, folderId: { type: "number", description: "Folder id" }, title: { type: "string", description: "Document title; required when creating" }, content: { type: "string", description: "Document content" }, format: { type: "string", description: "Document format", enum: documentFormatSchema.options } } } },
+  { name: "kb.reindex_all", description: "Start a full reindex of all knowledge base documents into the vector store (runs in background, idempotent). Returns initial progress.", inputSchema: { type: "object", properties: {} } },
+  { name: "kb.reindex_status", description: "Get the progress of the running or last reindex-all job plus current vector store size", inputSchema: { type: "object", properties: {} } },
   { name: "backup_list", description: "List backup jobs and status", inputSchema: { type: "object", properties: { status: { type: "string", description: "Optional backup status filter" } } } },
   { name: "backup_trigger", description: "Trigger a scheduled backup job immediately", inputSchema: { type: "object", properties: { jobId: { type: "number", description: "Scheduled backup job id" } }, required: ["jobId"] } },
   { name: "workflow_list", description: "List workflows", inputSchema: { type: "object", properties: { status: { type: "string", description: "Optional workflow status filter" } } } },
@@ -138,7 +142,9 @@ async function handleDocumentWrite(args: Record<string, unknown>, user: User, au
   if (input.id) {
     const { id, ...data } = input;
     await db.update(kbDocuments).set(clean(data)).where(eq(kbDocuments.id, id));
-    return textResult({ success: true, id });
+    // 内容变更时自动重建索引；索引失败不影响文档更新
+    const indexed = input.content !== undefined ? await tryIndexDocumentById(id) : { chunks: 0, skipped: true };
+    return textResult({ success: true, id, chunks: indexed.chunks });
   }
   if (!input.title) return { content: [{ type: "text", text: "title is required when creating a document" }], isError: true };
   const result = await db.insert(kbDocuments).values(clean({
@@ -150,7 +156,20 @@ async function handleDocumentWrite(args: Record<string, unknown>, user: User, au
     folderId: input.folderId ?? null,
     createdBy: user.id,
   }));
-  return textResult({ id: Number(result[0].insertId) });
+  const id = Number(result[0].insertId);
+  // 自动索引：有内容即入向量库；索引失败不影响文档创建
+  const indexed = input.content ? await tryIndexDocumentById(id) : { chunks: 0, skipped: true };
+  return textResult({ id, chunks: indexed.chunks });
+}
+
+async function handleKbReindexAll(auth: AuthInfo): Promise<McpToolResult> {
+  assertScope(auth, "documents:write");
+  return textResult(startReindexAll());
+}
+
+async function handleKbReindexStatus(auth: AuthInfo): Promise<McpToolResult> {
+  assertScope(auth, "documents:read");
+  return textResult({ ...getReindexProgress(), vectorSize: vectorEngine.size });
 }
 
 async function handleBackupList(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
@@ -190,6 +209,8 @@ async function callTool(call: McpToolCall, user: User, auth: AuthInfo): Promise<
     case "knowledge_create": return handleKnowledgeCreate(call.arguments, user, auth);
     case "document_read": return handleDocumentRead(call.arguments, auth);
     case "document_write": return handleDocumentWrite(call.arguments, user, auth);
+    case "kb.reindex_all": return handleKbReindexAll(auth);
+    case "kb.reindex_status": return handleKbReindexStatus(auth);
     case "backup_list": return handleBackupList(call.arguments, auth);
     case "backup_trigger": return handleBackupTrigger(call.arguments, auth);
     case "workflow_list": return handleWorkflowList(call.arguments, auth);
