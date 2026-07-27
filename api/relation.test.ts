@@ -190,9 +190,9 @@ describe("relation-analyzer core", () => {
     const doc = sampleDocument();
     vi.mocked(getDb).mockReturnValue(createFakeDb({ documents: [doc] }) as never);
     vi.mocked(searchVectors).mockResolvedValue([
-      vectorResult({ id: "chunk-2-0", score: 0.85, metadata: { documentId: "2", title: "Doc 2" } }),
+      vectorResult({ id: "chunk-2-0", score: 0.45, metadata: { documentId: "2", title: "Doc 2" } }),
       vectorResult({ id: "chunk-1-0", score: 0.95, metadata: { documentId: "1", title: "Sample Doc" } }),
-      vectorResult({ id: "chunk-3-0", score: 0.65, metadata: { documentId: "3", title: "Doc 3" } }),
+      vectorResult({ id: "chunk-3-0", score: 0.25, metadata: { documentId: "3", title: "Doc 3" } }),
     ]);
 
     const result = await discoverRelations({ documentId: 1, strategies: ["vector"], limit: 10 });
@@ -202,7 +202,7 @@ describe("relation-analyzer core", () => {
       strategy: "vector",
       targetType: "document",
       targetId: 2,
-      score: 0.85,
+      score: 0.45,
     });
   });
 

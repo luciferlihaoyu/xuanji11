@@ -194,6 +194,14 @@ function readDocumentIdFromMetadata(metadata: Record<string, unknown>): number |
   return undefined;
 }
 
+/**
+ * 向量相似度阈值（余弦）。注意：该值与 embedding 模型的分数分布强相关。
+ * 当前 doubao-embedding-vision(2048维) 的跨文档余弦分数被压缩到 0.24~0.45 区间
+ * （实测：真正相关文档约 0.30~0.45，噪声约 0.24~0.26），因此 0.7 这类“直觉值”
+ * 永远无法被跨越。0.30 略高于噪声floor、能抓住同域文档。更换 embedding 模型后需重新标定。
+ */
+const VECTOR_SIMILARITY_THRESHOLD = 0.3;
+
 async function vectorStrategy(
   document: KbDocument,
   limit: number,
@@ -254,7 +262,7 @@ export async function discoverRelations(input: DiscoverInput): Promise<DiscoverR
         allSuggestions.push(...(await cooccurrenceStrategy(docNodeId, perStrategyLimit)));
         break;
       case "vector":
-        allSuggestions.push(...(await vectorStrategy(document, perStrategyLimit, 0.7)));
+        allSuggestions.push(...(await vectorStrategy(document, perStrategyLimit, VECTOR_SIMILARITY_THRESHOLD)));
         break;
       case "reference":
         allSuggestions.push(...(await referenceStrategy(document, docNodeId, perStrategyLimit)));
