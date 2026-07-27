@@ -17,6 +17,7 @@ import { kbBackupRouter } from "./kb-backup-router";
 import { relationRouter } from "./relation-router";
 import { keywordRouter } from "./keyword-router";
 import { analyticsRouter } from "./analytics-router";
+import { mcpClientRouter } from "./mcp-client-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -35,6 +36,7 @@ export const appRouter = createRouter({
   backup: backupRouter,
   ingestion: ingestionRouter,
   connector: connectorRouter,
+  mcpClient: mcpClientRouter,
 });
 
 export { zvecRouter };

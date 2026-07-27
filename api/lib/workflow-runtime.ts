@@ -1,6 +1,8 @@
 import { eq } from "drizzle-orm";
+import { z } from "zod";
 import { getDb } from "../queries/connection";
-import { workflows, workflowNodes, workflowRuns, workflowRunNodes } from "@db/schema";
+import { mcpServers, workflows, workflowNodes, workflowRuns, workflowRunNodes } from "@db/schema";
+import { McpClient, type McpServerConfig } from "./mcp-client";
 
 export interface NodeExecutionContext {
   input: Record<string, unknown>;
@@ -9,6 +11,66 @@ export interface NodeExecutionContext {
 
 export interface NodeExecutor {
   (config: Record<string, unknown>, ctx: NodeExecutionContext): Promise<Record<string, unknown>>;
+}
+
+class WorkflowMcpConfigError extends Error {
+  readonly name = "WorkflowMcpConfigError";
+}
+
+const callAgentConfigSchema = z.object({
+  agentName: z.string().optional(),
+  serverId: z.number().int().positive().optional(),
+  serverUrl: z.string().url().max(2048).optional(),
+  authToken: z.string().max(4096).optional(),
+  toolName: z.string().min(1).max(255).optional(),
+  arguments: z.record(z.string(), z.unknown()).default({}),
+});
+
+type CallAgentConfig = z.infer<typeof callAgentConfigSchema>;
+
+function placeholderCallAgent(config: Record<string, unknown>): Record<string, unknown> {
+  return { agent: String(config.agentName ?? ''), calledAt: new Date().toISOString() };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function recordFromToolResult(result: unknown): Record<string, unknown> {
+  return isRecord(result) ? result : { result };
+}
+
+function hasRawMcpServerInfo(config: Record<string, unknown>): boolean {
+  return typeof config.serverId === "number" || typeof config.serverUrl === "string";
+}
+
+async function resolveCallAgentConfig(input: CallAgentConfig): Promise<McpServerConfig> {
+  if (input.serverId !== undefined) {
+    const [server] = await getDb().select().from(mcpServers).where(eq(mcpServers.id, input.serverId));
+    if (!server) throw new WorkflowMcpConfigError("MCP server not found");
+    if (!server.enabled) throw new WorkflowMcpConfigError("MCP server is disabled");
+    return server.authToken ? { url: server.url, authToken: server.authToken } : { url: server.url };
+  }
+  if (input.serverUrl === undefined) {
+    throw new WorkflowMcpConfigError("call-agent requires serverId or serverUrl when toolName is provided");
+  }
+  return input.authToken ? { url: input.serverUrl, authToken: input.authToken } : { url: input.serverUrl };
+}
+
+export async function executeCallAgent(config: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const hasServerInfo = hasRawMcpServerInfo(config);
+  const hasToolName = typeof config.toolName === "string" && config.toolName.length > 0;
+  if (!hasServerInfo && !hasToolName) return placeholderCallAgent(config);
+  if (!hasServerInfo || !hasToolName) {
+    throw new WorkflowMcpConfigError("call-agent MCP config requires server info and toolName");
+  }
+
+  const parsed = callAgentConfigSchema.safeParse(config);
+  if (!parsed.success) throw new WorkflowMcpConfigError("Invalid call-agent MCP configuration");
+  const client = new McpClient(await resolveCallAgentConfig(parsed.data));
+  const toolName = parsed.data.toolName;
+  if (toolName === undefined) throw new WorkflowMcpConfigError("call-agent MCP config requires toolName");
+  return recordFromToolResult(await client.callTool(toolName, parsed.data.arguments));
 }
 
 const nodeExecutors: Record<string, NodeExecutor> = {
@@ -41,9 +103,7 @@ const nodeExecutors: Record<string, NodeExecutor> = {
     return { sourceId: String(config.sourceId ?? ''), targetId: String(config.targetId ?? '') };
   },
 
-  'call-agent': async (config) => {
-    return { agent: String(config.agentName ?? ''), calledAt: new Date().toISOString() };
-  },
+  'call-agent': async (config) => executeCallAgent(config),
 
   'notify-agent': async (config) => {
     return { notified: String(config.agentName ?? ''), at: new Date().toISOString() };

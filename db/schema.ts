@@ -6,6 +6,7 @@ import {
   text,
   timestamp,
   bigint,
+  boolean,
   json,
   float,
   int,
@@ -64,6 +65,23 @@ export const agents = mysqlTable("agents", {
 
 export type Agent = typeof agents.$inferSelect;
 export type InsertAgent = typeof agents.$inferInsert;
+
+// ========== 外部 MCP 服务器配置表 ==========
+export const mcpServers = mysqlTable("mcp_servers", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  url: varchar("url", { length: 2048 }).notNull(),
+  authToken: varchar("authToken", { length: 4096 }),
+  enabled: boolean("enabled").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
+});
+
+export type McpServer = typeof mcpServers.$inferSelect;
+export type InsertMcpServer = typeof mcpServers.$inferInsert;
 
 // ========== 知识图谱节点表 ==========
 export const knowledgeNodes = mysqlTable("knowledge_nodes", {
