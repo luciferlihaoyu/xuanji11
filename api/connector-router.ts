@@ -1,11 +1,23 @@
 import { z } from "zod";
 import { eq, sql } from "drizzle-orm";
-import { createRouter, authedQuery, adminQuery } from "./middleware";
+import { createRouter, authedQuery, adminQuery, scopedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { systemSettings } from "@db/schema";
 import { clean } from "./lib/clean";
 import { getConnector, listConnectors as listRegisteredConnectors } from "./connectors";
 import { logAudit } from "./lib/audit";
+import {
+  searchContext as runSearchContext,
+  writeTaskMemory as runWriteTaskMemory,
+  linkArtifact as runLinkArtifact,
+  getMemoryDigest as runGetMemoryDigest,
+  startIngestion as runStartIngestion,
+  searchContextInputSchema,
+  writeTaskMemoryInputSchema,
+  linkArtifactInputSchema,
+  getMemoryDigestInputSchema,
+  startIngestionInputSchema,
+} from "./lib/connector-actions";
 
 const connectorConfigKey = (platform: string) => `connector_${platform}_config`;
 
@@ -140,7 +152,28 @@ export const connectorRouter = createRouter({
           updatedBy: ctx.user?.id ?? null,
         });
       }
-      await logAudit(ctx, "connector_config", "update", null, { platform: input.platform } as Record<string, unknown>);
-      return { success: true, ...tokens };
-    }),
+    await logAudit(ctx, "connector_config", "update", null, { platform: input.platform } as Record<string, unknown>);
+    return { success: true, ...tokens };
+  }),
+
+  // ---- 天宫-璇玑集成契约接口 ----
+  searchContext: scopedQuery("knowledge:read")
+    .input(searchContextInputSchema)
+    .query(async ({ input }) => runSearchContext(input)),
+
+  writeTaskMemory: scopedQuery("knowledge:write")
+    .input(writeTaskMemoryInputSchema)
+    .mutation(async ({ input }) => runWriteTaskMemory(input)),
+
+  linkArtifact: scopedQuery("artifact:link")
+    .input(linkArtifactInputSchema)
+    .mutation(async ({ input }) => runLinkArtifact(input)),
+
+  getMemoryDigest: scopedQuery("knowledge:read")
+    .input(getMemoryDigestInputSchema)
+    .query(async ({ input }) => runGetMemoryDigest(input)),
+
+  startIngestion: scopedQuery("ingestion:write")
+    .input(startIngestionInputSchema)
+    .mutation(async ({ input }) => runStartIngestion(input)),
 });

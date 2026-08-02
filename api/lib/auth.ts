@@ -34,6 +34,8 @@ export const MANAGEMENT_SCOPES = [
   "system:manage",
   "zvec:read",
   "zvec:write",
+  "artifact:link",
+  "ingestion:write",
 ] as const;
 
 const PERMISSION_SCOPES: Readonly<Record<string, readonly string[]>> = {
