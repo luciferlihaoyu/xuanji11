@@ -60,7 +60,7 @@ const COMPONENT_LIBRARY = [
     { type: 'create-link', label: '建立关联', desc: '创建知识链接' },
   ]},
   { category: 'agent', items: [
-    { type: 'call-agent', label: '调用 Agent', desc: '调用指定 Agent' },
+    { type: 'call-agent', label: '调用 Agent', desc: '调用指定 Agent 或外部 MCP 工具（如 Dify 工作流）' },
     { type: 'notify-agent', label: '通知 Agent', desc: '发送通知给 Agent' },
   ]},
   { category: 'output', items: [
@@ -141,6 +141,20 @@ export default function WorkflowBuilder() {
     { enabled: workflowId !== null }
   );
   const runMutation = useRunWorkflow();
+  const mcpUtils = trpc.useUtils();
+  const { data: mcpServersData } = trpc.mcpClient.list.useQuery();
+  const [remoteTools, setRemoteTools] = useState<{ serverId: number; tools: readonly { name: string; description?: string }[] } | null>(null);
+  const [argumentsDraft, setArgumentsDraft] = useState<{ nodeId: string; raw: string } | null>(null);
+
+  const fetchRemoteTools = async (serverId: number) => {
+    setRemoteTools(null);
+    try {
+      const tools = await mcpUtils.mcpClient.listRemoteTools.fetch({ serverId });
+      setRemoteTools({ serverId, tools });
+    } catch (error) {
+      addToast({ type: 'error', title: '获取工具列表失败', description: error instanceof Error ? error.message : undefined });
+    }
+  };
 
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
   const { data: activeRun } = useWorkflowRun(activeRunId);
@@ -528,6 +542,11 @@ export default function WorkflowBuilder() {
   const selectedNodeData = nodes.find((n) => n.id === selectedNode);
   const connectingFromNode = connectingFrom ? nodes.find((n) => n.id === connectingFrom) : null;
 
+  // 切换选中节点时清空参数草稿，避免把上一个节点的 JSON 文本带入新节点
+  useEffect(() => {
+    setArgumentsDraft(null);
+  }, [selectedNode]);
+
   const getEdgePath = (edge: WFEdge) => {
     const s = nodes.find((n) => n.id === edge.source);
     const t = nodes.find((n) => n.id === edge.target);
@@ -769,6 +788,106 @@ export default function WorkflowBuilder() {
                       value={(selectedNodeData.config.dimension as number) || 1536}
                       onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, dimension: Number(e.target.value) } }))}
                       className="input-base text-xs"
+                    />
+                  </div>
+                </>
+              )}
+              {selectedNodeData.type === 'call-agent' && (
+                <>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>MCP 服务器</label>
+                    <select
+                      className="input-base text-xs"
+                      value={(selectedNodeData.config.serverId as number) || ''}
+                      onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({
+                        config: { ...prev.config, serverId: e.target.value ? Number(e.target.value) : undefined },
+                      }))}
+                    >
+                      <option value="">选择已注册的 MCP 服务器</option>
+                      {(mcpServersData ?? []).filter((s) => s.enabled !== false).map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                      未注册可在 设置 → MCP 服务器 中添加（支持 Dify 等）。也可留空并在节点配置中填写 serverUrl。
+                    </p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>直连 URL（可选，覆盖上方选择）</label>
+                    <input
+                      type="text"
+                      className="input-base text-xs font-mono"
+                      value={(selectedNodeData.config.serverUrl as string) || ''}
+                      onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, serverUrl: e.target.value } }))}
+                      placeholder="https://api.dify.ai/mcp/server/{server_code}/mcp"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>工具名称（toolName）</label>
+                      {Number(selectedNodeData.config.serverId) > 0 && (
+                        <button
+                          onClick={() => void fetchRemoteTools(Number(selectedNodeData.config.serverId))}
+                          className="text-[10px]"
+                          style={{ color: 'var(--accent-cyan)' }}
+                        >
+                          拉取该服务器工具列表 →
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      type="text"
+                      className="input-base text-xs font-mono"
+                      value={(selectedNodeData.config.toolName as string) || ''}
+                      onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, toolName: e.target.value } }))}
+                      placeholder="工具名（Dify 中通常为 App 名称）"
+                    />
+                    {remoteTools && remoteTools.serverId === Number(selectedNodeData.config.serverId) && (
+                      <div className="mt-1.5 space-y-1">
+                        {remoteTools.tools.length === 0 ? (
+                          <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>该服务器未暴露工具</div>
+                        ) : remoteTools.tools.map((t) => (
+                          <button
+                            key={t.name}
+                            onClick={() => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, toolName: t.name } }))}
+                            className="block w-full text-left text-[10px] font-mono rounded px-2 py-1"
+                            style={{ color: 'var(--accent-cyan)', background: 'rgba(0,229,255,0.06)' }}
+                            title={t.description}
+                          >
+                            {t.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>工具参数（JSON）</label>
+                    <textarea
+                      className="input-base text-xs font-mono h-20 resize-none"
+                      value={argumentsDraft && argumentsDraft.nodeId === selectedNodeData.id
+                        ? argumentsDraft.raw
+                        : (typeof selectedNodeData.config.arguments === 'object' && selectedNodeData.config.arguments !== null
+                            ? JSON.stringify(selectedNodeData.config.arguments, null, 2)
+                            : '')}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setArgumentsDraft({ nodeId: selectedNodeData.id, raw });
+                        if (raw.trim() === '') {
+                          updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, arguments: {} } }));
+                          return;
+                        }
+                        try {
+                          const parsed: unknown = JSON.parse(raw);
+                          if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+                            updateNodeConfig(selectedNodeData.id, (prev) => ({
+                              config: { ...prev.config, arguments: parsed as Record<string, unknown> },
+                            }));
+                          }
+                        } catch {
+                          // 输入中的 JSON 暂不提交，保留草稿
+                        }
+                      }}
+                      placeholder='{"query": "示例参数"}'
                     />
                   </div>
                 </>
