@@ -1,11 +1,15 @@
 import { z } from "zod";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const LATEST_PROTOCOL_VERSION = "2025-06-18";
+const CLIENT_NAME = "xuanji";
+const CLIENT_VERSION = "0.0.0";
 
 export interface McpServerConfig {
   readonly url: string;
   readonly authToken?: string;
   readonly timeoutMs?: number;
+  readonly protocolVersion?: string;
 }
 
 export interface McpToolDef {
@@ -113,10 +117,11 @@ function parseRpcText(text: string): ParsedJsonRpcResponse {
   }
 }
 
-function requestHeaders(authToken: string | undefined): Record<string, string> {
+function requestHeaders(authToken: string | undefined, protocolVersion: string): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
+    "MCP-Protocol-Version": protocolVersion,
   };
   if (authToken) headers.Authorization = `Bearer ${authToken}`;
   return headers;
@@ -130,8 +135,16 @@ export class McpClient {
     this.config = config;
   }
 
+  private get protocolVersion(): string {
+    return this.config.protocolVersion ?? LATEST_PROTOCOL_VERSION;
+  }
+
   async initialize(): Promise<McpServerInfo> {
-    const result = await this.request("initialize", {});
+    const result = await this.request("initialize", {
+      protocolVersion: this.protocolVersion,
+      capabilities: {},
+      clientInfo: { name: CLIENT_NAME, version: CLIENT_VERSION },
+    });
     const parsed = initializeResultSchema.parse(result);
     if ("serverInfo" in parsed) {
       return {
@@ -157,7 +170,7 @@ export class McpClient {
     this.requestId += 1;
     const response = await fetch(this.config.url, {
       method: "POST",
-      headers: requestHeaders(this.config.authToken),
+      headers: requestHeaders(this.config.authToken, this.protocolVersion),
       body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
       signal: AbortSignal.timeout(this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     });

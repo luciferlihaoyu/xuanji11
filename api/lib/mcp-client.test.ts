@@ -91,4 +91,52 @@ describe("McpClient", () => {
     expect(requestHeaders(fetchMock, 0).get("Authorization")).toBe("Bearer secret-token");
     expect(requestHeaders(fetchMock, 1).has("Authorization")).toBe(false);
   });
+
+  it("sends a complete initialize handshake for strict MCP servers", async () => {
+    // Given: a strict server (e.g. Dify) that rejects initialize without params.
+    const fetchMock = installFetchMock();
+    fetchMock.mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { params?: Record<string, unknown> };
+      const params = body.params;
+      if (!params || !params.protocolVersion || !params.clientInfo) {
+        return new Response(JSON.stringify({
+          jsonrpc: "2.0", id: 1,
+          error: { code: -32602, message: "Invalid params" },
+        }));
+      }
+      return rpcResponse({
+        protocolVersion: String(params.protocolVersion),
+        serverInfo: { name: "dify", version: "1.0.0" },
+      });
+    });
+
+    // When: the client initializes without an explicit protocol version.
+    const info = await new McpClient({ url: "https://mcp.example.test" }).initialize();
+
+    // Then: initialize succeeds and the full params were sent.
+    expect(info).toEqual({ name: "dify", version: "1.0.0", protocolVersion: "2025-06-18" });
+    const sentBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? "{}")) as {
+      params: Record<string, unknown>;
+    };
+    expect(sentBody.params).toEqual({
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "xuanji", version: "0.0.0" },
+    });
+  });
+
+  it("advertises the MCP protocol version header on requests", async () => {
+    // Given: a remote MCP server.
+    const fetchMock = installFetchMock();
+    fetchMock.mockImplementation(async () => rpcResponse({ tools: [] }));
+
+    // When: a request is made with an explicit protocol version.
+    await new McpClient({ url: "https://mcp.example.test", protocolVersion: "2025-03-26" }).listTools();
+
+    // Then: the header carries that version; the default is used otherwise.
+    expect(requestHeaders(fetchMock, 0).get("MCP-Protocol-Version")).toBe("2025-03-26");
+
+    await new McpClient({ url: "https://mcp.example.test" }).listTools();
+    expect(requestHeaders(fetchMock, 1).get("MCP-Protocol-Version")).toBe("2025-06-18");
+  });
 });
