@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { User, BookOpen, Bot, Brain, HardDrive, Workflow, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug } from 'lucide-react';
+import { User, BookOpen, Bot, Brain, HardDrive, Workflow, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug, Network } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import {
   useSettings,
@@ -16,6 +16,7 @@ import {
   useVectorCollections,
 } from '@/hooks/useSettings';
 import { ZVecManagementPanel } from './settings/ZVecManagementPanel';
+import { McpServersPanel } from './settings/McpServersPanel';
 import { useConnectorConfig } from '@/hooks/useConnectorConfig';
 import { trpc, trpcClient } from '@/providers/trpc';
 import { useAuth } from '@/hooks/useAuth';
@@ -28,6 +29,7 @@ const SETTINGS_NAV = [
   { key: 'storage', label: '存储管理', icon: HardDrive },
   { key: 'workflow', label: '工作流默认', icon: Workflow },
   { key: 'connector', label: '连接器', icon: Plug },
+  { key: 'mcp-servers', label: 'MCP 服务器', icon: Network },
   { key: 'security', label: '安全', icon: Shield },
   { key: 'appearance', label: '外观', icon: Palette },
   { key: 'about', label: '关于', icon: Info },
@@ -945,6 +947,9 @@ export default function Settings() {
 
       case 'connector':
         return <ConnectorSettings />;
+
+      case 'mcp-servers':
+        return <McpServersPanel />;
 
       case 'security':
         return (
