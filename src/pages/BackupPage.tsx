@@ -2,13 +2,18 @@ import { useState, useEffect } from 'react';
 import { useBackups, useBackup } from '@/hooks/useBackups';
 import { useConnectorConfig } from '@/hooks/useConnectorConfig';
 import { useAppStore } from '@/store/useAppStore';
-import { Archive, RotateCcw, Plus, Loader2, CheckCircle2, AlertCircle, Clock, ChevronDown, ChevronUp, X, HardDrive, FolderOpen, Server, Trash2, Calendar, Wifi, WifiOff, RefreshCw, Save } from 'lucide-react';
+import { Archive, RotateCcw, Plus, Loader2, CheckCircle2, AlertCircle, Clock, ChevronDown, ChevronUp, X, HardDrive, FolderOpen, Server, Globe, Trash2, Calendar } from 'lucide-react';
+import BackupTargetConfig, { type TargetFields, type TargetConnectionStatus } from './backup/BackupTargetConfig';
+
+/** 备份目标类型（tRPC create 输入 enum 由后端扩展，此处先支持 alist） */
+export type BackupTargetKey = 'local' | 'nas' | '115' | 'aliyundrive' | 'alist';
 
 const TARGET_ICONS: Record<string, typeof HardDrive> = {
   local: HardDrive,
   nas: Server,
   aliyundrive: FolderOpen,
   '115': FolderOpen,
+  alist: Globe,
 };
 
 const TARGET_NAMES: Record<string, string> = {
@@ -16,7 +21,18 @@ const TARGET_NAMES: Record<string, string> = {
   nas: 'NAS',
   aliyundrive: '阿里云盘',
   '115': '115 网盘',
+  alist: 'AList (WebDAV)',
 };
+
+/** 目标是否不可用：不可用（未注册/未就绪）或已标记停用 */
+function isTargetDisabled(t: { key: string; available: boolean; deprecated?: boolean }): boolean {
+  return !t.available || t.deprecated === true;
+}
+
+/** 不可用目标在下拉中的说明文案 */
+function targetDisabledReason(key: string): string {
+  return key === 'alist' ? '（需配置环境密钥 BACKUP_ENCRYPTION_KEY）' : '（已停用）';
+}
 
 function statusBadge(status: string) {
   const map: Record<string, { cls: string; label: string }> = {
@@ -100,13 +116,18 @@ export default function BackupPage() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [selectedBackupId, setSelectedBackupId] = useState<number | null>(null);
-  const [target, setTarget] = useState<"local" | "nas" | "115" | "aliyundrive">("local");
+  const [target, setTarget] = useState<BackupTargetKey>('local');
   const [sourcePath, setSourcePath] = useState('/data');
-  const [accessToken, setAccessToken] = useState('');
-  const [refreshToken, setRefreshToken] = useState('');
+  const [targetFields, setTargetFields] = useState<TargetFields>({
+    accessToken: '',
+    refreshToken: '',
+    url: '',
+    username: '',
+    password: '',
+  });
   const [restoreTargetPath, setRestoreTargetPath] = useState('/data/restore');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<{ testing: boolean; result?: { success: boolean; message: string } }>({ testing: false });
+  const [connectionStatus, setConnectionStatus] = useState<TargetConnectionStatus>({ testing: false });
 
   // Schedule fields
   const [mode, setMode] = useState<'immediate' | 'scheduled'>('immediate');
@@ -120,16 +141,48 @@ export default function BackupPage() {
 
   useEffect(() => {
     if (connector.config) {
-      setAccessToken((connector.config.accessToken as string) ?? '');
-      setRefreshToken((connector.config.refreshToken as string) ?? '');
+      setTargetFields({
+        accessToken: String(connector.config.accessToken ?? ''),
+        refreshToken: String(connector.config.refreshToken ?? ''),
+        url: String(connector.config.url ?? ''),
+        username: String(connector.config.username ?? ''),
+        password: String(connector.config.password ?? ''),
+      });
       setConnectionStatus({ testing: false });
     }
   }, [connector.config]);
 
+  // 当前目标不可用时（如 115/aliyundrive 停用、alist 未就绪），回退到第一个可用目标
+  useEffect(() => {
+    const current = targets.find((t) => t.key === target);
+    if (current && isTargetDisabled(current)) {
+      const fallback = targets.find((t) => !isTargetDisabled(t));
+      if (fallback) setTarget(fallback.key as BackupTargetKey);
+    }
+  }, [targets, target]);
+
+  const updateTargetField = (key: keyof TargetFields, value: string) => {
+    setTargetFields((prev) => ({ ...prev, [key]: value }));
+    setConnectionStatus({ testing: false });
+  };
+
+  const configPayload = (): Record<string, string> => {
+    const config: Record<string, string> = {};
+    if (isAlist) {
+      if (targetFields.url) config.url = targetFields.url;
+      if (targetFields.username) config.username = targetFields.username;
+      if (targetFields.password) config.password = targetFields.password;
+    } else {
+      if (targetFields.accessToken) config.accessToken = targetFields.accessToken;
+      if (targetFields.refreshToken) config.refreshToken = targetFields.refreshToken;
+    }
+    return config;
+  };
+
   const handleTestConnection = async () => {
     setConnectionStatus({ testing: true });
     try {
-      const result = await connector.test({ accessToken, refreshToken });
+      const result = await connector.test(configPayload());
       setConnectionStatus({ testing: false, result });
     } catch (err) {
       setConnectionStatus({
@@ -141,7 +194,7 @@ export default function BackupPage() {
 
   const handleSaveConfig = async () => {
     try {
-      await connector.save({ accessToken, refreshToken });
+      await connector.save(configPayload());
       addToast({ type: 'success', title: '配置已保存' });
     } catch (err) {
       addToast({ type: 'error', title: '保存失败', description: err instanceof Error ? err.message : String(err) });
@@ -150,10 +203,10 @@ export default function BackupPage() {
 
   const handleRefreshToken = async () => {
     try {
-      const result = await connector.refresh({ accessToken, refreshToken });
+      const result = await connector.refresh({ accessToken: targetFields.accessToken, refreshToken: targetFields.refreshToken });
       if (result.success && result.accessToken && result.refreshToken) {
-        setAccessToken(result.accessToken);
-        setRefreshToken(result.refreshToken);
+        const { accessToken, refreshToken } = result;
+        setTargetFields((prev) => ({ ...prev, accessToken, refreshToken }));
         addToast({ type: 'success', title: 'Token 已刷新' });
       } else {
         addToast({ type: 'error', title: '刷新失败', description: result.message });
@@ -163,9 +216,11 @@ export default function BackupPage() {
     }
   };
 
-  const availableTargets = targets.filter((t) => t.available);
-
   const isCloudDrive = target === '115' || target === 'aliyundrive';
+  const isAlist = target === 'alist';
+  const configFieldsFilled = Boolean(
+    targetFields.accessToken || targetFields.refreshToken || targetFields.url || targetFields.username || targetFields.password
+  );
 
   const schedules = backups.filter((b) => b.cron);
   const runJobs = backups.filter((b) => !b.cron);
@@ -175,12 +230,19 @@ export default function BackupPage() {
     setIsSubmitting(true);
     try {
       const config: Record<string, string> = {};
-      if (isCloudDrive) {
-        if (!accessToken && !refreshToken) {
+      if (isAlist) {
+        if (!targetFields.url) {
+          throw new Error('AList (WebDAV) 备份需要提供 WebDAV URL');
+        }
+        config.url = targetFields.url;
+        if (targetFields.username) config.username = targetFields.username;
+        if (targetFields.password) config.password = targetFields.password;
+      } else if (isCloudDrive) {
+        if (!targetFields.accessToken && !targetFields.refreshToken) {
           throw new Error('云盘备份需要提供 Access Token 或 Refresh Token');
         }
-        if (accessToken) config.accessToken = accessToken;
-        if (refreshToken) config.refreshToken = refreshToken;
+        if (targetFields.accessToken) config.accessToken = targetFields.accessToken;
+        if (targetFields.refreshToken) config.refreshToken = targetFields.refreshToken;
       }
       const payload: Record<string, unknown> = { target, sourcePath, config };
       if (mode === 'scheduled') {
@@ -188,7 +250,7 @@ export default function BackupPage() {
         payload.enabled = scheduleEnabled;
         payload.keepLastN = keepLastN;
       }
-      await create(payload as { target: typeof target; sourcePath: string; config?: Record<string, string>; cron?: string; enabled?: boolean; keepLastN?: number });
+      await create(payload as Parameters<typeof create>[0]);
       addToast({ type: 'success', title: mode === 'scheduled' ? '备份策略已创建' : '备份任务已创建' });
       setShowCreate(false);
       setConnectionStatus({ testing: false });
@@ -279,15 +341,21 @@ export default function BackupPage() {
                 <select
                   value={target}
                   onChange={(e) => {
-                    setTarget(e.target.value as typeof target);
+                    setTarget(e.target.value as BackupTargetKey);
                     setConnectionStatus({ testing: false });
                   }}
                   className="input-base text-xs w-full"
                 >
-                  {availableTargets.length === 0 && <option>暂无可用目标</option>}
-                  {availableTargets.map((t) => (
-                    <option key={t.key} value={t.key}>{TARGET_NAMES[t.key] || t.name}</option>
-                  ))}
+                  {targets.length === 0 && <option>暂无可用目标</option>}
+                  {targets.map((t) => {
+                    const disabled = isTargetDisabled(t);
+                    const label = TARGET_NAMES[t.key] || t.name;
+                    return (
+                      <option key={t.key} value={t.key} disabled={disabled}>
+                        {disabled ? `${label}${targetDisabledReason(t.key)}` : label}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
               <div>
@@ -339,71 +407,21 @@ export default function BackupPage() {
                 </div>
               </div>
             )}
-            {isCloudDrive && (
-              <div className="space-y-3 pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>
-                      Access Token {target === '115' ? '(或 Refresh Token)' : ''}
-                    </label>
-                    <input
-                      type="password"
-                      value={accessToken}
-                      onChange={(e) => { setAccessToken(e.target.value); setConnectionStatus({ testing: false }); }}
-                      placeholder={target === '115' ? '115 OAuth accessToken' : '阿里云盘 accessToken'}
-                      className="input-base text-xs w-full"
-                      required={!refreshToken}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>
-                      Refresh Token <span className="text-[var(--text-muted)]">(推荐，用于自动刷新)</span>
-                    </label>
-                    <input
-                      type="password"
-                      value={refreshToken}
-                      onChange={(e) => { setRefreshToken(e.target.value); setConnectionStatus({ testing: false }); }}
-                      placeholder="用于自动刷新 accessToken"
-                      className="input-base text-xs w-full"
-                    />
-                  </div>
-                </div>
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={handleRefreshToken}
-                    disabled={connector.isRefreshing || !refreshToken}
-                    className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50"
-                  >
-                    {connector.isRefreshing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                    刷新 Token
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSaveConfig}
-                    disabled={connector.isSaving || (!accessToken && !refreshToken)}
-                    className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50"
-                  >
-                    {connector.isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                    保存配置
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleTestConnection}
-                    disabled={connectionStatus.testing || (!accessToken && !refreshToken)}
-                    className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50"
-                  >
-                    {connectionStatus.testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}
-                    测试连接
-                  </button>
-                </div>
-                {connectionStatus.result && (
-                  <div className={`flex items-center gap-1.5 text-[10px] ${connectionStatus.result.success ? 'text-emerald-400' : 'text-rose-400'}`}>
-                    {connectionStatus.result.success ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-                    {connectionStatus.result.message}
-                  </div>
-                )}
-              </div>
+            {target !== 'local' && target !== 'nas' && (
+              <BackupTargetConfig
+                target={target}
+                fields={targetFields}
+                onFieldChange={updateTargetField}
+                testing={connectionStatus.testing}
+                saving={connector.isSaving}
+                refreshing={connector.isRefreshing}
+                testDisabled={!configFieldsFilled}
+                saveDisabled={!configFieldsFilled}
+                connectionStatus={connectionStatus}
+                onTest={handleTestConnection}
+                onSave={handleSaveConfig}
+                onRefresh={handleRefreshToken}
+              />
             )}
             <div className="flex justify-end">
               <button type="submit" disabled={isSubmitting} className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50">
