@@ -39,6 +39,7 @@ export const env = {
   // 持久化存储
   uploadDir: process.env.UPLOAD_DIR ?? "/data/app/uploads",
   backupTempDir: process.env.BACKUP_TEMP_DIR ?? "/data/app/backups",
+  backupEncryptionKey: process.env.BACKUP_ENCRYPTION_KEY ?? "",
   zvecDataDir: process.env.ZVEC_DATA_DIR ?? "/data/app/zvec",
   zvecDimension: parseInt(process.env.ZVEC_DIMENSION ?? "1536", 10) || 1536,
   zvecEnabled: process.env.ZVEC_ENABLED !== "false",

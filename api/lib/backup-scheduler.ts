@@ -1,18 +1,7 @@
 import { eq, and, lte, desc } from "drizzle-orm";
 import { getDb } from "../queries/connection";
-import { backupJobs } from "@db/schema";
-import { getConnector } from "../connectors/base";
-import type { CloudConnector } from "../connectors/base";
-import * as fs from "fs";
-import * as path from "path";
-import { createHash } from "crypto";
-import { promises as fsp } from "fs";
-import { env } from "./env";
-import { hasPathTraversal, sanitizeRelativePath, resolveRestoreDestPath } from "./backup-path";
-
-function sha256(buffer: Buffer): string {
-  return createHash("sha256").update(buffer).digest("hex");
-}
+import { backupJobs, backupJobFiles } from "@db/schema";
+import { executeBackup } from "../backup-repositories/execution";
 
 function parseCronField(field: string, min: number, max: number): number[] {
   if (field === "*") {
@@ -65,172 +54,11 @@ function nextCronTime(schedule: string, after: Date): Date | null {
   return null;
 }
 
-async function* walkDir(dir: string): AsyncGenerator<{ relativePath: string; fullPath: string; size: number }> {
-  const entries = await fsp.readdir(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    const relativePath = path.relative(dir, fullPath);
-    if (entry.isDirectory()) {
-      yield* walkDir(fullPath);
-    } else if (entry.isFile()) {
-      const stat = await fsp.stat(fullPath);
-      yield { relativePath, fullPath, size: stat.size };
-    }
-  }
-}
-
-/**
- * 获取有效的连接器配置，包含 token 刷新逻辑
- */
-async function getEffectiveConnectorConfig(
-  connector: CloudConnector,
-  config: Record<string, unknown>
-): Promise<{ config: Record<string, unknown>; refreshed: boolean }> {
-  const result = { ...config };
-  let refreshed = false;
-
-  if (connector.refreshToken) {
-    const accessToken = config.accessToken as string | undefined;
-    const refreshToken = config.refreshToken as string | undefined;
-
-    if (!accessToken && refreshToken) {
-      console.log(`[BackupScheduler] No accessToken, trying to refresh with refreshToken...`);
-      const newTokens = await connector.refreshToken(config);
-      if (newTokens) {
-        result.accessToken = newTokens.accessToken;
-        result.refreshToken = newTokens.refreshToken;
-        refreshed = true;
-        console.log(`[BackupScheduler] Token refreshed successfully`);
-      } else {
-        console.error(`[BackupScheduler] Token refresh failed`);
-      }
-    }
-  }
-
-  return { config: result, refreshed };
-}
-
 async function executeBackupJob(jobId: number, connectorConfig: Record<string, unknown> = {}): Promise<void> {
   console.log(`[BackupScheduler] Starting backup job ${jobId}`);
-  const db = getDb();
-  const [job] = await db.select().from(backupJobs).where(eq(backupJobs.id, jobId));
-  if (!job) {
-    console.error(`[BackupScheduler] Job ${jobId} not found`);
-    return;
-  }
-
-  await db.update(backupJobs).set({ status: "running", startedAt: new Date() }).where(eq(backupJobs.id, jobId));
-
-  const connector = getConnector(job.target) as CloudConnector | undefined;
-  if (!connector) {
-    const error = `未找到连接器: ${job.target}`;
-    console.error(`[BackupScheduler] ${error}`);
-    await db.update(backupJobs).set({ status: "failed", error, completedAt: new Date() }).where(eq(backupJobs.id, jobId));
-    return;
-  }
-
-  // 合并 job 中存储的 config 和传入的 connectorConfig
-  const storedConfig = (job.config as Record<string, unknown>) ?? {};
-  const mergedConfig = { ...storedConfig, ...connectorConfig };
-
-  // 尝试刷新 token
-  const { config: effectiveConfig, refreshed } = await getEffectiveConnectorConfig(connector, mergedConfig);
-  
-  // 如果 token 被刷新了，更新数据库中的 config
-  if (refreshed) {
-    await db.update(backupJobs).set({ config: effectiveConfig }).where(eq(backupJobs.id, jobId));
-    console.log(`[BackupScheduler] Updated stored config with refreshed tokens for job ${jobId}`);
-  }
-
-  try {
-    if (hasPathTraversal(job.sourcePath)) {
-      throw new Error(`Invalid backup source path: ${job.sourcePath}`);
-    }
-
-    const files: { relativePath: string; fullPath: string; size: number }[] = [];
-    if (fs.existsSync(job.sourcePath)) {
-      for await (const f of walkDir(job.sourcePath)) {
-        files.push(f);
-      }
-    }
-
-    console.log(`[BackupScheduler] Job ${jobId}: found ${files.length} files to backup`);
-    await db.update(backupJobs).set({ filesTotal: files.length }).where(eq(backupJobs.id, jobId));
-
-    let done = 0;
-    let failed = 0;
-    const manifestFiles: Array<{ path: string; size: number; checksum: string; status: string }> = [];
-
-    for (const file of files) {
-      try {
-        const safeRelativePath = sanitizeRelativePath(file.relativePath);
-        const content = await fsp.readFile(file.fullPath);
-        const checksum = sha256(content);
-        const destName = path.basename(safeRelativePath);
-        const destDir = path.dirname(safeRelativePath);
-
-        if (connector.uploadFile) {
-          const result = await connector.uploadFile(effectiveConfig, `${destDir}/${destName}`, content);
-          if (!result.success) throw new Error("upload failed");
-        } else if (connector.syncFiles) {
-          const tempDir = path.join(env.backupTempDir, `backup-${jobId}`);
-          await fsp.mkdir(tempDir, { recursive: true });
-          const tempPath = path.join(tempDir, destName);
-          await fsp.writeFile(tempPath, content);
-          await connector.syncFiles(effectiveConfig, tempDir);
-          await fsp.rm(tempDir, { recursive: true, force: true });
-        } else {
-          throw new Error("连接器不支持上传或同步");
-        }
-
-        await db.insert(backupJobFiles).values({
-          jobId,
-          relativePath: safeRelativePath,
-          size: file.size,
-          checksum,
-          status: "uploaded",
-        });
-        manifestFiles.push({ path: safeRelativePath, size: file.size, checksum, status: "uploaded" });
-        done++;
-      } catch (err) {
-        failed++;
-        const safeRelativePath = sanitizeRelativePath(file.relativePath);
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        console.error(`[BackupScheduler] Job ${jobId}: failed to upload ${safeRelativePath}: ${errorMsg}`);
-        await db.insert(backupJobFiles).values({
-          jobId,
-          relativePath: safeRelativePath,
-          size: file.size,
-          status: "failed",
-          error: "Internal backup error",
-        });
-        manifestFiles.push({ path: safeRelativePath, size: file.size, checksum: "", status: "failed" });
-      }
-      await db.update(backupJobs).set({ filesDone: done, filesFailed: failed, progress: Math.round(((done + failed) / files.length) * 100) }).where(eq(backupJobs.id, jobId));
-    }
-
-    const status = failed > 0 ? (done > 0 ? "partial" : "failed") : "completed";
-    console.log(`[BackupScheduler] Job ${jobId} completed with status: ${status}, done: ${done}, failed: ${failed}`);
-    await db.update(backupJobs).set({
-      status,
-      progress: 100,
-      manifest: { files: manifestFiles, total: files.length, done, failed },
-      error: failed > 0 ? `${failed} 个文件备份失败` : null,
-      completedAt: new Date(),
-      retryCount: 0,
-    }).where(eq(backupJobs.id, jobId));
-  } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : "备份执行失败";
-    console.error(`[BackupScheduler] Job ${jobId} failed: ${errorMsg}`);
-    await db.update(backupJobs).set({
-      status: "failed",
-      error: "Internal backup error",
-      completedAt: new Date(),
-    }).where(eq(backupJobs.id, jobId));
-  }
+  // 执行逻辑统一走备份仓库抽象层（alist/nas/local 新仓库，115/aliyundrive 历史连接器）
+  await executeBackup(jobId, connectorConfig);
 }
-
-import { backupJobFiles } from "@db/schema";
 
 async function applyRetention(scheduleJobId: number): Promise<void> {
   const db = getDb();

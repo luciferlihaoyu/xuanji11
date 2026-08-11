@@ -8,6 +8,25 @@ import { getConnector } from "./connectors";
 import { ingestFile } from "./lib/ingestion";
 import { logAudit } from "./lib/audit";
 
+const DATA_SOURCE_TYPES = ["cloud_drive", "nas", "database", "api", "webhook", "rss", "notion", "obsidian"] as const;
+type DataSourceType = (typeof DATA_SOURCE_TYPES)[number];
+
+/** 已实现真实连接器的数据源类型（cloud_drive 平台 115/aliyundrive + nas） */
+const IMPLEMENTED_DATA_SOURCE_TYPES: ReadonlySet<DataSourceType> = new Set<DataSourceType>(["cloud_drive", "nas"]);
+
+function isImplementedDataSourceType(type: DataSourceType): boolean {
+  return IMPLEMENTED_DATA_SOURCE_TYPES.has(type);
+}
+
+/** 非手动同步间隔：调度器尚未实现，仅保存配置并诚实告知，不声称会定时同步 */
+function syncIntervalNotice(config: Record<string, unknown> | null | undefined): string | undefined {
+  const interval = config?.syncInterval;
+  if (typeof interval === "string" && interval !== "" && interval !== "manual") {
+    return "自动同步尚未启用，将仅保存配置";
+  }
+  return undefined;
+}
+
 export const datasourceRouter = createRouter({
   list: authedQuery.query(async () => {
     const db = getDb();
@@ -19,7 +38,7 @@ export const datasourceRouter = createRouter({
     .query(async ({ input }) => {
       const db = getDb();
       return db.select().from(dataSources)
-        .where(eq(dataSources.type, input.type as "cloud_drive" | "nas" | "database" | "api" | "webhook" | "rss" | "notion" | "obsidian"))
+        .where(eq(dataSources.type, input.type as DataSourceType))
         .orderBy(desc(dataSources.updatedAt));
     }),
 
@@ -35,7 +54,7 @@ export const datasourceRouter = createRouter({
     .input(
       z.object({
         name: z.string().min(1).max(255),
-        type: z.enum(["cloud_drive", "nas", "database", "api", "webhook", "rss", "notion", "obsidian"]),
+        type: z.enum(DATA_SOURCE_TYPES),
         config: z.record(z.string(), z.unknown()).optional(),
         status: z.enum(["connected", "disconnected", "error", "syncing"]).default("disconnected"),
       })
@@ -51,7 +70,8 @@ export const datasourceRouter = createRouter({
       }));
       const id = Number(result[0].insertId);
       await logAudit(ctx, "datasource", "create", id, input as Record<string, unknown>);
-      return { id };
+      const notice = syncIntervalNotice(input.config);
+      return notice ? { id, notice } : { id };
     }),
 
   update: adminQuery
@@ -69,7 +89,8 @@ export const datasourceRouter = createRouter({
       const { id, ...data } = input;
       await db.update(dataSources).set(clean(data as Record<string, unknown>)).where(eq(dataSources.id, id));
       await logAudit(ctx, "datasource", "update", id, input as Record<string, unknown>);
-      return { success: true };
+      const notice = syncIntervalNotice(input.config);
+      return notice ? { success: true, notice } : { success: true };
     }),
 
   delete: adminQuery
@@ -89,6 +110,10 @@ export const datasourceRouter = createRouter({
       const results = await db.select().from(dataSources).where(eq(dataSources.id, input.id));
       const ds = results[0];
       if (!ds) return { success: false, message: "数据源不存在" };
+
+      if (!isImplementedDataSourceType(ds.type)) {
+        return { success: false, reason: "unsupported", type: ds.type, message: "类型未实现" };
+      }
 
       const config = (ds.config as Record<string, unknown>) || {};
       const platform = config.platform as string | undefined;
@@ -131,6 +156,10 @@ export const datasourceRouter = createRouter({
       const results = await db.select().from(dataSources).where(eq(dataSources.id, input.id));
       const ds = results[0];
       if (!ds) return { success: false, message: "数据源不存在" };
+
+      if (!isImplementedDataSourceType(ds.type)) {
+        return { success: false, synced: false, reason: "unsupported", type: ds.type, message: "该数据源类型尚未实现同步" };
+      }
 
       const config = (ds.config as Record<string, unknown>) || {};
       const platform = config.platform as string | undefined;
