@@ -57,16 +57,25 @@ function ConnectorCard({ connector }: ConnectorCardProps) {
         accessToken: String(cfg.accessToken ?? ''),
         refreshToken: String(cfg.refreshToken ?? ''),
         path: String(cfg.path ?? ''),
+        url: String(cfg.url ?? ''),
+        username: String(cfg.username ?? ''),
+        password: String(cfg.password ?? ''),
       });
     }
   }, [config]);
 
   const fields = connector.key === 'nas'
-    ? [{ key: 'path', label: '路径' }]
-    : [
-        { key: 'accessToken', label: 'Access Token' },
-        { key: 'refreshToken', label: 'Refresh Token' },
-      ];
+    ? [{ key: 'path', label: '路径', type: 'text' as const }]
+    : connector.key === 'alist'
+      ? [
+          { key: 'url', label: 'URL', type: 'text' as const },
+          { key: 'username', label: '用户名', type: 'text' as const },
+          { key: 'password', label: '密码', type: 'password' as const },
+        ]
+      : [
+          { key: 'accessToken', label: 'Access Token', type: 'text' as const },
+          { key: 'refreshToken', label: 'Refresh Token', type: 'text' as const },
+        ];
 
   const handleTest = async () => {
     const result = await test(form as Record<string, unknown>);
@@ -102,7 +111,7 @@ function ConnectorCard({ connector }: ConnectorCardProps) {
             <div key={f.key}>
               <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>{f.label}</label>
               <input
-                type="text"
+                type={f.type}
                 value={form[f.key] ?? ''}
                 onChange={(e) => setForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
                 className="input-base text-xs w-full"
