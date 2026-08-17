@@ -103,6 +103,72 @@
     --radius-xl: 1rem;
   }
 
+  /* ===== shadcn/ui 主题桥接 =====
+     tailwind.config.js 中的 bg-card / text-foreground / bg-primary 等
+     工具类读取以下 HSL 通道变量（shadcn 约定格式，不带 hsl() 包裹）。
+     这组变量此前未定义，导致全部 shadcn 组件失去配色；
+     这里将其映射到上方的璇玑科幻 token，深空（默认）/昼白各一套。 */
+  :root,
+  :root[data-theme="dark"] {
+    --background: 223 54% 5%;          /* --bg-primary */
+    --foreground: 216 39% 94%;         /* --text-primary */
+    --card: 222 51% 10%;               /* --bg-panel */
+    --card-foreground: 216 39% 94%;
+    --popover: 221 55% 12%;            /* --bg-elevated */
+    --popover-foreground: 216 39% 94%;
+    --primary: 187 100% 50%;           /* --accent-cyan */
+    --primary-foreground: 223 60% 6%;  /* 深空底文字，保证青色按钮对比度 */
+    --secondary: 223 49% 13%;          /* --bg-tertiary */
+    --secondary-foreground: 216 39% 94%;
+    --muted: 223 49% 13%;
+    --muted-foreground: 216 23% 63%;   /* --text-secondary */
+    --accent: 222 45% 16%;             /* hover 底色 */
+    --accent-foreground: 187 100% 60%; /* hover 亮青文字 */
+    --destructive: 354 100% 64%;       /* --accent-red */
+    --destructive-foreground: 0 0% 100%;
+    --border: 221 45% 18%;             /* --border-subtle */
+    --input: 223 49% 16%;
+    --ring: 187 100% 50%;              /* 焦点环 = 科幻青 */
+    --sidebar-background: 222 52% 8%;
+    --sidebar-foreground: 216 39% 94%;
+    --sidebar-primary: 187 100% 50%;
+    --sidebar-primary-foreground: 223 60% 6%;
+    --sidebar-accent: 222 45% 16%;
+    --sidebar-accent-foreground: 187 100% 60%;
+    --sidebar-border: 221 45% 18%;
+    --sidebar-ring: 187 100% 50%;
+  }
+
+  :root[data-theme="light"] {
+    --background: 228 33% 96%;
+    --foreground: 226 36% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 226 36% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 226 36% 15%;
+    --primary: 200 100% 40%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 222 38% 93%;
+    --secondary-foreground: 226 36% 15%;
+    --muted: 222 38% 93%;
+    --muted-foreground: 220 20% 36%;
+    --accent: 200 45% 90%;
+    --accent-foreground: 200 100% 30%;
+    --destructive: 0 73% 53%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 219 34% 86%;
+    --input: 219 34% 82%;
+    --ring: 200 100% 40%;
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 226 36% 15%;
+    --sidebar-primary: 200 100% 40%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 200 45% 90%;
+    --sidebar-accent-foreground: 200 100% 30%;
+    --sidebar-border: 219 34% 86%;
+    --sidebar-ring: 200 100% 40%;
+  }
+
   /* 滚动条 */
   * {
     scrollbar-width: thin;
@@ -435,4 +501,27 @@
               color 0.3s ease,
               border-color 0.3s ease,
               box-shadow 0.3s ease;
+}
+
+/* ===== 无障碍：减弱动画 ===== */
+@media (prefers-reduced-motion: reduce) {
+  .animate-shimmer,
+  .animate-slide-up,
+  .animate-fade-in,
+  .animate-scale-in,
+  .animate-rotate,
+  .animate-slide-in-right,
+  .status-dot-online {
+    animation: none;
+  }
+  body,
+  .theme-transition,
+  .card-base,
+  .btn-primary,
+  .btn-secondary,
+  .btn-ghost,
+  .btn-danger,
+  .input-base {
+    transition: none;
+  }
 }
