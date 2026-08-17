@@ -6,10 +6,13 @@
 
 - **知识图谱**：D3.js 力导向图谱、节点搜索、拖拽布局、节点右键菜单、节点增删改与连线。
 - **知识库**：文件夹/文档 CRUD、Markdown 编辑与文档详情页。
-- **工作流编排**：可视化节点画布、连线配置与运行状态展示。
-- **Agent 管理**：智能助手 CRUD、类型/状态管理、细粒度权限配置、LLM 连接测试。
-- **数据源与上传**：云盘/NAS/API 数据源配置，多格式文件上传与后续向量化处理入口。
-- **认证与安全**：本地管理员账号密码登录，bcrypt 密码存储，兼容旧版 scrypt 哈希自动迁移，JWT 会话 Cookie。
+- **工作流编排**：可视化节点画布、连线配置、运行状态与运行历史记录。
+- **Agent 管理**：智能助手 CRUD、类型/状态管理、细粒度权限配置、LLM 连接测试、API Key（Agent Token）签发与权限范围管理，详见 [Agent API 文档](docs/AGENT_API.md)。
+- **数据源与上传**：NAS/API 等数据源配置，多格式文件上传，统一摄取管道（任务/条目/文档分块）。115/阿里云盘连接器已停用（deprecated），仅保留历史记录。
+- **向量与搜索**：Zvec 向量库管理与重建索引面板，关键词 + 向量混合搜索。
+- **MCP 集成**：注册/测试外部 MCP 服务器（如 Dify 工作流），工作流 call-agent 节点可直接调用 MCP 工具；内置 MCP server 工具集。
+- **备份与恢复**：本地 / NAS / AList（WebDAV）备份仓库，AES-256-GCM 加密备份包，cron 调度与保留策略，manifest 校验的恢复流程。
+- **认证与安全**：本地管理员账号密码登录，bcrypt 密码存储，兼容旧版 scrypt 哈希自动迁移，登录失败限流锁定，JWT 会话 Cookie，操作审计日志。
 - **体验增强**：全局命令面板、深空/昼白主题、页面懒加载与科幻风加载态。
 
 ## 技术栈
@@ -30,7 +33,7 @@
 |------|------|
 | OAuth 2.0（Kimi） | 用户通过 Kimi 平台授权登录，获取 JWT 会话 |
 | 本地管理员登录 | 备选：用户名/密码 → JWT Token |
-| Agent Token | API 调用使用 Agent Token 认证（Bearer Token） |
+| Agent Token | API 调用使用 Agent Token 认证（Bearer Token），参见 [Agent API 文档](docs/AGENT_API.md) |
 
 ### API 鉴权层级
 
@@ -51,7 +54,7 @@ GET /health
 → { "ok": true, "uptime": 123, "dbConnected": true }
 ```
 
-Docker 容器内置 `HEALTHCHECK`，每 30 秒通过 `curl -f http://localhost:3000/health` 检测。
+Docker 容器内置 `HEALTHCHECK`，每 30 秒检测 `http://localhost:3000/health`。
 
 ## 环境变量
 
@@ -62,14 +65,15 @@ Docker 容器内置 `HEALTHCHECK`，每 30 秒通过 `curl -f http://localhost:3
 | `ADMIN_USERNAME` | 是 | - | 本地管理员登录用户名 |
 | `ADMIN_PASSWORD` | 是 | - | 本地管理员登录密码；首次成功登录后持久化为 bcrypt |
 | `DATABASE_URL` | 是 | - | MySQL 连接字符串 |
-| `JWT_SECRET` | 推荐 | 进程随机 | JWT 签名密钥，生产环境建议设置为稳定随机字符串 |
-| `APP_SECRET` | 可选 | - | Kimi OAuth 密钥；`JWT_SECRET` 缺失时也作为 JWT 备选 |
+| `JWT_SECRET` | 生产必填 | 开发环境随机生成 | JWT 签名密钥；生产环境必须为 ≥32 字符稳定随机字符串，缺失或过短将拒绝启动 |
+| `APP_SECRET` | 可选 | - | Kimi OAuth 密钥 |
 | `APP_ID` | 可选 | - | Kimi OAuth 应用 ID |
 | `VITE_APP_ID` | 可选 | - | 前端 Kimi 应用 ID |
 | `KIMI_AUTH_URL` | 可选 | `https://auth.kimi.com` | 后端 Kimi 授权端点 |
 | `VITE_KIMI_AUTH_URL` | 可选 | `https://auth.kimi.com` | 前端 Kimi 授权端点 |
 | `KIMI_OPEN_URL` | 可选 | `https://open.kimi.com` | Kimi Open API 端点 |
 | `OWNER_UNION_ID` | 可选 | - | 管理员 Union ID |
+| `BACKUP_ENCRYPTION_KEY` | 可选 | - | AList 加密备份的 AES-256-GCM 密钥；使用加密备份时必填，丢失则无法恢复已有加密备份 |
 | `UPLOAD_DIR` | 可选 | `/data/app/uploads` | 持久化上传目录 |
 | `BACKUP_TEMP_DIR` | 可选 | `/data/app/backups` | 临时备份/导出目录 |
 | `ZVEC_DATA_DIR` | 可选 | `/data/app/zvec` | Zvec 向量数据目录 |
@@ -124,14 +128,21 @@ xuanji11/
 ├── api/                  # Hono/tRPC API、认证、路由、数据库查询
 │   ├── router.ts         # tRPC 路由注册
 │   ├── middleware.ts     # 认证/权限中间件
-│   ├── *-router.ts       # 各模块路由
-│   ├── local-auth.ts     # 本地管理员认证
+│   ├── *-router.ts       # 各模块路由（知识图谱/知识库/工作流/数据源/文件/向量/设置/备份/审计/搜索/MCP 等）
+│   ├── local-auth.ts     # 本地管理员认证（bcrypt + scrypt 迁移）
+│   ├── login-rate-limit.ts # 登录失败限流锁定
+│   ├── backup-repositories/ # 备份仓库抽象（local / nas / alist WebDAV）
+│   ├── connectors/       # 数据源连接器
+│   ├── mcp-*.ts          # MCP 客户端/服务器与内置工具
+│   ├── kimi/             # Kimi OAuth（可选）
 │   ├── lib/              # 工具函数
 │   └── queries/          # 数据库查询
 ├── contracts/            # 前后端共享常量与类型
 ├── db/
 │   ├── schema.ts         # 数据库表定义
 │   └── relations.ts      # 表关系
+├── docs/                 # 专项文档（如 AGENT_API.md）
+├── scripts/              # 运维脚本
 ├── src/                  # React 应用
 │   ├── pages/            # 页面组件
 │   ├── components/       # 通用组件
@@ -146,20 +157,37 @@ xuanji11/
 
 ## 数据库表
 
-| 表名 | 用途 |
-|------|------|
-| `users` | OAuth 用户认证 |
-| `agents` | 智能助手 + 权限配置 |
-| `knowledge_nodes` | 知识图谱节点 |
-| `knowledge_edges` | 知识图谱关系 |
-| `kb_folders` | 知识库文件夹 |
-| `kb_documents` | 知识库文档 |
-| `workflows` | 工作流 |
-| `workflow_nodes` | 工作流节点 |
-| `data_sources` | 数据源 |
-| `uploaded_files` | 上传文件 |
-| `system_settings` | 系统配置（含管理员密码哈希） |
-| `backup_jobs` | 备份任务 |
+| 分组 | 表名 | 用途 |
+|------|------|------|
+| 账户与安全 | `users` | OAuth 用户认证 |
+| | `system_settings` | 系统配置（含管理员密码哈希） |
+| | `api_keys` | Agent API Key（哈希存储 + 权限范围） |
+| | `audit_logs` | 操作审计日志 |
+| Agent 与 MCP | `agents` | 智能助手 + 权限配置 |
+| | `mcp_servers` | 外部 MCP 服务器配置 |
+| 知识图谱与知识库 | `knowledge_nodes` | 知识图谱节点 |
+| | `knowledge_edges` | 知识图谱关系 |
+| | `kb_folders` | 知识库文件夹 |
+| | `kb_documents` | 知识库文档 |
+| | `document_chunks` | 文档分块（向量搜索基本单元） |
+| | `vector_collections` | 向量集合配置 |
+| 工作流 | `workflows` | 工作流 |
+| | `workflow_nodes` | 工作流节点 |
+| | `workflow_runs` | 工作流运行记录 |
+| | `workflow_run_nodes` | 运行中各节点结果 |
+| 数据接入 | `data_sources` | 数据源 |
+| | `uploaded_files` | 上传文件 |
+| | `ingestion_jobs` | 摄取任务（上传/同步/备份统一入口） |
+| | `ingestion_items` | 摄取条目（任务中的单个文件/对象） |
+| 备份与恢复 | `backup_jobs` | 备份任务 |
+| | `backup_job_files` | 备份任务文件清单 |
+| | `restore_jobs` | 恢复任务 |
+
+## 文档
+
+- [DEPLOY.md](DEPLOY.md) — Zeabur 部署指南
+- [docs/AGENT_API.md](docs/AGENT_API.md) — Agent API / Token 使用说明
+- `ANALYSIS_REPORT.md`、`XUANJI_IMPROVEMENT_SPEC.md`、`璇玑修复计划-SPEC.md` — 历史分析与修复计划存档，内容已过期，仅供回溯
 
 ## 后续更新推送
 
@@ -177,4 +205,4 @@ git push origin main
 
 ## 许可证
 
-MIT
+[MIT](LICENSE)
