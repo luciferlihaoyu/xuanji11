@@ -13,6 +13,7 @@ import type { ZVecCollection, ZVecCollectionSchema, ZVecDataType, ZVecDocInput, 
 import { eq, desc } from "drizzle-orm";
 import { systemSettings, vectorCollections, type VectorCollection } from "@db/schema";
 import { env } from "./env";
+import { tianshuApiUrl, tianshuApiKey, tianshuEnabled } from "./tianshu";
 import { getDb } from "../queries/connection";
 
 interface VectorEntry {
@@ -306,9 +307,10 @@ function maskTemplate(template: VectorModelTemplate, activeId: string | undefine
 }
 
 function getEmbeddingConfig(): EmbeddingConfig {
-  const url = process.env.LLM_API_URL || "";
-  const key = process.env.LLM_API_KEY || "";
-  const model = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
+  // 显式 LLM_* 优先，未配置时回落到天枢 (Tianshu) 网关
+  const url = process.env.LLM_API_URL || (tianshuEnabled() ? tianshuApiUrl() : "");
+  const key = process.env.LLM_API_KEY || tianshuApiKey();
+  const model = process.env.EMBEDDING_MODEL || process.env.TIANSHU_EMBEDDING_MODEL || "text-embedding-3-small";
   const rawDim = process.env.EMBEDDING_DIMENSION;
   const parsed = rawDim != null ? parseInt(rawDim, 10) : 0;
   const dimension = parsed > 0 ? parsed : defaultEmbeddingDimension(model);
@@ -321,9 +323,9 @@ async function loadLegacyEmbeddingConfig(): Promise<EmbeddingConfig> {
     const value = await getSettingValue(key);
     if (value) settings.set(key, value);
   }
-  const url = settings.get("embedding_api_url") || process.env.LLM_API_URL || "";
-  const key = settings.get("embedding_api_key") || process.env.LLM_API_KEY || "";
-  const model = settings.get("embedding_model") || process.env.EMBEDDING_MODEL || "text-embedding-3-small";
+  const url = settings.get("embedding_api_url") || process.env.LLM_API_URL || (tianshuEnabled() ? tianshuApiUrl() : "");
+  const key = settings.get("embedding_api_key") || process.env.LLM_API_KEY || tianshuApiKey();
+  const model = settings.get("embedding_model") || process.env.EMBEDDING_MODEL || process.env.TIANSHU_EMBEDDING_MODEL || "text-embedding-3-small";
   const dimension = parseDimension(settings.get("embedding_dimension") || process.env.EMBEDDING_DIMENSION, model);
   return { enabled: Boolean(url && key), url, key, model, dimension };
 }
