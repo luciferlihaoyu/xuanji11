@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "../queries/connection";
 import { agents } from "@db/schema";
 import { tianshuApiUrl, tianshuApiKey, tianshuEnabled } from "./tianshu";
+import { resolveTianshuChatModel } from "../tianshu-router";
 
 export const extractionModeSchema = z.enum(["internal", "llm", "auto"]).default("internal");
 
@@ -116,13 +117,21 @@ export async function findLlmAgent(): Promise<LlmConfig | undefined> {
   }
 
   // 环境变量兜底：显式 LLM_* 优先，其次天枢 (Tianshu) 网关
-  const envUrl = process.env.LLM_API_URL || (tianshuEnabled() ? tianshuApiUrl() : "");
-  const envKey = process.env.LLM_API_KEY || tianshuApiKey();
-  if (envUrl && envKey) {
+  const explicitUrl = process.env.LLM_API_URL;
+  const explicitKey = process.env.LLM_API_KEY;
+  if (explicitUrl && explicitKey) {
     return {
-      apiUrl: envUrl,
-      apiKey: envKey,
-      model: process.env.LLM_MODEL || process.env.TIANSHU_CHAT_MODEL || "gpt-3.5-turbo",
+      apiUrl: explicitUrl,
+      apiKey: explicitKey,
+      model: process.env.LLM_MODEL || "gpt-3.5-turbo",
+    };
+  }
+  if (tianshuEnabled()) {
+    return {
+      apiUrl: tianshuApiUrl(),
+      apiKey: tianshuApiKey(),
+      // 模型优先级：设置页选择（模型中心）> TIANSHU_CHAT_MODEL 环境变量 > 默认值
+      model: await resolveTianshuChatModel(),
     };
   }
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { User, BookOpen, Bot, Brain, HardDrive, Workflow, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug, Network } from 'lucide-react';
+import { User, BookOpen, Bot, Brain, HardDrive, Workflow, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug, Network, Cpu } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import {
   useSettings,
@@ -17,6 +17,7 @@ import {
 } from '@/hooks/useSettings';
 import { ZVecManagementPanel } from './settings/ZVecManagementPanel';
 import { McpServersPanel } from './settings/McpServersPanel';
+import { ModelsPanel } from './settings/ModelsPanel';
 import { useConnectorConfig } from '@/hooks/useConnectorConfig';
 import { trpc, trpcClient } from '@/providers/trpc';
 import { useAuth } from '@/hooks/useAuth';
@@ -25,6 +26,7 @@ const SETTINGS_NAV = [
   { key: 'personal', label: '个人设置', icon: User },
   { key: 'knowledge', label: '知识库设置', icon: BookOpen },
   { key: 'agent', label: 'Agent 配置', icon: Bot },
+  { key: 'models', label: '模型中心', icon: Cpu },
   { key: 'vectorization', label: '向量化模型', icon: Brain },
   { key: 'storage', label: '存储管理', icon: HardDrive },
   { key: 'workflow', label: '工作流默认', icon: Workflow },
@@ -645,6 +647,9 @@ export default function Settings() {
             </div>
           </div>
         );
+
+      case 'models':
+        return <ModelsPanel />;
 
       case 'vectorization':
         return (
