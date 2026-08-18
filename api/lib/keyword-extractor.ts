@@ -2,6 +2,7 @@ import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb } from "../queries/connection";
 import { agents } from "@db/schema";
+import { tianshuApiUrl, tianshuApiKey, tianshuEnabled } from "./tianshu";
 
 export const extractionModeSchema = z.enum(["internal", "llm", "auto"]).default("internal");
 
@@ -112,6 +113,17 @@ export async function findLlmAgent(): Promise<LlmConfig | undefined> {
         model: typeof model === "string" ? model : "gpt-3.5-turbo",
       };
     }
+  }
+
+  // 环境变量兜底：显式 LLM_* 优先，其次天枢 (Tianshu) 网关
+  const envUrl = process.env.LLM_API_URL || (tianshuEnabled() ? tianshuApiUrl() : "");
+  const envKey = process.env.LLM_API_KEY || tianshuApiKey();
+  if (envUrl && envKey) {
+    return {
+      apiUrl: envUrl,
+      apiKey: envKey,
+      model: process.env.LLM_MODEL || process.env.TIANSHU_CHAT_MODEL || "gpt-3.5-turbo",
+    };
   }
 
   return undefined;
