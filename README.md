@@ -77,6 +77,11 @@ Docker 容器内置 `HEALTHCHECK`，每 30 秒通过 `curl -f http://localhost:3
 | `ZVEC_ENABLED` | 可选 | `true` | 设置为 `false` 禁用 Zvec 向量功能 |
 | `NODE_ENV` | 可选 | `development` | 生产环境设为 `production` |
 | `PORT` | 可选 | `3000` | 服务端口 |
+| `TIANSHU_BASE_URL` | 可选 | `https://woppis1.zeabur.app` | 天枢（New API 兼容）模型网关地址 |
+| `TIANSHU_API_KEY` | 可选 | - | 天枢 API Key；配置后自动作为 embedding 与 LLM 关键词抽取的兜底模型来源 |
+| `TIANSHU_EMBEDDING_MODEL` | 可选 | `text-embedding-3-small` | 经天枢路由的 embedding 模型（需网关已配置对应渠道） |
+| `TIANSHU_CHAT_MODEL` | 可选 | - | 经天枢路由的 LLM 关键词抽取模型 |
+| `LLM_API_URL` / `LLM_API_KEY` | 可选 | - | 直连模型服务；配置后优先级高于天枢 |
 
 ## 本地开发
 
