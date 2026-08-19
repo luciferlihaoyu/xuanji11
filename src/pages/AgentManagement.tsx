@@ -3,7 +3,7 @@ import { useAppStore, DEFAULT_PERMISSIONS } from '@/store/useAppStore';
 import type { Agent, AgentStatus, AgentType } from '@/store/useAppStore';
 import { useAgents } from '@/hooks/useAgents';
 import { useVectorModelTemplate, useVectorModelTemplates } from '@/hooks/useSettings';
-import { trpcClient } from '@/providers/trpc';
+import { trpc, trpcClient } from '@/providers/trpc';
 import PermissionSelector from '@/components/PermissionSelector';
 import { isSameDay, isWithinInterval, startOfDay, endOfDay, subDays } from 'date-fns';
 import { Search, Grid3X3, List, Plus, X, Activity, Shield, Zap, Users, Pencil, Trash2, Eye, EyeOff, KeyRound, Copy } from 'lucide-react';
@@ -84,6 +84,8 @@ export default function AgentManagement() {
   const [testLlmStatus, setTestLlmStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [testLlmMessage, setTestLlmMessage] = useState('');
   const { data: vectorTemplates = [], isLoading: vectorTemplatesLoading } = useVectorModelTemplates();
+  const tianshuModelsQuery = trpc.tianshu.listModels.useQuery(undefined, { retry: 1, staleTime: 60_000 });
+  const tianshuModels = tianshuModelsQuery.data?.ok ? tianshuModelsQuery.data.models : [];
   const { data: selectedLlmTemplate } = useVectorModelTemplate(llmConfig.llm_template_id);
 
   // API Key management state
@@ -781,11 +783,22 @@ export default function AgentManagement() {
                     <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>模型</label>
                     <input
                       type="text"
+                      list="tianshu-model-options"
                       value={llmConfig.llm_model}
                       onChange={(e) => setLlmConfig({ ...llmConfig, llm_model: e.target.value })}
-                      placeholder="gpt-3.5-turbo"
+                      placeholder={tianshuModels.length > 0 ? "输入或从天枢模型列表选择" : "gpt-3.5-turbo"}
                       className="input-base text-xs w-full"
                     />
+                    <datalist id="tianshu-model-options">
+                      {tianshuModels.map((m) => (
+                        <option key={m} value={m} />
+                      ))}
+                    </datalist>
+                    {tianshuModelsQuery.data?.ok && (
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                        已接入天枢 {tianshuModels.length} 个模型，输入时可下拉选择；使用天枢模型请把 API URL 填为天枢网关地址、API Key 填天枢密钥。
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>Max Tokens</label>
