@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { User, BookOpen, Bot, Brain, HardDrive, Workflow, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug, Network, Cpu } from 'lucide-react';
+import { User, BookOpen, Bot, HardDrive, Workflow, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug, Network, Cpu } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import {
   useSettings,
@@ -28,7 +28,6 @@ const SETTINGS_NAV = [
   { key: 'knowledge', label: '知识库设置', icon: BookOpen },
   { key: 'agent', label: 'Agent 配置', icon: Bot },
   { key: 'models', label: '模型中心', icon: Cpu },
-  { key: 'vectorization', label: '向量化模型', icon: Brain },
   { key: 'storage', label: '存储管理', icon: HardDrive },
   { key: 'workflow', label: '工作流默认', icon: Workflow },
   { key: 'connector', label: '连接器', icon: Plug },
@@ -662,11 +661,12 @@ export default function Settings() {
         );
 
       case 'models':
-        return <ModelsPanel />;
-
-      case 'vectorization':
+      case 'vectorization': // 旧链接兼容：向量化设置已并入模型中心
         return (
-          <div className="space-y-6">
+          <div className="space-y-8">
+            <ModelsPanel />
+            <div style={{ borderTop: '1px solid var(--border-subtle)' }} />
+            <div className="space-y-6">
             <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>向量化模型设置</h3>
             <div className="space-y-4 max-w-lg">
               <div>
@@ -886,6 +886,7 @@ export default function Settings() {
               collections={vectorCollections.data}
               isLoading={vectorStats.isLoading || vectorCollections.isLoading}
             />
+            </div>
           </div>
         );
 
