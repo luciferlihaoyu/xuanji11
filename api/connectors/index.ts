@@ -6,6 +6,7 @@ import { listConnectors, getConnector } from "./base";
 import "./115";
 import "./aliyundrive";
 import "./nas";
+import "./alist";
 
 export { listConnectors, getConnector };
 export * from "./base";

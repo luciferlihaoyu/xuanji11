@@ -17,6 +17,7 @@ import {
 } from '@/hooks/useSettings';
 import { ZVecManagementPanel } from './settings/ZVecManagementPanel';
 import { McpServersPanel } from './settings/McpServersPanel';
+import { ConnectorBrowser } from './settings/ConnectorBrowser';
 import { ModelsPanel } from './settings/ModelsPanel';
 import { useConnectorConfig } from '@/hooks/useConnectorConfig';
 import { trpc, trpcClient } from '@/providers/trpc';
@@ -50,6 +51,7 @@ function ConnectorCard({ connector }: ConnectorCardProps) {
   const addToast = useAppStore((s) => s.addToast);
   const { config, isLoading, save, test, isSaving, isTesting } = useConnectorConfig(connector.key);
   const [form, setForm] = useState<Record<string, string>>({});
+  const [showBrowser, setShowBrowser] = useState(false);
 
   useEffect(() => {
     if (config && typeof config === 'object') {
@@ -135,7 +137,18 @@ function ConnectorCard({ connector }: ConnectorCardProps) {
                 </span>
               ) : '保存'}
             </button>
+            {connector.status === 'connected' && (
+              <button
+                onClick={() => setShowBrowser((v) => !v)}
+                className="btn-ghost text-xs py-2 px-4"
+              >
+                {showBrowser ? '收起文件' : '浏览文件'}
+              </button>
+            )}
           </div>
+          {showBrowser && connector.status === 'connected' && (
+            <ConnectorBrowser platform={connector.key} />
+          )}
         </div>
       )}
     </div>
