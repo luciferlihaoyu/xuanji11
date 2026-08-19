@@ -119,15 +119,24 @@ export async function searchContext(input: z.infer<typeof searchContextInputSche
     filters: input.filters,
   });
 
-  const results = search.results.map((r) => ({
-    kind: "document_chunk" as const,
-    documentId: r.id,
-    chunkId: null as string | null,
-    title: r.title,
-    snippet: r.snippet,
-    score: r.score,
-    source: r.sources.join(","),
-  }));
+  // 契约要求数值型 documentId / chunkId（tiangong-xuanji-integration-contract）。
+  // hybrid search 的 id 是字符串（可能是纯数字或复合 id），这里尽力解析；
+  // 无法解析出数值的条目直接跳过，避免破坏下游 schema 校验。
+  const results = search.results.flatMap((r) => {
+    const nums = r.id.match(/\d+/g)?.map(Number) ?? [];
+    if (nums.length === 0) return [];
+    const documentId = nums[0];
+    const chunkId = nums[nums.length - 1];
+    return [{
+      kind: "document_chunk" as const,
+      documentId,
+      chunkId,
+      title: (r.title || "未命名").slice(0, 500),
+      snippet: (r.snippet || r.title || "无摘要").slice(0, 5000),
+      score: r.score,
+      source: r.sources.join(",").slice(0, 100) || "hybrid",
+    }];
+  });
 
   // 图谱提示：从节点标题/内容做 LIKE 匹配
   const q = `%${input.query}%`;
