@@ -63,6 +63,7 @@ function ConnectorCard({ connector }: ConnectorCardProps) {
         url: String(cfg.url ?? ''),
         username: String(cfg.username ?? ''),
         password: String(cfg.password ?? ''),
+        basePath: String(cfg.basePath ?? ''),
       });
     }
   }, [config]);
@@ -74,6 +75,7 @@ function ConnectorCard({ connector }: ConnectorCardProps) {
           { key: 'url', label: 'URL', type: 'text' as const },
           { key: 'username', label: '用户名', type: 'text' as const },
           { key: 'password', label: '密码', type: 'password' as const },
+          { key: 'basePath', label: '工作目录（如 /115/璇玑，留空为账号根目录）', type: 'text' as const },
         ]
       : [
           { key: 'accessToken', label: 'Access Token', type: 'text' as const },
