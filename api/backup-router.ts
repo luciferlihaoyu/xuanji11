@@ -13,7 +13,7 @@ import { executeBackup, executeRestore, serializeBackupJob } from "./backup-repo
 const BACKUP_TARGETS = ["alist", "nas", "local"] as const;
 
 const TARGET_META: readonly { key: string; name: string; deprecated?: boolean }[] = [
-  { key: "alist", name: "AList WebDAV" },
+  { key: "alist", name: "AList 网盘" },
   { key: "nas", name: "NAS / 本地存储" },
   { key: "local", name: "本地目录" },
   { key: "115", name: "115 网盘", deprecated: true },

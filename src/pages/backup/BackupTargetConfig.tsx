@@ -62,13 +62,13 @@ export default function BackupTargetConfig({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
             <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>
-              URL <span style={{ color: 'var(--text-muted)' }}>(WebDAV 地址，可带子目录作为备份落点)</span>
+              URL <span style={{ color: 'var(--text-muted)' }}>(站点地址，可带子目录作为备份落点)</span>
             </label>
             <input
               type="text"
               value={fields.url}
               onChange={(e) => onFieldChange('url', e.target.value)}
-              placeholder="https://alist.example.com/dav/115/璇玑"
+              placeholder="https://alist.example.com/115/璇玑"
               className="input-base text-xs w-full"
               required
             />
