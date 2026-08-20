@@ -1,7 +1,8 @@
 /**
  * AList 网盘连接器
  * 通过 AList REST API 接入：登录获取 token，列目录、取下载链接、上传文件。
- * 配置：{ url: "https://alist.example.com", username, password }
+ * 配置：{ url: "https://alist.example.com", username, password, basePath?: "/115/璇玑" }
+ * basePath 为该账号在 AList 中的工作目录（默认 "/" = 账号根目录），浏览/上传/同步都以其为起点。
  * 凭据只存于 system_settings（服务端），不写入日志或错误消息。
  */
 
@@ -13,6 +14,14 @@ interface AlistConfig {
   url: string;
   username: string;
   password: string;
+  /** 该账号在 AList 中的工作目录（如 /115/璇玑），默认 "/" = 账号根目录 */
+  basePath: string;
+}
+
+function normalizeBasePath(raw: unknown): string {
+  const trimmed = (typeof raw === 'string' ? raw.trim() : '') || '/';
+  if (trimmed === '/') return '/';
+  return `/${trimmed.replace(/^\/+|\/+$/g, '')}`;
 }
 
 function parseConfig(config: Record<string, unknown>): AlistConfig | null {
@@ -21,7 +30,7 @@ function parseConfig(config: Record<string, unknown>): AlistConfig | null {
   const password = typeof config.password === 'string' ? config.password : '';
   if (!url || !username || !password) return null;
   if (!/^https?:\/\//i.test(url)) return null;
-  return { url, username, password };
+  return { url, username, password, basePath: normalizeBasePath(config.basePath) };
 }
 
 // token 缓存：key = url+username
@@ -40,9 +49,9 @@ async function login(cfg: AlistConfig): Promise<string> {
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`AList 登录失败: HTTP ${res.status}`);
-  const payload = (await res.json()) as { code?: number; data?: { token?: string } };
+  const payload = (await res.json()) as { code?: number; message?: string; data?: { token?: string } };
   const token = payload.data?.token;
-  if (!token) throw new Error('AList 登录失败：未返回 token（请检查账号密码）');
+  if (!token) throw new Error(`AList 登录失败${payload.message ? `: ${payload.message}` : '：未返回 token（请检查账号密码）'}`);
   tokenCache.set(cacheKey, { token, obtainedAt: Date.now() });
   return token;
 }
@@ -62,8 +71,8 @@ async function fsList(cfg: AlistConfig, token: string, path: string): Promise<Fs
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`AList 列目录失败: HTTP ${res.status}`);
-  const payload = (await res.json()) as { code?: number; data?: { content?: FsItem[] | null } };
-  if (payload.code !== 200) throw new Error('AList 列目录失败');
+  const payload = (await res.json()) as { code?: number; message?: string; data?: { content?: FsItem[] | null } };
+  if (payload.code !== 200) throw new Error(`AList 列目录失败 (${path})${payload.message ? `: ${payload.message}` : ''}`);
   return payload.data?.content ?? [];
 }
 
@@ -93,8 +102,8 @@ export const connectorAlist: CloudConnector = {
     if (!cfg) return { success: false, message: '配置不完整：需要 url、username、password' };
     try {
       const token = await login(cfg);
-      const items = await fsList(cfg, token, '/');
-      return { success: true, message: `连接成功，根目录 ${items.length} 个条目` };
+      const items = await fsList(cfg, token, cfg.basePath);
+      return { success: true, message: `连接成功，工作目录 ${cfg.basePath} 下 ${items.length} 个条目` };
     } catch (e) {
       return { success: false, message: e instanceof Error ? e.message : '连接失败' };
     }
@@ -104,7 +113,11 @@ export const connectorAlist: CloudConnector = {
     const cfg = parseConfig(config);
     if (!cfg) return [];
     const token = await login(cfg);
-    const dir = parentId || '/';
+    // 顶层浏览从工作目录开始；请求的目录在工作目录之上时（如点“返回上级”越过工作目录）也回到工作目录
+    const raw = parentId || '/';
+    const aboveBase =
+      cfg.basePath !== '/' && (raw === '/' || cfg.basePath === raw || cfg.basePath.startsWith(`${raw.replace(/\/+$/, '')}/`));
+    const dir = raw === '/' || aboveBase ? cfg.basePath : raw;
     const items = await fsList(cfg, token, dir);
     return items.map((item) => ({
       id: joinPath(dir, item.name ?? ''),
@@ -129,7 +142,9 @@ export const connectorAlist: CloudConnector = {
       throw new Error('Invalid upload path');
     }
     const token = await login(cfg);
-    const target = fileName.startsWith('/') ? fileName : `/${fileName}`;
+    const rel = fileName.startsWith('/') ? fileName : `/${fileName}`;
+    // 相对路径相对工作目录解析；已是工作目录下的完整路径则原样使用
+    const target = cfg.basePath === '/' || rel.startsWith(`${cfg.basePath}/`) ? rel : joinPath(cfg.basePath, rel);
     const res = await fetch(`${cfg.url}/api/fs/put`, {
       method: 'PUT',
       headers: {
@@ -156,6 +171,9 @@ export const connectorAlist: CloudConnector = {
     let downloaded = 0;
     let failed = 0;
 
+    const stripBase = (full: string): string =>
+      cfg.basePath !== '/' && full.startsWith(cfg.basePath) ? full.slice(cfg.basePath.length) : full;
+
     const walk = async (dir: string): Promise<void> => {
       const items = await fsList(cfg, token, dir);
       for (const item of items) {
@@ -170,7 +188,7 @@ export const connectorAlist: CloudConnector = {
           const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const buf = Buffer.from(await res.arrayBuffer());
-          const dest = pathMod.join(localPath, full.replace(/^\/+/, ''));
+          const dest = pathMod.join(localPath, stripBase(full).replace(/^\/+/, ''));
           await fs.mkdir(pathMod.dirname(dest), { recursive: true });
           await fs.writeFile(dest, buf);
           downloaded++;
@@ -179,7 +197,7 @@ export const connectorAlist: CloudConnector = {
         }
       }
     };
-    await walk('/');
+    await walk(cfg.basePath);
     return { downloaded, failed };
   },
 };
