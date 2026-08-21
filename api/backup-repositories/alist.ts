@@ -81,6 +81,9 @@ function joinFsPath(dir: string, name: string): string {
 const tokenCache = new Map<string, { token: string; obtainedAt: number }>();
 const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
+// 已确认存在的目录缓存：key = baseUrl+username+dir，避免每次上传前重复探测
+const ensuredDirs = new Set<string>();
+
 async function login(cfg: AlistConfig): Promise<string> {
   const cacheKey = `${cfg.baseUrl}::${cfg.username}`;
   const cached = tokenCache.get(cacheKey);
@@ -137,11 +140,14 @@ async function fsMkdir(cfg: AlistConfig, token: string, path: string): Promise<v
   }
 }
 
-/** 递归确保目录存在 */
+/** 递归确保目录存在（带进程内缓存） */
 async function ensureDir(cfg: AlistConfig, token: string, dir: string): Promise<void> {
   if (dir === "/") return;
+  const cacheKey = `${cfg.baseUrl}::${cfg.username}::${dir}`;
+  if (ensuredDirs.has(cacheKey)) return;
   try {
     await fsList(cfg, token, dir);
+    ensuredDirs.add(cacheKey);
     return; // 已存在
   } catch {
     // 不存在（或无权限列），尝试创建
@@ -149,6 +155,7 @@ async function ensureDir(cfg: AlistConfig, token: string, dir: string): Promise<
   const parent = dir.slice(0, dir.lastIndexOf("/")) || "/";
   if (parent !== dir) await ensureDir(cfg, token, parent);
   await fsMkdir(cfg, token, dir);
+  ensuredDirs.add(cacheKey);
 }
 
 export const alistRepository: BackupRepository = {
@@ -161,8 +168,19 @@ export const alistRepository: BackupRepository = {
     }
     try {
       const token = await login(cfg);
+      let created = false;
+      try {
+        await fsList(cfg, token, cfg.basePath);
+      } catch {
+        // 目录不存在则自动创建（含父目录）
+        await ensureDir(cfg, token, cfg.basePath);
+        created = true;
+      }
       const items = await fsList(cfg, token, cfg.basePath);
-      return { success: true, message: `AList 连接成功，备份目录 ${cfg.basePath} 下 ${items.length} 个条目` };
+      return {
+        success: true,
+        message: `AList 连接成功，备份目录 ${cfg.basePath}${created ? " 已自动创建，" : ""}下 ${items.length} 个条目`,
+      };
     } catch (err) {
       return { success: false, message: err instanceof Error ? err.message : "AList 连接失败" };
     }
@@ -179,6 +197,9 @@ export const alistRepository: BackupRepository = {
     const safePath = sanitizeRelativePath(remoteRelPath);
     const target = joinFsPath(cfg.basePath, safePath);
     const token = await login(cfg);
+    // AList 的 fs/put 不自动创建父目录，先确保父目录存在
+    const parentDir = target.slice(0, target.lastIndexOf("/")) || "/";
+    await ensureDir(cfg, token, parentDir);
     const res = await fetch(`${cfg.baseUrl}/api/fs/put`, {
       method: "PUT",
       headers: {

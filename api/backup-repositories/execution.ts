@@ -137,6 +137,8 @@ async function executeBackupToRepository(
   await db.update(backupJobs).set({ filesTotal: files.length }).where(eq(backupJobs.id, job.id));
 
   try {
+    // 确保备份落点目录存在（AList 递归建目录 / 本地 mkdir -p）
+    await repo.ensureBasePath(config);
     const manifestFiles = await uploadFilesToRepository(db, job, { repo, config, files, encrypt });
 
     if (manifest) {

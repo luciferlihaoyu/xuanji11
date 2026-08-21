@@ -178,6 +178,43 @@ describe("alist REST backup repository", () => {
     expect(made).toEqual(["/backups", "/backups/xj"]);
   });
 
+  it("testConnection auto-creates a missing backup directory", async () => {
+    const made: string[] = [];
+    routeFetch(fetchMock, {
+      "/api/fs/list": (init) => {
+        const path = JSON.parse(String(init.body)).path as string;
+        if (path === "/115/璇玑" && made.length === 0) return json({ code: 500, message: "object not found" });
+        return json({ code: 200, message: "success", data: { content: [] } });
+      },
+      "/api/fs/mkdir": (init) => {
+        made.push(JSON.parse(String(init.body)).path as string);
+        return json({ code: 200, message: "success" });
+      },
+    });
+    const result = await alistRepository.testConnection(config({ url: "https://alist.example.com/115/%E7%92%87%E7%8E%91" }));
+    expect(result.success).toBe(true);
+    expect(result.message).toContain("已自动创建");
+    expect(made).toContain("/115/璇玑");
+  });
+
+  it("uploadFile creates missing parent directories before putting", async () => {
+    const made: string[] = [];
+    routeFetch(fetchMock, {
+      "/api/fs/list": (init) => {
+        const path = JSON.parse(String(init.body)).path as string;
+        if (path.startsWith("/backups/sub")) return json({ code: 500, message: "object not found" });
+        return json({ code: 200, message: "success", data: { content: [] } });
+      },
+      "/api/fs/mkdir": (init) => {
+        made.push(JSON.parse(String(init.body)).path as string);
+        return json({ code: 200, message: "success" });
+      },
+    });
+    await alistRepository.uploadFile(config({ url: "https://alist.example.com/backups" }), "sub/dir/f.txt", Buffer.from("x"));
+    expect(made).toEqual(["/backups/sub", "/backups/sub/dir"]);
+    expect(callsTo(fetchMock, "/api/fs/put")).toHaveLength(1);
+  });
+
   it("sends an AbortSignal timeout on every request", async () => {
     routeFetch(fetchMock);
     await alistRepository.uploadFile(config(), "f.txt", Buffer.from("x"));
