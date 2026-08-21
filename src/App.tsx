@@ -31,6 +31,9 @@ function ThemeInit() {
   const theme = useAppStore((s) => s.theme);
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
+    // shadcn 组件的 dark: 变体依赖 .dark class（tailwind darkMode: ["class"]），
+    // 与 data-theme 属性保持同步
+    document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
   return null;
 }

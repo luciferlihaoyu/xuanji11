@@ -39,3 +39,5 @@ build/
 # Test coverage
 coverage/
 .nyc_output/
+# Agent tooling state
+.omo/
