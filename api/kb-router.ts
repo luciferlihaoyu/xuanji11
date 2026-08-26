@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, desc, like, isNull } from "drizzle-orm";
+import { eq, desc, like, isNull, inArray } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { kbFolders, kbDocuments, documentChunks } from "@db/schema";
@@ -7,6 +7,7 @@ import { clean } from "./lib/clean";
 import { logAudit, logAction } from "./lib/audit";
 import { vectorEngine } from "./lib/vector";
 import { indexDocumentById, tryIndexDocumentById, startReindexAll, getReindexProgress } from "./lib/document-indexer";
+import { collectDescendantFolderIds } from "./lib/kb-tree";
 
 async function deleteDocumentVectors(documentId: number): Promise<void> {
   const db = getDb();
@@ -81,48 +82,58 @@ export const kbRouter = createRouter({
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = getDb();
-      // 清理该文件夹及子文件夹下所有文档的向量和分块
-      const docs = await db.select({ id: kbDocuments.id }).from(kbDocuments)
-        .where(eq(kbDocuments.folderId, input.id));
-      for (const doc of docs) {
-        await deleteDocumentVectors(doc.id);
-      }
-      await db.delete(kbDocuments).where(eq(kbDocuments.folderId, input.id));
-      const subFolders = await db.select({ id: kbFolders.id }).from(kbFolders)
-        .where(eq(kbFolders.parentId, input.id));
-      for (const folder of subFolders) {
-        const subDocs = await db.select({ id: kbDocuments.id }).from(kbDocuments)
-          .where(eq(kbDocuments.folderId, folder.id));
-        for (const doc of subDocs) {
+      // 收集全部层级子孙（修复旧实现只递归一层导致孙级成孤儿的问题），逐层清理文档向量与记录
+      const allFolders = await db.select({ id: kbFolders.id, parentId: kbFolders.parentId }).from(kbFolders);
+      const descendantIds = collectDescendantFolderIds(allFolders, input.id);
+      const targetFolderIds = [input.id, ...descendantIds];
+
+      for (const folderId of targetFolderIds) {
+        const docs = await db.select({ id: kbDocuments.id }).from(kbDocuments)
+          .where(eq(kbDocuments.folderId, folderId));
+        for (const doc of docs) {
           await deleteDocumentVectors(doc.id);
         }
-        await db.delete(kbDocuments).where(eq(kbDocuments.folderId, folder.id));
+        await db.delete(kbDocuments).where(eq(kbDocuments.folderId, folderId));
       }
-      await db.delete(kbFolders).where(eq(kbFolders.parentId, input.id));
-      await db.delete(kbFolders).where(eq(kbFolders.id, input.id));
-      await logAudit(ctx, "kb_folder", "delete", input.id, input as Record<string, unknown>);
-      return { success: true };
+      // 先删子孙再删根（id 集合含全部层级，一次 in 条件删除）
+      await db.delete(kbFolders).where(inArray(kbFolders.id, targetFolderIds));
+      await logAudit(ctx, "kb_folder", "delete", input.id, { ...input, removedFolderCount: targetFolderIds.length } as Record<string, unknown>);
+      return { success: true, removedFolderCount: targetFolderIds.length };
     }),
 
   listDocuments: authedQuery
-    .input(z.object({ folderId: z.number().nullable().optional() }))
+    .input(z.object({
+      folderId: z.number().nullable().optional(),
+      limit: z.number().int().min(1).max(1000).default(200),
+      offset: z.number().int().min(0).default(0),
+    }))
     .query(async ({ input }) => {
       const db = getDb();
       if (input.folderId) {
         return db.select().from(kbDocuments)
           .where(eq(kbDocuments.folderId, input.folderId))
-          .orderBy(desc(kbDocuments.updatedAt));
+          .orderBy(desc(kbDocuments.updatedAt))
+          .limit(input.limit)
+          .offset(input.offset);
       }
-      return db.select().from(kbDocuments).orderBy(desc(kbDocuments.updatedAt));
+      return db.select().from(kbDocuments).orderBy(desc(kbDocuments.updatedAt))
+        .limit(input.limit)
+        .offset(input.offset);
     }),
 
   searchDocuments: authedQuery
-    .input(z.object({ query: z.string().min(1).max(500) }))
+    .input(z.object({
+      query: z.string().min(1).max(500),
+      limit: z.number().int().min(1).max(1000).default(200),
+      offset: z.number().int().min(0).default(0),
+    }))
     .query(async ({ input }) => {
       const db = getDb();
       return db.select().from(kbDocuments)
         .where(like(kbDocuments.title, `%${input.query}%`))
-        .orderBy(desc(kbDocuments.updatedAt));
+        .orderBy(desc(kbDocuments.updatedAt))
+        .limit(input.limit)
+        .offset(input.offset);
     }),
 
   getDocument: authedQuery

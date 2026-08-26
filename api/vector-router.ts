@@ -10,10 +10,17 @@ import { getStats } from "./lib/vector-service";
 export const vectorRouter = createRouter({
   stats: authedQuery.query(() => getStats()),
 
-  list: authedQuery.query(async () => {
-    const db = getDb();
-    return db.select().from(vectorCollections).orderBy(desc(vectorCollections.updatedAt));
-  }),
+  list: authedQuery
+    .input(z.object({
+      limit: z.number().int().min(1).max(1000).default(200),
+      offset: z.number().int().min(0).default(0),
+    }).optional())
+    .query(async ({ input }) => {
+      const db = getDb();
+      return db.select().from(vectorCollections).orderBy(desc(vectorCollections.updatedAt))
+        .limit(input?.limit ?? 200)
+        .offset(input?.offset ?? 0);
+    }),
 
   getById: authedQuery
     .input(z.object({ id: z.number() }))

@@ -8,19 +8,32 @@ import { vectorEngine } from "./lib/vector";
 import { logAudit, logAction } from "./lib/audit";
 
 export const knowledgeRouter = createRouter({
-  listNodes: authedQuery.query(async () => {
-    const db = getDb();
-    return db.select().from(knowledgeNodes).orderBy(desc(knowledgeNodes.updatedAt));
-  }),
+  listNodes: authedQuery
+    .input(z.object({
+      limit: z.number().int().min(1).max(1000).default(500),
+      offset: z.number().int().min(0).default(0),
+    }).optional())
+    .query(async ({ input }) => {
+      const db = getDb();
+      return db.select().from(knowledgeNodes).orderBy(desc(knowledgeNodes.updatedAt))
+        .limit(input?.limit ?? 500)
+        .offset(input?.offset ?? 0);
+    }),
 
   searchNodes: authedQuery
-    .input(z.object({ query: z.string().max(500) }))
+    .input(z.object({
+      query: z.string().max(500),
+      limit: z.number().int().min(1).max(1000).default(200),
+      offset: z.number().int().min(0).default(0),
+    }))
     .query(async ({ input }) => {
       const db = getDb();
       const q = `%${input.query}%`;
       return db.select().from(knowledgeNodes)
         .where(sql`${knowledgeNodes.title} LIKE ${q} OR ${knowledgeNodes.content} LIKE ${q}`)
-        .orderBy(desc(knowledgeNodes.updatedAt));
+        .orderBy(desc(knowledgeNodes.updatedAt))
+        .limit(input.limit)
+        .offset(input.offset);
     }),
 
   getNode: authedQuery

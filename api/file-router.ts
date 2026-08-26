@@ -12,6 +12,8 @@ export const fileRouter = createRouter({
       z.object({
         search: z.string().max(200).optional(),
         mimeType: z.string().max(100).optional(),
+        limit: z.number().int().min(1).max(1000).default(200),
+        offset: z.number().int().min(0).default(0),
       }).optional()
     )
     .query(async ({ input }) => {
@@ -30,7 +32,9 @@ export const fileRouter = createRouter({
 
       return db.select().from(uploadedFiles)
         .where(conditions.length > 0 ? and(...conditions) : undefined)
-        .orderBy(desc(uploadedFiles.createdAt));
+        .orderBy(desc(uploadedFiles.createdAt))
+        .limit(input?.limit ?? 200)
+        .offset(input?.offset ?? 0);
     }),
 
   getById: authedQuery
