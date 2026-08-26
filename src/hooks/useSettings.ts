@@ -116,6 +116,23 @@ export function useStorageSettings() {
   };
 }
 
+/** 个人设置四项（昵称/邮箱存于设置表；时区/语言同）。 */
+export function useProfileSettings() {
+  const nickname = useSettingValue("profile_nickname");
+  const email = useSettingValue("profile_email");
+  const timezone = useSettingValue("profile_timezone");
+  const language = useSettingValue("profile_language");
+
+  return {
+    nickname: nickname.data?.value ?? "",
+    email: email.data?.value ?? "",
+    timezone: timezone.data?.value ?? "",
+    language: language.data?.value ?? "",
+    isLoading:
+      nickname.isLoading || email.isLoading || timezone.isLoading || language.isLoading,
+  };
+}
+
 export function useAgentSettings() {
   const hubUrl = useSettingValue("tiangong_hub_url");
   const token = useSettingValue("agent_token");

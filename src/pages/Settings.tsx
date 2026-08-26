@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { User, BookOpen, Bot, HardDrive, Workflow, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug, Network, Cpu } from 'lucide-react';
+import { User, BookOpen, Bot, HardDrive, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug, Network, Cpu } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import {
   useSettings,
   useVectorSettings,
   useAgentSettings,
+  useProfileSettings,
   useStorageSettings,
   useAppearanceSettings,
   useVectorModelTemplates,
@@ -15,6 +16,9 @@ import {
   useVectorStats,
   useVectorCollections,
 } from '@/hooks/useSettings';
+import { computeStorageRatios } from '@/lib/utils';
+
+declare const __APP_VERSION__: string;
 import { ZVecManagementPanel } from './settings/ZVecManagementPanel';
 import { McpServersPanel } from './settings/McpServersPanel';
 import { ConnectorBrowser } from './settings/ConnectorBrowser';
@@ -29,7 +33,6 @@ const SETTINGS_NAV = [
   { key: 'agent', label: 'Agent 配置', icon: Bot },
   { key: 'models', label: '模型中心', icon: Cpu },
   { key: 'storage', label: '存储管理', icon: HardDrive },
-  { key: 'workflow', label: '工作流默认', icon: Workflow },
   { key: 'connector', label: '连接器', icon: Plug },
   { key: 'mcp-servers', label: 'MCP 服务器', icon: Network },
   { key: 'security', label: '安全', icon: Shield },
@@ -216,6 +219,7 @@ export default function Settings() {
     timezone: 'Asia/Shanghai',
     language: 'zh-CN',
   });
+  const [personalSaved, setPersonalSaved] = useState(false);
   const [appearanceForm, setAppearanceForm] = useState({
     fontSize: '14',
     codeFont: 'JetBrains Mono',
@@ -223,6 +227,7 @@ export default function Settings() {
   const [appearanceSaved, setAppearanceSaved] = useState(false);
   const vectorSettings = useVectorSettings();
   const agentSettings = useAgentSettings();
+  const profileSettings = useProfileSettings();
   const { setSetting, setMany, isSetting } = useSettings();
   const { data: templates, isLoading: templatesLoading } = useVectorModelTemplates();
   const saveTemplate = useSaveVectorModelTemplate();
@@ -248,10 +253,21 @@ export default function Settings() {
   useEffect(() => {
     setPersonalForm((prev) => ({
       ...prev,
-      nickname: user?.name ?? '管理员',
-      email: user?.email ?? 'admin@xuanji.io',
+      nickname: user?.name ?? prev.nickname,
+      email: user?.email ?? prev.email,
     }));
   }, [user?.name, user?.email]);
+
+  // 从设置表回填时区/语言等持久化偏好（登录态缺失字段不覆盖用户输入）
+  useEffect(() => {
+    if (profileSettings.isLoading) return;
+    setPersonalForm((prev) => ({
+      ...prev,
+      timezone: profileSettings.timezone || prev.timezone,
+      language: profileSettings.language || prev.language,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在设置加载完成后同步一次
+  }, [profileSettings.isLoading, profileSettings.timezone, profileSettings.language]);
 
   useEffect(() => {
     if (!appearanceSettings.isLoading) {
@@ -313,12 +329,19 @@ export default function Settings() {
     setTestError('');
     setTestLoading(true);
     try {
-      const result = await trpcClient.knowledge.vectorHealth.query();
-      if (result.ok) {
+      const hubUrl = agentForm.hubUrl.trim().replace(/\/+$/, '');
+      if (!hubUrl) {
+        setTestResult('fail');
+        setTestError('请先填写天宫 Hub URL');
+        return;
+      }
+      // 直接探测所填 Hub 地址（5s 超时），测的就是表单里的配置
+      const res = await fetch(`${hubUrl}/health`, { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
         setTestResult('success');
       } else {
         setTestResult('fail');
-        setTestError(result.error || '连接失败，请检查配置');
+        setTestError(`HTTP ${res.status}，请检查 Hub 地址与网络`);
       }
     } catch (err: unknown) {
       setTestResult('fail');
@@ -481,6 +504,17 @@ export default function Settings() {
     ]);
   };
 
+  const savePersonalSettings = async () => {
+    await setMany([
+      { key: 'profile_nickname', value: personalForm.nickname, category: 'personal' },
+      { key: 'profile_email', value: personalForm.email, category: 'personal' },
+      { key: 'profile_timezone', value: personalForm.timezone, category: 'personal' },
+      { key: 'profile_language', value: personalForm.language, category: 'personal' },
+    ]);
+    setPersonalSaved(true);
+    setTimeout(() => setPersonalSaved(false), 3000);
+  };
+
   const saveAppearanceSettings = async () => {
     await setMany([
       { key: 'appearance_font_size', value: appearanceForm.fontSize, category: 'appearance' },
@@ -518,7 +552,6 @@ export default function Settings() {
                   <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>头像</label>
                   <div className="flex items-center gap-3">
                     <div className="w-14 h-14 rounded-full flex items-center justify-center text-xl font-bold" style={{ background: 'linear-gradient(135deg, #22D3EE, #A78BFA)', color: '#0A0E1A' }}>{user?.name?.[0] ?? 'U'}</div>
-                    <button className="btn-secondary text-xs py-1.5 px-3">更换头像</button>
                   </div>
                 </div>
                 <div>
@@ -563,6 +596,19 @@ export default function Settings() {
                     <option value="ja-JP">日本語</option>
                   </select>
                 </div>
+                <div className="flex items-center gap-3 pt-2">
+                  <button onClick={savePersonalSettings} disabled={isSetting} className="btn-primary text-xs py-2 px-4">
+                    {isSetting ? (
+                      <span className="flex items-center gap-1">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> 保存中...
+                      </span>
+                    ) : personalSaved ? (
+                      <span className="flex items-center gap-1" style={{ color: 'var(--accent-emerald)' }}>
+                        <Check className="w-3.5 h-3.5" /> 已保存
+                      </span>
+                    ) : '保存个人设置'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -575,7 +621,7 @@ export default function Settings() {
             <div className="max-w-lg space-y-4">
               <div className="card-base p-4">
                 <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                  知识库设置即将上线
+                  知识库设置尚未实现
                 </div>
                 <div className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
                   默认文件夹、默认文档格式等高级配置将在后续版本开放。
@@ -905,31 +951,41 @@ export default function Settings() {
                     <Loader2 className="w-4 h-4 animate-spin" />
                     加载中...
                   </div>
-                ) : !storageSettings.documents && !storageSettings.vectors && !storageSettings.backups ? (
-                  <div className="text-sm" style={{ color: 'var(--text-muted)' }}>暂无存储统计数据</div>
-                ) : (
-                  <div className="flex items-center gap-6">
-                    <svg viewBox="0 0 100 100" className="w-24 h-24">
-                      <circle cx="50" cy="50" r="40" fill="none" stroke="var(--bg-tertiary)" strokeWidth="12" />
-                      <circle cx="50" cy="50" r="40" fill="none" stroke="var(--accent-cyan)" strokeWidth="12" strokeDasharray={`${25 * 2.51} ${100 * 2.51}`} strokeDashoffset="0" transform="rotate(-90 50 50)" />
-                      <circle cx="50" cy="50" r="40" fill="none" stroke="var(--accent-violet)" strokeWidth="12" strokeDasharray={`${15 * 2.51} ${100 * 2.51}`} strokeDashoffset={-25 * 2.51} transform="rotate(-90 50 50)" />
-                      <circle cx="50" cy="50" r="40" fill="none" stroke="var(--accent-emerald)" strokeWidth="12" strokeDasharray={`${10 * 2.51} ${100 * 2.51}`} strokeDashoffset={-(25 + 15) * 2.51} transform="rotate(-90 50 50)" />
-                    </svg>
-                    <div className="space-y-1.5">
-                      {[
-                        { label: '文档', color: 'var(--accent-cyan)', value: storageSettings.documents || '—' },
-                        { label: '向量', color: 'var(--accent-violet)', value: storageSettings.vectors || '—' },
-                        { label: '备份', color: 'var(--accent-emerald)', value: storageSettings.backups || '—' },
-                      ].map((item) => (
-                        <div key={item.label} className="flex items-center gap-2 text-xs">
-                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }} />
-                          <span style={{ color: 'var(--text-secondary)' }}>{item.label}</span>
-                          <span style={{ color: 'var(--text-muted)' }}>{item.value}</span>
-                        </div>
-                      ))}
+                ) : (() => {
+                  const segments = computeStorageRatios(storageSettings.documents, storageSettings.vectors, storageSettings.backups);
+                  if (!segments) {
+                    return <div className="text-sm" style={{ color: 'var(--text-muted)' }}>暂无存储统计数据</div>;
+                  }
+                  const colors: Record<string, string> = { documents: 'var(--accent-cyan)', vectors: 'var(--accent-violet)', backups: 'var(--accent-emerald)' };
+                  const CIRC = 2 * Math.PI * 40; // 周长（r=40）
+                  let acc = 0;
+                  return (
+                    <div className="flex items-center gap-6">
+                      <svg viewBox="0 0 100 100" className="w-24 h-24">
+                        <circle cx="50" cy="50" r="40" fill="none" stroke="var(--bg-tertiary)" strokeWidth="12" />
+                        {segments.map((seg) => {
+                          const dashLen = (seg.pct / 100) * CIRC;
+                          const offset = -(acc / 100) * CIRC;
+                          acc += seg.pct;
+                          return (
+                            <circle key={seg.key} cx="50" cy="50" r="40" fill="none" stroke={colors[seg.key]} strokeWidth="12"
+                              strokeDasharray={`${dashLen} ${CIRC - dashLen}`} strokeDashoffset={offset} transform="rotate(-90 50 50)" />
+                          );
+                        })}
+                      </svg>
+                      <div className="space-y-1.5">
+                        {segments.map((item) => (
+                          <div key={item.key} className="flex items-center gap-2 text-xs">
+                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colors[item.key] }} />
+                            <span style={{ color: 'var(--text-secondary)' }}>{item.label}</span>
+                            <span style={{ color: 'var(--text-muted)' }}>{item.value}</span>
+                            <span style={{ color: 'var(--text-muted)' }}>{item.pct}%</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
 
               {/* Auto cleanup */}
@@ -966,7 +1022,7 @@ export default function Settings() {
               </div>
 
               <button
-                onClick={() => addToast({ type: 'info', title: '请通过备份管理页面操作', description: '缓存清理功能请前往备份管理页面执行。' })}
+                onClick={() => addToast({ type: 'info', title: '缓存清理功能尚未实现', description: '当前可通过备份管理页面执行数据清理。' })}
                 className="btn-danger text-xs py-2 px-4"
               >
                 立即清理缓存
@@ -1264,14 +1320,13 @@ export default function Settings() {
               <div className="card-base p-6 text-center">
                 <h1 className="text-3xl font-bold text-gradient-cyan mb-2">璇玑智脑</h1>
                 <p className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>智能知识库系统</p>
-                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>版本 1.0.0 · 构建于 2026-06-02</p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>版本 {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev'}</p>
               </div>
               <div className="space-y-2">
                 {[
-                  { label: '检查更新', value: '当前已是最新版本' },
                   { label: '开源协议', value: 'MIT License' },
-                  { label: '文档', value: '查看在线文档 →' },
-                  { label: '反馈', value: '提交 Issue →' },
+                  { label: '文档', value: '在线文档尚未发布' },
+                  { label: '反馈', value: '反馈渠道建设中' },
                 ].map((item) => (
                   <div key={item.label} className="flex items-center justify-between py-2 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                     <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>{item.label}</span>
