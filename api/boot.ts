@@ -16,6 +16,13 @@ import { triggerWebhookWorkflow, startWorkflowScheduler } from "./lib/workflow-s
 import { startBackupScheduler } from "./lib/backup-scheduler";
 import { initializeZvec } from "./lib/vector";
 import { authenticateLocalRequest } from "./local-auth";
+import {
+  csrfProtectedMethods,
+  isFullyExemptPath,
+  isInternalRestPath,
+  isTrustedMutationRequest,
+  verifyWebhookToken,
+} from "./lib/csrf";
 import { createMcpHandler } from "./mcp-server";
 import type { User } from "@db/schema";
 import "./connectors"; // 注册 115网盘、阿里云盘等连接器
@@ -48,7 +55,7 @@ const securityHeadersMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> =
 
   const cspDirectives = [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline'",
+    "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' blob: data:",
     "font-src 'self'",
@@ -62,33 +69,29 @@ const securityHeadersMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> =
 
 app.use(securityHeadersMiddleware);
 
-const csrfProtectedMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-
 function parsePositiveIntParam(value: string | undefined): number | undefined {
   const id = Number(value);
   if (!Number.isInteger(id) || id <= 0) return undefined;
   return id;
 }
 
-function isCsrfExemptPath(path: string): boolean {
-  return (
-    path === "/api/mcp" ||
-    path === "/api/mcp/sse" ||
-    path === "/api/search" ||
-    path.startsWith("/api/zvec/") ||
-    path.startsWith("/api/kb/") ||
-    path.startsWith("/api/keywords/") ||
-    path.startsWith("/api/relations/") ||
-    /^\/api\/workflows\/[^/]+\/webhook$/.test(path)
-  );
-}
-
 const csrfMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> = async (c, next) => {
-  if (
-    csrfProtectedMethods.has(c.req.method) &&
-    !isCsrfExemptPath(c.req.path) &&
-    c.req.header("X-Requested-With") !== "XMLHttpRequest"
-  ) {
+  if (!csrfProtectedMethods.has(c.req.method)) return next();
+
+  const path = c.req.path;
+
+  // 完全豁免：MCP（Agent Token 鉴权）与 workflow webhook（HMAC token 鉴权）
+  if (isFullyExemptPath(path)) return next();
+
+  // 内部 REST 前缀（zvec/search/kb-backup/keywords/relations）：router 内部自鉴权，
+  // 但非 GET 必须是可信变更——否则携带管理员 cookie 的跨站请求可伪造写操作。
+  if (isInternalRestPath(path)) {
+    if (isTrustedMutationRequest(c.req.raw)) return next();
+    return c.json({ success: false, error: "Invalid request" }, 403);
+  }
+
+  // 其余路径维持原要求
+  if (!isTrustedMutationRequest(c.req.raw)) {
     return c.json({ success: false, error: "Invalid request" }, 403);
   }
 
@@ -382,13 +385,14 @@ app.use("/api/trpc/*", async (c) => {
 
 app.post("/api/workflows/:id/webhook", async (c) => {
   try {
-    const user = c.get("user");
-    if (!user) {
-      return c.json({ success: false, error: "Authentication required" }, 401);
-    }
-
+    // 外部系统回调：以 HMAC token 鉴权（?token=），不再要求会话 cookie。
     const id = parsePositiveIntParam(c.req.param("id"));
     if (id === undefined) return c.json({ success: false, error: "无效的工作流 ID" }, 400);
+
+    const token = c.req.query("token") ?? "";
+    if (!verifyWebhookToken(id, token, env.jwtSecret)) {
+      return c.json({ success: false, error: "Invalid webhook token" }, 403);
+    }
 
     const payload = await c.req.json().catch(() => ({}));
     const result = await triggerWebhookWorkflow(id, payload);
@@ -457,4 +461,13 @@ if (env.isProduction) {
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
+
+  // 全局异常兜底：未捕获的 Promise 拒绝 / 异常记日志后受控退出（由容器/进程管理器重启）
+  process.on("unhandledRejection", (reason) => {
+    console.error("[Process] Unhandled rejection:", reason);
+  });
+  process.on("uncaughtException", (err) => {
+    console.error("[Process] Uncaught exception:", err);
+    shutdown("uncaughtException");
+  });
 }

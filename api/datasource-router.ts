@@ -103,7 +103,8 @@ export const datasourceRouter = createRouter({
     }),
 
   // 测试连接 — 如果配置了平台连接器则使用连接器测试
-  testConnection: authedQuery
+  // （会改写数据源状态并以服务端身份外呼，提权管理员）
+  testConnection: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();
@@ -148,8 +149,8 @@ export const datasourceRouter = createRouter({
       }
     }),
 
-  // 同步文件 — 使用连接器获取文件列表并进入 ingestion 流水线
-  sync: authedQuery
+  // 同步文件 — 使用连接器获取文件列表并进入 ingestion 流水线（重操作，提权管理员）
+  sync: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
       const db = getDb();

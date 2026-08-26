@@ -14,6 +14,7 @@
  */
 import { z } from "zod";
 import { sanitizeRelativePath } from "../lib/backup-path";
+import { assertEgressAllowed } from "../lib/egress";
 import type { BackupRepository } from "./base";
 
 const TIMEOUT_MS = 30_000;
@@ -89,6 +90,8 @@ async function login(cfg: AlistConfig): Promise<string> {
   const cached = tokenCache.get(cacheKey);
   if (cached && Date.now() - cached.obtainedAt < TOKEN_TTL_MS) return cached.token;
 
+  // SSRF guard：用户配置的站点地址，默认禁私网（EGRESS_ALLOW_PRIVATE_NET=true 放行内网部署）
+  await assertEgressAllowed(cfg.baseUrl);
   const res = await fetch(`${cfg.baseUrl}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -110,6 +113,7 @@ interface FsItem {
 
 /** 列目录；dirNotFound=true 时抛带 notFound 标记的错误 */
 async function fsList(cfg: AlistConfig, token: string, path: string): Promise<FsItem[]> {
+  await assertEgressAllowed(cfg.baseUrl);
   const res = await fetch(`${cfg.baseUrl}/api/fs/list`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: token },
@@ -127,6 +131,7 @@ async function fsList(cfg: AlistConfig, token: string, path: string): Promise<Fs
 }
 
 async function fsMkdir(cfg: AlistConfig, token: string, path: string): Promise<void> {
+  await assertEgressAllowed(cfg.baseUrl);
   const res = await fetch(`${cfg.baseUrl}/api/fs/mkdir`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: token },
@@ -200,6 +205,7 @@ export const alistRepository: BackupRepository = {
     // AList 的 fs/put 不自动创建父目录，先确保父目录存在
     const parentDir = target.slice(0, target.lastIndexOf("/")) || "/";
     await ensureDir(cfg, token, parentDir);
+    await assertEgressAllowed(cfg.baseUrl);
     const res = await fetch(`${cfg.baseUrl}/api/fs/put`, {
       method: "PUT",
       headers: {
@@ -222,6 +228,7 @@ export const alistRepository: BackupRepository = {
     const safePath = sanitizeRelativePath(remoteRelPath);
     const target = joinFsPath(cfg.basePath, safePath);
     const token = await login(cfg);
+    await assertEgressAllowed(cfg.baseUrl);
     const res = await fetch(`${cfg.baseUrl}/api/fs/get`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: token },
@@ -236,6 +243,7 @@ export const alistRepository: BackupRepository = {
     }
     const rawUrl = payload.data?.raw_url;
     if (!rawUrl) return null;
+    await assertEgressAllowed(rawUrl);
     const fileRes = await fetch(rawUrl, { signal: AbortSignal.timeout(TIMEOUT_MS) });
     if (!fileRes.ok) {
       if (fileRes.status === 404) return null;
@@ -251,6 +259,7 @@ export const alistRepository: BackupRepository = {
     const dir = target.slice(0, target.lastIndexOf("/")) || "/";
     const name = target.slice(target.lastIndexOf("/") + 1);
     const token = await login(cfg);
+    await assertEgressAllowed(cfg.baseUrl);
     const res = await fetch(`${cfg.baseUrl}/api/fs/remove`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: token },

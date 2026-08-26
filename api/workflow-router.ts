@@ -79,7 +79,8 @@ export const workflowRouter = createRouter({
       return { success: true };
     }),
 
-  setStatus: authedQuery
+  // 启停工作流是写操作（active 状态可被 webhook 触发），提权管理员
+  setStatus: adminQuery
     .input(
       z.object({
         id: z.number(),
@@ -267,7 +268,8 @@ export const workflowRouter = createRouter({
       return { ...run, nodes };
     }),
 
-  webhookUrl: authedQuery
+  // 回调地址含 HMAC token，仅管理员可取
+  webhookUrl: adminQuery
     .input(z.object({ id: z.number(), baseUrl: z.string().optional() }))
     .query(({ input, ctx }) => {
       const baseUrl = input.baseUrl ?? (ctx.req?.headers?.get("origin") || "http://localhost:3000");

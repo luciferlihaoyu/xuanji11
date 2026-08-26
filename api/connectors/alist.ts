@@ -7,6 +7,7 @@
  */
 
 import { registerConnector, type CloudConnector } from './base';
+import { assertEgressAllowed } from '../lib/egress';
 
 const TIMEOUT_MS = 30_000;
 
@@ -42,6 +43,8 @@ async function login(cfg: AlistConfig): Promise<string> {
   const cached = tokenCache.get(cacheKey);
   if (cached && Date.now() - cached.obtainedAt < TOKEN_TTL_MS) return cached.token;
 
+  // SSRF guard：用户配置的 AList 站点地址，默认禁私网（EGRESS_ALLOW_PRIVATE_NET=true 放行内网部署）
+  await assertEgressAllowed(cfg.url);
   const res = await fetch(`${cfg.url}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -64,6 +67,7 @@ interface FsItem {
 }
 
 async function fsList(cfg: AlistConfig, token: string, path: string): Promise<FsItem[]> {
+  await assertEgressAllowed(cfg.url);
   const res = await fetch(`${cfg.url}/api/fs/list`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: token },
@@ -77,6 +81,7 @@ async function fsList(cfg: AlistConfig, token: string, path: string): Promise<Fs
 }
 
 async function fsGetRawUrl(cfg: AlistConfig, token: string, path: string): Promise<string | null> {
+  await assertEgressAllowed(cfg.url);
   const res = await fetch(`${cfg.url}/api/fs/get`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: token },
@@ -145,6 +150,7 @@ export const connectorAlist: CloudConnector = {
     const rel = fileName.startsWith('/') ? fileName : `/${fileName}`;
     // 相对路径相对工作目录解析；已是工作目录下的完整路径则原样使用
     const target = cfg.basePath === '/' || rel.startsWith(`${cfg.basePath}/`) ? rel : joinPath(cfg.basePath, rel);
+    await assertEgressAllowed(cfg.url);
     const res = await fetch(`${cfg.url}/api/fs/put`, {
       method: 'PUT',
       headers: {
@@ -185,6 +191,7 @@ export const connectorAlist: CloudConnector = {
         try {
           const url = await fsGetRawUrl(cfg, token, full);
           if (!url) throw new Error('no raw_url');
+          await assertEgressAllowed(url);
           const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const buf = Buffer.from(await res.arrayBuffer());

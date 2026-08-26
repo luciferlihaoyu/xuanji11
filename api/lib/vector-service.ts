@@ -13,6 +13,7 @@ import type { ZVecCollection, ZVecCollectionSchema, ZVecDataType, ZVecDocInput, 
 import { eq, desc } from "drizzle-orm";
 import { systemSettings, vectorCollections, type VectorCollection } from "@db/schema";
 import { env } from "./env";
+import { assertEgressAllowed } from "./egress";
 import { tianshuApiUrl, tianshuApiKey, tianshuEnabled } from "./tianshu";
 import { getDb } from "../queries/connection";
 
@@ -351,6 +352,8 @@ async function fetchEmbeddingsWithConfig(texts: readonly string[], cfg: Embeddin
   const body = isMultimodal
     ? { model: cfg.model, input: texts.map((text) => ({ type: "text", text })), encoding_format: "float", ...(cfg.model.includes("doubao-embedding-vision") ? { dimensions: cfg.dimension } : {}) }
     : { input: texts, model: cfg.model, encoding_format: "float" };
+  // SSRF guard：嵌入端点来自用户可配置模板，默认禁私网（EGRESS_ALLOW_PRIVATE_NET=true 放行内网 LLM）
+  await assertEgressAllowed(endpoint);
   const res = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.key}` },
@@ -361,7 +364,7 @@ async function fetchEmbeddingsWithConfig(texts: readonly string[], cfg: Embeddin
   const errPayload = payload as { error?: { code?: string; message?: string } } | undefined;
   const errorMessage = errPayload?.error?.message
     ? `${errPayload.error.code ?? "error"}: ${errPayload.error.message}`
-    : rawText.slice(0, 200);
+    : `HTTP ${res.status}`; // 不回显远端响应体（防内网响应探测）
   if (!res.ok) {
     throw new EmbeddingApiError(`Embedding API ${res.status}: ${errorMessage}`, res.status, endpoint);
   }

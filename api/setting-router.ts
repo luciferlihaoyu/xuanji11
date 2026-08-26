@@ -6,6 +6,7 @@ import { getDb } from "./queries/connection";
 import { systemSettings } from "@db/schema";
 import { clean } from "./lib/clean";
 import { logAudit } from "./lib/audit";
+import { maskSettingRows, maskSettingValue } from "./lib/setting-mask";
 import * as vectorService from "./lib/vector-service";
 
 const vectorModelProviderSchema = z.enum(["openai", "minimax", "local", "custom"]);
@@ -38,26 +39,36 @@ const vectorModelTemplateTestInputSchema = z.object({
 });
 
 export const settingRouter = createRouter({
-  list: authedQuery.query(async () => {
+  // 整表/分类读取仅限管理员，且秘密值统一脱敏后返回。
+  list: adminQuery.query(async () => {
     const db = getDb();
-    return db.select().from(systemSettings);
+    return maskSettingRows(await db.select().from(systemSettings));
   }),
 
-  listByCategory: authedQuery
+  listByCategory: adminQuery
     .input(z.object({ category: z.string() }))
     .query(async ({ input }) => {
       const db = getDb();
-      return db.select().from(systemSettings)
-        .where(eq(systemSettings.category, input.category));
+      return maskSettingRows(
+        await db.select().from(systemSettings)
+          .where(eq(systemSettings.category, input.category)),
+      );
     }),
 
+  // 单键读取保留登录级权限（普通用户需读 profile_* 等自身配置），
+  // 但命中敏感规则的键一律返回掩码，杜绝点名窃取 admin_password_hash 等。
   getByKey: authedQuery
     .input(z.object({ key: z.string() }))
     .query(async ({ input }) => {
       const db = getDb();
       const results = await db.select().from(systemSettings)
         .where(eq(systemSettings.key, input.key));
-      return results[0] ?? null;
+      const row = results[0];
+      if (!row) return null;
+      return {
+        ...row,
+        value: row.value === null ? null : maskSettingValue(row.key, row.value),
+      };
     }),
 
   set: adminQuery

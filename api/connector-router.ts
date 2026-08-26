@@ -6,6 +6,7 @@ import { systemSettings } from "@db/schema";
 import { clean } from "./lib/clean";
 import { getConnector, listConnectors as listRegisteredConnectors } from "./connectors";
 import { logAudit } from "./lib/audit";
+import { maskConnectorConfig } from "./lib/setting-mask";
 import {
   searchContext as runSearchContext,
   writeTaskMemory as runWriteTaskMemory,
@@ -56,7 +57,8 @@ const connectorConfigKey = (platform: string) => `connector_${platform}_config`;
 const configSchema = z.record(z.string(), z.unknown());
 
 export const connectorRouter = createRouter({
-  getConfig: authedQuery
+  // 连接器配置含明文密码，仅管理员可读且秘密字段脱敏。
+  getConfig: adminQuery
     .input(z.object({ platform: z.string() }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -67,7 +69,7 @@ export const connectorRouter = createRouter({
       const row = results[0];
       if (!row?.value) return null;
       try {
-        return JSON.parse(row.value) as Record<string, unknown>;
+        return maskConnectorConfig(JSON.parse(row.value) as Record<string, unknown>);
       } catch {
         return null;
       }
@@ -129,7 +131,8 @@ export const connectorRouter = createRouter({
     });
   }),
 
-  testConnection: authedQuery
+  // 测试连接会以任意 config 发起服务端外呼（SSRF 面），提权管理员。
+  testConnection: adminQuery
     .input(
       z.object({
         platform: z.string(),
