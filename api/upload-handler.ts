@@ -9,6 +9,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
 import { env } from "./lib/env";
+import { streamToFileWithLimit, StreamSizeLimitError } from "./lib/stream-to-file";
 
 const UPLOAD_DIR = path.resolve(env.uploadDir);
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
@@ -107,8 +108,25 @@ export async function saveUploadedFile(
   const uniqueName = `${randomUUID()}${safeExt}`;
   const storagePath = path.join(UPLOAD_DIR, uniqueName);
 
-  const buffer = Buffer.from(await file.arrayBuffer());
-  fs.writeFileSync(storagePath, buffer);
+  // 流式写入：大文件不一次性读入内存；超 maxBytes 时由 streamToFileWithLimit 主动终止并清理
+  let bytesWritten: number;
+  try {
+    const result = await streamToFileWithLimit(
+      file.stream() as unknown as ReadableStream<Uint8Array>,
+      storagePath,
+      MAX_FILE_SIZE_BYTES,
+    );
+    bytesWritten = result.bytesWritten;
+  } catch (err) {
+    if (err instanceof StreamSizeLimitError) {
+      throw new Error("单个文件不能超过 20MB");
+    }
+    throw err;
+  }
+  // 用实际写入字节替换上报 size（防止 Content-Length 与 body 不一致）
+  if (bytesWritten !== file.size && file.size > 0) {
+    console.warn(`[Upload] 上报 size=${file.size} 与实际写入 ${bytesWritten} 不一致`);
+  }
 
   const db = getDb();
   let result;
