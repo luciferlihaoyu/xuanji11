@@ -49,6 +49,46 @@ interface ConnectorCardProps {
   };
 }
 
+/** 安全 tab：SSRF 私网出网策略开关。读 systemSettings.egress_allow_private_net（管理员可改）。 */
+function EgressPolicyCard() {
+  const { data, isLoading } = trpc.setting.getByKey.useQuery(
+    { key: 'egress_allow_private_net' },
+    { staleTime: 30_000 }
+  );
+  const utils = trpc.useUtils();
+  const setMany = trpc.setting.setMany.useMutation({
+    onSuccess: () => utils.setting.getByKey.invalidate({ key: 'egress_allow_private_net' }),
+  });
+  const enabled = data?.value === 'true' || data?.value === '1';
+
+  return (
+    <div className="card-base p-4">
+      <h4 className="text-sm font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>出网策略</h4>
+      <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+        默认拒绝服务器向私网地址发起请求（防 SSRF）。若你已在内网（如 NAS）部署 AList 或 LLM，
+        需打开下方开关放行私网出站；公网部署请保持关闭。
+      </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-sm" style={{ color: 'var(--text-primary)' }}>允许私网出站</div>
+          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>10.x / 192.168.x / 172.16-31.x / 169.254 / 环回</div>
+        </div>
+        <button
+          onClick={() => setMany.mutate([{ key: 'egress_allow_private_net', value: String(!enabled), category: 'security' }])}
+          disabled={isLoading || setMany.isPending}
+          className="relative w-9 h-5 rounded-full transition-colors duration-200"
+          style={{ backgroundColor: enabled ? 'var(--accent-cyan)' : 'var(--bg-tertiary)' }}
+        >
+          <div
+            className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200"
+            style={{ transform: enabled ? 'translateX(18px)' : 'translateX(2px)' }}
+          />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ConnectorCard({ connector }: ConnectorCardProps) {
   const addToast = useAppStore((s) => s.addToast);
   const { config, isLoading, save, test, isSaving, isTesting } = useConnectorConfig(connector.key);
@@ -1208,6 +1248,9 @@ export default function Settings() {
                   </button>
                 </div>
               </div>
+
+              {/* 出网策略（SSRF 私网放行开关） */}
+              <EgressPolicyCard />
             </div>
           </div>
         );

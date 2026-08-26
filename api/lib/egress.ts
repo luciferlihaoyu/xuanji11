@@ -91,9 +91,47 @@ function expandIpv6(ip: string): string | null {
   return groups.join("");
 }
 
-/** 自托管内网部署显式放行开关（与 api/lib/env.ts 语义一致；此处直读避免引入启动副作用）。 */
-function isPrivateNetAllowed(): boolean {
+/** 自托管内网部署显式放行开关。
+ * 优先读系统设置表 (systemSettings.key='egress_allow_private_net')，其次环境变量兜底。
+ * 管理员可在设置页「安全」tab 直接开关，无需重启/重新部署。
+ * 60s 缓存，避免每次外呼都查 DB。 */
+let cachedPolicy: { allowed: boolean; expiresAt: number } | null = null;
+const POLICY_CACHE_TTL_MS = 60_000;
+
+export type EgressPolicyProvider = () => Promise<boolean>;
+
+const defaultPolicyProvider: EgressPolicyProvider = async () => {
+  // 1) 系统设置表（管理员在设置页开关）
+  try {
+    const { getDb } = await import("../queries/connection");
+    const { systemSettings } = await import("@db/schema");
+    const { eq } = await import("drizzle-orm");
+    const db = getDb();
+    const [row] = await db.select({ value: systemSettings.value }).from(systemSettings)
+      .where(eq(systemSettings.key, "egress_allow_private_net"));
+    if (row?.value === "true" || row?.value === "1") return true;
+    if (row?.value === "false" || row?.value === "0") return false;
+  } catch {
+    // DB 不可用时（如启动早期）回退到环境变量
+  }
+  // 2) 环境变量兜底（兼容旧部署）
   return process.env.EGRESS_ALLOW_PRIVATE_NET === "true";
+};
+
+let activePolicyProvider: EgressPolicyProvider = defaultPolicyProvider;
+
+/** 测试/启动期注入：替换策略来源。 */
+export function setEgressPolicyForTests(provider: EgressPolicyProvider): void {
+  activePolicyProvider = provider;
+  cachedPolicy = null;
+}
+
+/** 判定是否允许私网出网（管理员显式放行）。 */
+export async function isPrivateNetAllowed(): Promise<boolean> {
+  if (cachedPolicy && cachedPolicy.expiresAt > Date.now()) return cachedPolicy.allowed;
+  const allowed = await activePolicyProvider();
+  cachedPolicy = { allowed, expiresAt: Date.now() + POLICY_CACHE_TTL_MS };
+  return allowed;
 }
 
 /** 校验通过的 host 短期缓存（秒级 TTL）：alist 列目录等低频但连续的外呼免重复 DNS。 */
@@ -117,7 +155,7 @@ export async function assertEgressAllowed(rawUrl: string): Promise<void> {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new EgressError(`egress blocked: unsupported protocol ${parsed.protocol}`);
   }
-  if (isPrivateNetAllowed()) return;
+  if (await isPrivateNetAllowed()) return;
 
   const host = parsed.hostname.replace(/^\[|\]$/g, "");
   const cachedAt = passCache.get(host);

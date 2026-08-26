@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   assertEgressAllowed,
   isBlockedAddress,
   setResolveHostForTests,
+  setEgressPolicyForTests,
+  isPrivateNetAllowed,
   type ResolveHost,
 } from "./egress";
 
@@ -69,5 +71,29 @@ describe("assertEgressAllowed", () => {
   it("公网地址放行", async () => {
     await expect(assertEgressAllowed("https://example.com/api/auth/login")).resolves.toBeUndefined();
     await expect(assertEgressAllowed("http://93.184.216.34:5244/d")).resolves.toBeUndefined();
+  });
+});
+
+describe("isPrivateNetAllowed 策略来源", () => {
+  afterEach(() => {
+    // 重置为默认 provider：env=false 兜底
+    setEgressPolicyForTests(async () => false);
+  });
+
+  it("默认（注入 false provider）拒绝内网出网", async () => {
+    setEgressPolicyForTests(async () => false);
+    expect(await isPrivateNetAllowed()).toBe(false);
+  });
+
+  it("管理员在系统设置开启后放行（注入 true provider）", async () => {
+    setEgressPolicyForTests(async () => true);
+    expect(await isPrivateNetAllowed()).toBe(true);
+  });
+
+  it("setEgressPolicyForTests 切换后立即生效（清缓存）", async () => {
+    setEgressPolicyForTests(async () => true);
+    expect(await isPrivateNetAllowed()).toBe(true);
+    setEgressPolicyForTests(async () => false);
+    expect(await isPrivateNetAllowed()).toBe(false);
   });
 });
