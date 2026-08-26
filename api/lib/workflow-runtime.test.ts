@@ -6,7 +6,10 @@ import { executeCallAgent } from "./workflow-runtime";
 type FetchMock = ReturnType<typeof vi.fn<typeof fetch>>;
 
 vi.hoisted(() => {
+  // env.ts 在模块加载时强制校验必填变量；测试进程需提供桩值
   process.env.DATABASE_URL = "mysql://user:password@example.test:3306/xuanji";
+  process.env.ADMIN_USERNAME = "test-admin";
+  process.env.ADMIN_PASSWORD = "test-password-at-least-32-characters-long!!";
 });
 
 vi.mock("../queries/connection", () => ({

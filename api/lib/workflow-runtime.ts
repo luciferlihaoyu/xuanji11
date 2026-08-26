@@ -1,8 +1,20 @@
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "../queries/connection";
-import { mcpServers, workflows, workflowNodes, workflowRuns, workflowRunNodes } from "@db/schema";
+import {
+  kbDocuments,
+  knowledgeEdges,
+  mcpServers,
+  workflows,
+  workflowNodes,
+  workflowRuns,
+  workflowRunNodes,
+} from "@db/schema";
 import { McpClient, type McpServerConfig } from "./mcp-client";
+import { embedTexts } from "./vector-service";
+import { executeHybridSearch } from "./hybrid-search";
+import { extractKeywords } from "./keyword-extractor";
+import { chatCompletion } from "./llm-chat";
 
 export interface NodeExecutionContext {
   input: Record<string, unknown>;
@@ -73,6 +85,11 @@ export async function executeCallAgent(config: Record<string, unknown>): Promise
   return recordFromToolResult(await client.callTool(toolName, parsed.data.arguments));
 }
 
+/** 构造 skipped 输出：含 skipped 字段的节点状态记为 "skipped" 而非 "completed"。 */
+function skipped(reason: string): Record<string, unknown> {
+  return { skipped: reason };
+}
+
 const nodeExecutors: Record<string, NodeExecutor> = {
   delay: async (config) => {
     const ms = Number(config.ms ?? 1000);
@@ -86,8 +103,26 @@ const nodeExecutors: Record<string, NodeExecutor> = {
     return { result };
   },
 
-  'save-result': async (config) => {
-    return { message: String(config.message ?? 'saved'), savedAt: new Date().toISOString() };
+  'save-result': async (config, ctx) => {
+    const folderId = Number(config.targetFolderId ?? 0);
+    if (!Number.isInteger(folderId) || folderId <= 0) {
+      return skipped('save-result 需要配置 targetFolderId（结果写入的知识库文件夹）');
+    }
+    const title = String(config.title ?? '工作流结果').slice(0, 500) || '工作流结果';
+    const content =
+      typeof config.content === 'string' && config.content.trim()
+        ? config.content
+        : JSON.stringify(ctx.outputs, null, 2);
+    const db = getDb();
+    const result = await db.insert(kbDocuments).values({
+      folderId,
+      title,
+      content,
+      format: 'markdown',
+      tags: ['workflow'],
+      metadata: { source: 'workflow' },
+    });
+    return { saved: true, documentId: Number(result[0].insertId), title };
   },
 
   'text-extract': async (config) => {
@@ -96,46 +131,105 @@ const nodeExecutors: Record<string, NodeExecutor> = {
   },
 
   'find-similar': async (config) => {
-    return { query: String(config.query ?? ''), matches: [] };
+    const query = String(config.query ?? '').trim();
+    if (!query) return skipped('find-similar 需要配置 query');
+    const limit = Math.min(Math.max(Number(config.limit ?? 10), 1), 50);
+    const response = await executeHybridSearch({ query, mode: 'hybrid', limit });
+    return {
+      query,
+      matches: response.results.map((r) => ({
+        id: r.id,
+        title: r.title,
+        snippet: r.snippet,
+        type: r.type,
+        score: r.score,
+      })),
+    };
   },
 
   'create-link': async (config) => {
-    return { sourceId: String(config.sourceId ?? ''), targetId: String(config.targetId ?? '') };
+    const sourceId = Number(config.sourceId ?? 0);
+    const targetId = Number(config.targetId ?? 0);
+    if (!Number.isInteger(sourceId) || sourceId <= 0 || !Number.isInteger(targetId) || targetId <= 0) {
+      return skipped('create-link 需要配置数值型 sourceId 与 targetId');
+    }
+    const label = typeof config.label === 'string' && config.label.trim() ? config.label.slice(0, 255) : null;
+    const db = getDb();
+    // 幂等：已存在同向边则不重复插入
+    const existing = await db.select({ id: knowledgeEdges.id }).from(knowledgeEdges)
+      .where(and(eq(knowledgeEdges.sourceId, sourceId), eq(knowledgeEdges.targetId, targetId)));
+    if (existing.length > 0) {
+      return { sourceId, targetId, edgeId: existing[0].id, deduplicated: true };
+    }
+    const result = await db.insert(knowledgeEdges).values({
+      sourceId,
+      targetId,
+      label,
+      type: 'related',
+    });
+    return { sourceId, targetId, edgeId: Number(result[0].insertId), created: true };
   },
 
   'call-agent': async (config) => executeCallAgent(config),
 
-  'notify-agent': async (config) => {
-    return { notified: String(config.agentName ?? ''), at: new Date().toISOString() };
-  },
+  'notify-agent': async () => skipped('notify-agent 尚未实现真实通知通道'),
 
-  'file-upload': async () => ({ triggered: true }),
+  'file-upload': async () => skipped('file-upload 尚未实现（请使用数据摄入页面上传文件）'),
 
-  cron: async (config) => ({ schedule: String(config.schedule ?? '') }),
+  cron: async () => skipped('cron 为触发器节点，由调度器处理，运行时跳过'),
 
-  webhook: async (config) => ({ endpoint: String(config.endpoint ?? '') }),
+  webhook: async () => skipped('webhook 为触发器节点，由调度器处理，运行时跳过'),
 
   keywords: async (config) => {
     const text = String(config.text ?? '');
-    const keywords = Array.from(new Set(text.split(/\s+/).filter((w) => w.length > 1))).slice(0, 10);
-    return { keywords };
+    if (!text.trim()) return skipped('keywords 需要配置 text');
+    const maxKeywords = Math.min(Math.max(Number(config.maxKeywords ?? 10), 1), 100);
+    // auto 模式：LLM 抽取优先，失败自动回退内部分词（keyword-extractor 内置）
+    const results = await extractKeywords(text, 'auto', maxKeywords);
+    return { keywords: results.map((r) => r.word) };
   },
 
   summarize: async (config) => {
     const text = String(config.text ?? '');
-    return { summary: text.slice(0, 200) };
+    if (!text.trim()) return skipped('summarize 需要配置 text');
+    const result = await chatCompletion(
+      `请将以下内容总结为不超过 3 句话的摘要，直接输出摘要正文：\n\n${text.slice(0, 6000)}`,
+      { maxTokens: 400 },
+    );
+    if (!result) return skipped('未配置可用的 LLM（请在 Agent 管理或环境变量中配置），无法生成摘要');
+    return { summary: result.content, model: result.model };
   },
 
-  vectorize: async (config) => ({
-    model: String(config.model ?? 'text-embedding-3-small'),
-    vectorized: true,
-  }),
+  vectorize: async (config) => {
+    const text = String(config.text ?? '');
+    if (!text.trim()) return skipped('vectorize 需要配置 text');
+    try {
+      // 真实调用嵌入服务生成向量（入库请使用数据摄入流程；此处验证并产出向量维度）
+      const vectors = await embedTexts([text]);
+      return {
+        model: typeof config.model === 'string' ? config.model : undefined,
+        dimensions: vectors[0]?.length ?? 0,
+        vectorized: true,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/not configured/i.test(message)) return skipped('未配置嵌入模型，无法向量化');
+      throw err;
+    }
+  },
 
-  'send-notification': async (config) => ({
-    channel: String(config.channel ?? 'app'),
-    sentAt: new Date().toISOString(),
-  }),
+  'send-notification': async () => skipped('send-notification 尚未实现真实通知渠道'),
 };
+
+/** 单节点执行入口（供测试与调度复用）。 */
+export async function executeNode(
+  type: string,
+  config: Record<string, unknown>,
+  ctx: NodeExecutionContext,
+): Promise<Record<string, unknown>> {
+  const executor = nodeExecutors[type] ?? nodeExecutors['save-result'];
+  return executor(config, ctx);
+}
 
 function topologicalSort(nodes: Array<typeof workflowNodes.$inferSelect>): Array<typeof workflowNodes.$inferSelect> {
   const nodeMap = new Map(nodes.map((n) => [n.id, n]));
@@ -213,7 +307,9 @@ export async function executeWorkflow(
     try {
       const output = await executor(config, { input: runInput, outputs });
       outputs[node.id] = output;
-      await db.update(workflowRunNodes).set({ status: "completed", output, completedAt: new Date() }).where(eq(workflowRunNodes.id, nodeRunId));
+      // 含 skipped 字段的输出：节点状态记 "skipped"（schema 枚举原生支持），不再伪装成功
+      const status = output && typeof (output as Record<string, unknown>).skipped === "string" ? "skipped" : "completed";
+      await db.update(workflowRunNodes).set({ status, output, completedAt: new Date() }).where(eq(workflowRunNodes.id, nodeRunId));
     } catch (err) {
       failed = true;
       console.error("[WorkflowRuntime] Node execution failed:", err);

@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { useWorkflows, useWorkflow, useWorkflowRuns, useWorkflowRun, useRunWorkflow } from '@/hooks/useWorkflows';
 import { trpc } from '@/providers/trpc';
-import { Play, ZoomIn, ZoomOut, Maximize2, Undo2, Redo2, Save, ChevronDown, Copy, Trash2, Power, Plus, X, Check, GripVertical, Loader2, History, ArrowLeft, Clock, AlertCircle, Timer } from 'lucide-react';
+import { Play, ZoomIn, ZoomOut, Maximize2, Undo2, Redo2, Save, ChevronDown, Copy, Trash2, Power, Plus, X, Check, GripVertical, Loader2, History, ArrowLeft, Clock, AlertCircle, Timer, Minus } from 'lucide-react';
 
 interface WFNode {
   id: string;
@@ -15,7 +15,7 @@ interface WFNode {
   y: number;
   description: string;
   config: Record<string, any>;
-  status: 'idle' | 'running' | 'success' | 'error';
+  status: 'idle' | 'running' | 'success' | 'error' | 'skipped';
 }
 
 interface WFEdge {
@@ -240,7 +240,7 @@ export default function WorkflowBuilder() {
         const dbNodeId = String(runNode.nodeId);
         const frontendNode = nodes.find((n) => n.id === dbNodeId);
         if (frontendNode) {
-          nodeStatusMap.set(frontendNode.id, runNode.status === 'completed' ? 'success' : runNode.status === 'failed' ? 'error' : runNode.status === 'running' ? 'running' : 'idle');
+          nodeStatusMap.set(frontendNode.id, runNode.status === 'completed' ? 'success' : runNode.status === 'failed' ? 'error' : runNode.status === 'skipped' ? 'skipped' : runNode.status === 'running' ? 'running' : 'idle');
         }
       }
     }
@@ -712,6 +712,7 @@ export default function WorkflowBuilder() {
                         {node.status === 'running' && <div className="animate-rotate w-3 h-3 border-2 border-t-transparent rounded-full ml-auto" style={{ borderColor: catInfo.color, borderTopColor: 'transparent' }} />}
                         {node.status === 'success' && <Check className="w-3 h-3 ml-auto" style={{ color: 'var(--accent-emerald)' }} />}
                         {node.status === 'error' && <AlertCircle className="w-3 h-3 ml-auto" style={{ color: 'var(--accent-rose)' }} />}
+                        {node.status === 'skipped' && <Minus className="w-3 h-3 ml-auto" style={{ color: 'var(--text-muted)' }} />}
                       </div>
                       <p className="text-[9px] mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>{node.description}</p>
                     </div>
@@ -1020,7 +1021,7 @@ export default function WorkflowBuilder() {
                         <div key={runNode.id} className="p-2 rounded border text-xs" style={{ backgroundColor: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
                           <div className="flex items-center justify-between">
                             <span style={{ color: 'var(--text-primary)' }}>{frontendNode?.label || `节点 #${runNode.nodeId}`}</span>
-                            <span className={`text-[10px] ${runNode.status === 'completed' ? 'text-emerald-400' : runNode.status === 'failed' ? 'text-rose-400' : runNode.status === 'running' ? 'text-cyan-400' : 'text-amber-400'}`}>{runNode.status}</span>
+                            <span className={`text-[10px] ${runNode.status === 'completed' ? 'text-emerald-400' : runNode.status === 'failed' ? 'text-rose-400' : runNode.status === 'skipped' ? 'text-zinc-400' : runNode.status === 'running' ? 'text-cyan-400' : 'text-amber-400'}`}>{runNode.status}</span>
                           </div>
                           {runNode.error && <p className="text-[10px] mt-1" style={{ color: 'var(--accent-rose)' }}>{runNode.error}</p>}
                         </div>

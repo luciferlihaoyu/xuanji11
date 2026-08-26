@@ -2,6 +2,8 @@ import { eq, and, gte } from "drizzle-orm";
 import { getDb } from "../queries/connection";
 import { workflows, workflowRuns } from "@db/schema";
 import { executeWorkflow } from "./workflow-runtime";
+import { env } from "./env";
+import { webhookToken } from "./csrf";
 
 interface CronTrigger {
   type: "cron";
@@ -145,5 +147,7 @@ export async function triggerWebhookWorkflow(
 }
 
 export function getWebhookUrl(workflowId: number, baseUrl: string): string {
-  return `${baseUrl.replace(/\/$/, "")}/api/workflows/${workflowId}/webhook`;
+  // webhook 以 HMAC token 鉴权（boot.ts 校验 ?token=），token 由 JWT_SECRET 派生
+  const token = webhookToken(workflowId, env.jwtSecret);
+  return `${baseUrl.replace(/\/$/, "")}/api/workflows/${workflowId}/webhook?token=${token}`;
 }
