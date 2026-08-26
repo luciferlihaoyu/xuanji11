@@ -95,7 +95,9 @@ async function fsGetRawUrl(cfg: AlistConfig, token: string, path: string): Promi
 
 function joinPath(parent: string, name: string): string {
   const p = parent.endsWith('/') ? parent.slice(0, -1) : parent;
-  return `${p}/${name}`;
+  // name 前导斜杠只算一个，避免 basePath + "/a" 变成 "base//a"
+  const n = name.startsWith('/') ? name.slice(1) : name;
+  return `${p}/${n}`;
 }
 
 export const connectorAlist: CloudConnector = {
