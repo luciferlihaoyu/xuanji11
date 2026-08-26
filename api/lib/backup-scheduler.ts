@@ -1,4 +1,4 @@
-import { eq, and, lte, desc } from "drizzle-orm";
+import { eq, and, inArray, lte, desc } from "drizzle-orm";
 import { getDb } from "../queries/connection";
 import { backupJobs, backupJobFiles } from "@db/schema";
 import { executeBackup } from "../backup-repositories/execution";
@@ -60,7 +60,7 @@ async function executeBackupJob(jobId: number, connectorConfig: Record<string, u
   await executeBackup(jobId, connectorConfig);
 }
 
-async function applyRetention(scheduleJobId: number): Promise<void> {
+export async function applyRetention(scheduleJobId: number): Promise<void> {
   const db = getDb();
   const [schedule] = await db.select().from(backupJobs).where(eq(backupJobs.id, scheduleJobId));
   if (!schedule || !schedule.keepLastN || schedule.keepLastN <= 0) return;
@@ -78,11 +78,12 @@ async function applyRetention(scheduleJobId: number): Promise<void> {
   if (completed.length <= schedule.keepLastN) return;
 
   const toDelete = completed.slice(schedule.keepLastN);
-  console.log(`[BackupScheduler] Applying retention for schedule ${scheduleJobId}: deleting ${toDelete.length} old backups`);
-  for (const job of toDelete) {
-    await db.delete(backupJobFiles).where(eq(backupJobFiles.jobId, job.id));
-    await db.delete(backupJobs).where(eq(backupJobs.id, job.id));
-  }
+  const jobIds = toDelete.map((job) => job.id);
+  console.log(`[BackupScheduler] Applying retention for schedule ${scheduleJobId}: deleting ${jobIds.length} old backups`);
+  // N+1 优化：单次 inArray 批量删除关联文件与作业
+  if (jobIds.length === 0) return;
+  await db.delete(backupJobFiles).where(inArray(backupJobFiles.jobId, jobIds));
+  await db.delete(backupJobs).where(inArray(backupJobs.id, jobIds));
 }
 
 export async function runDueBackupSchedules(): Promise<void> {

@@ -131,13 +131,14 @@ export const knowledgeRouter = createRouter({
     )
     .mutation(async ({ input, ctx }) => {
       const db = getDb();
-      for (const node of input) {
-        await db.update(knowledgeNodes)
-          .set({ posX: node.posX, posY: node.posY })
-          .where(eq(knowledgeNodes.id, node.id));
-      }
+      // N+1 优化：drizzle 不支持「每行不同值」的批量 update，改用并行 + 事务消除串行 RTT
+      const { applyPositionUpdates, buildPositionUpdatePlans } = await import("./lib/knowledge-position-batch");
+      const plans = buildPositionUpdatePlans(input);
+      const result = await applyPositionUpdates(plans, async (u) =>
+        db.update(knowledgeNodes).set({ posX: u.posX, posY: u.posY }).where(eq(knowledgeNodes.id, u.id)),
+      );
       await logAudit(ctx, "knowledge_node", "update", null, { nodes: input } as Record<string, unknown>);
-      return { success: true };
+      return { success: true, updated: result.updated };
     }),
 
   listEdges: authedQuery.query(async () => {

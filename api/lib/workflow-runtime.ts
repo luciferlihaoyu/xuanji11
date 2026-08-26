@@ -280,16 +280,23 @@ export async function executeWorkflow(
   const runId = Number(runResult[0].insertId);
 
   const nodeResultRows = new Map<number, number>();
-  for (const node of sorted) {
-    const nodeRunResult = await db.insert(workflowRunNodes).values({
-      runId,
-      nodeId: node.id,
-      status: "pending",
-      input: {},
-      output: {},
-      error: null,
+  // N+1 优化：一次 values 批量插入所有节点运行记录，drizzle 返回值为有序数组
+  if (sorted.length > 0) {
+    const bulkInsertResult = await db.insert(workflowRunNodes).values(
+      sorted.map((node) => ({
+        runId,
+        nodeId: node.id,
+        status: "pending" as const,
+        input: {} as Record<string, unknown>,
+        output: {} as Record<string, unknown>,
+        error: null as string | null,
+      })),
+    );
+    // MySQL 批量 insert 自增 id 在 result[0].insertId 中按入参顺序连续分配（drizzle/mysql2 行为）
+    const baseInsertId = Number(bulkInsertResult[0].insertId);
+    sorted.forEach((node, index) => {
+      nodeResultRows.set(node.id, baseInsertId + index);
     });
-    nodeResultRows.set(node.id, Number(nodeRunResult[0].insertId));
   }
 
   const outputs: Record<string, Record<string, unknown>> = {};
