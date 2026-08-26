@@ -23,6 +23,8 @@ import {
   isTrustedMutationRequest,
   verifyWebhookToken,
 } from "./lib/csrf";
+import { createCsrfMiddleware } from "./lib/csrf-middleware";
+import { handleWebhookTrigger, parsePositiveIntId } from "./lib/webhook-handler";
 import { createMcpHandler } from "./mcp-server";
 import type { User } from "@db/schema";
 import "./connectors"; // 注册 115网盘、阿里云盘等连接器
@@ -75,28 +77,7 @@ function parsePositiveIntParam(value: string | undefined): number | undefined {
   return id;
 }
 
-const csrfMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> = async (c, next) => {
-  if (!csrfProtectedMethods.has(c.req.method)) return next();
-
-  const path = c.req.path;
-
-  // 完全豁免：MCP（Agent Token 鉴权）与 workflow webhook（HMAC token 鉴权）
-  if (isFullyExemptPath(path)) return next();
-
-  // 内部 REST 前缀（zvec/search/kb-backup/keywords/relations）：router 内部自鉴权，
-  // 但非 GET 必须是可信变更——否则携带管理员 cookie 的跨站请求可伪造写操作。
-  if (isInternalRestPath(path)) {
-    if (isTrustedMutationRequest(c.req.raw)) return next();
-    return c.json({ success: false, error: "Invalid request" }, 403);
-  }
-
-  // 其余路径维持原要求
-  if (!isTrustedMutationRequest(c.req.raw)) {
-    return c.json({ success: false, error: "Invalid request" }, 403);
-  }
-
-  return next();
-};
+const csrfMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> = createCsrfMiddleware() as MiddlewareHandler<{ Bindings: HttpBindings }>;
 
 // 文件上传路由（50MB 限制）
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
@@ -385,24 +366,21 @@ app.use("/api/trpc/*", async (c) => {
 
 app.post("/api/workflows/:id/webhook", async (c) => {
   try {
-    // 外部系统回调：以 HMAC token 鉴权（?token=），不再要求会话 cookie。
-    const id = parsePositiveIntParam(c.req.param("id"));
-    if (id === undefined) return c.json({ success: false, error: "无效的工作流 ID" }, 400);
-
-    const token = c.req.query("token") ?? "";
-    if (!verifyWebhookToken(id, token, env.jwtSecret)) {
-      return c.json({ success: false, error: "Invalid webhook token" }, 403);
-    }
-
-    const payload = await c.req.json().catch(() => ({}));
-    const result = await triggerWebhookWorkflow(id, payload);
-
-    if ("error" in result) {
-      console.error("[Webhook] Trigger failed:", result.error);
-      return c.json({ success: false, error: "Webhook 触发失败" }, 400);
-    }
-
-    return c.json({ success: true, runId: result.runId });
+    // 外部系统回调：HMAC token 鉴权（?token=），不要求会话 cookie。
+    // 业务逻辑走 handleWebhookTrigger（已抽离单测覆盖）。
+    const rawPayload = await c.req.json().catch(() => ({}));
+    const result = await handleWebhookTrigger(
+      c.req.param("id") ?? "",
+      c.req.query("token") ?? "",
+      rawPayload,
+      {
+        parseWorkflowId: parsePositiveIntId,
+        jwtSecret: env.jwtSecret,
+        trigger: triggerWebhookWorkflow,
+      },
+    );
+    if (result.status === 200) return c.json(result.body, 200);
+    return c.json(result.body, result.status as 400 | 403);
   } catch (err) {
     console.error("[Webhook] Error:", err);
     return c.json(
