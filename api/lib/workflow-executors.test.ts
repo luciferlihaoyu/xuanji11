@@ -97,7 +97,8 @@ describe("落库型执行器（mock DB）", () => {
     const where = vi.fn(() => Promise.resolve([])); // 幂等检查：无边存在
     return {
       select: vi.fn(() => ({ from: vi.fn(() => ({ where })) })),
-      insert: vi.fn(() => ({ values: vi.fn(async () => [{ insertId }]) })),
+      // SQLite 路径：drizzle better-sqlite3 同步驱动返回 RunResult（lastInsertRowid），不是数组
+      insert: vi.fn(() => ({ values: vi.fn(() => ({ lastInsertRowid: insertId, changes: 1 })) })),
     };
   }
 

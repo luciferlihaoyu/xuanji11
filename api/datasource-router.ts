@@ -68,7 +68,7 @@ export const datasourceRouter = createRouter({
         status: input.status,
         createdBy: ctx.user?.id ?? null,
       }));
-      const id = Number(result[0].insertId);
+      const id = Number(result.lastInsertRowid);
       await logAudit(ctx, "datasource", "create", id, input as Record<string, unknown>);
       const notice = syncIntervalNotice(input.config);
       return notice ? { id, notice } : { id };
@@ -194,7 +194,7 @@ export const datasourceRouter = createRouter({
           retryCount: 0,
           metadata: { platform, dataSourceName: ds.name },
           createdBy: ctx.user?.id ?? null,
-        }))[0].insertId;
+        })).lastInsertRowid;
 
         let processed = 0;
         let failed = 0;

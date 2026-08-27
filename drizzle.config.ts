@@ -1,16 +1,14 @@
 import "dotenv/config";
 import { defineConfig } from "drizzle-kit";
 
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) {
-  throw new Error("DATABASE_URL is required to run drizzle commands");
-}
+const sqlitePath = process.env.SQLITE_PATH ?? "/data/app/xuanji.db";
+process.env.SQLITE_PATH = sqlitePath; // ensure child processes (push/migrate) see the same value
 
 export default defineConfig({
   schema: "./db/schema.ts",
   out: "./db/migrations",
-  dialect: "mysql",
+  dialect: "sqlite",
   dbCredentials: {
-    url: connectionString,
+    url: sqlitePath,
   },
 });

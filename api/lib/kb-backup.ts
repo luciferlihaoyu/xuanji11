@@ -121,16 +121,16 @@ export async function importKnowledgeBase(input: unknown): Promise<KbImportResul
   let documents = 0;
 
   if (nodeValues.length > 0) {
-    const result = await db.insert(knowledgeNodes).ignore().values(nodeValues);
-    nodes = Number(result[0].affectedRows ?? 0);
+    const result = await db.insert(knowledgeNodes).values(nodeValues).onConflictDoNothing();
+    nodes = Number(result.changes ?? 0);
   }
   if (edgeValues.length > 0) {
-    const result = await db.insert(knowledgeEdges).ignore().values(edgeValues);
-    edges = Number(result[0].affectedRows ?? 0);
+    const result = await db.insert(knowledgeEdges).values(edgeValues).onConflictDoNothing();
+    edges = Number(result.changes ?? 0);
   }
   if (documentValues.length > 0) {
-    const result = await db.insert(kbDocuments).ignore().values(documentValues);
-    documents = Number(result[0].affectedRows ?? 0);
+    const result = await db.insert(kbDocuments).values(documentValues).onConflictDoNothing();
+    documents = Number(result.changes ?? 0);
   }
 
   return { nodes, edges, documents };

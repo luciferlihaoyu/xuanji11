@@ -43,7 +43,7 @@ async function findDocumentNodeId(documentId: number): Promise<number | undefine
     .where(
       and(
         eq(knowledgeNodes.type, "document"),
-        sql`JSON_UNQUOTE(JSON_EXTRACT(${knowledgeNodes.metadata}, '$.documentId')) = ${String(documentId)}`,
+        sql`json_extract(${knowledgeNodes.metadata}, '$.documentId') = ${String(documentId)}`,
       ),
     )
     .limit(1);

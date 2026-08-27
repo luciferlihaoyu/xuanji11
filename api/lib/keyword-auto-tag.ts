@@ -25,7 +25,7 @@ async function findOrCreateDocumentNode(documentId: number, createdBy: number | 
     .where(
       and(
         eq(knowledgeNodes.type, "document"),
-        sql`JSON_UNQUOTE(JSON_EXTRACT(${knowledgeNodes.metadata}, '$.documentId')) = ${String(documentId)}`,
+        sql`json_extract(${knowledgeNodes.metadata}, '$.documentId') = ${String(documentId)}`,
       ),
     )
     .limit(1);
@@ -42,7 +42,7 @@ async function findOrCreateDocumentNode(documentId: number, createdBy: number | 
     metadata: { documentId: doc.id },
     createdBy,
   }));
-  return Number(result[0].insertId);
+  return Number(result.lastInsertRowid);
 }
 
 async function findOrCreateTagNode(tag: string, createdBy: number | null): Promise<{ id: number; created: boolean }> {
@@ -60,7 +60,7 @@ async function findOrCreateTagNode(tag: string, createdBy: number | null): Promi
     type: "tag",
     createdBy,
   }));
-  return { id: Number(result[0].insertId), created: true };
+  return { id: Number(result.lastInsertRowid), created: true };
 }
 
 async function findOrCreateTagEdge(tagId: number, docNodeId: number, createdBy: number | null): Promise<boolean> {

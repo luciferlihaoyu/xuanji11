@@ -27,9 +27,28 @@ import { createCsrfMiddleware } from "./lib/csrf-middleware";
 import { handleWebhookTrigger, parsePositiveIntId } from "./lib/webhook-handler";
 import { createMcpHandler } from "./mcp-server";
 import type { User } from "@db/schema";
+import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { getRawDb } from "./queries/connection";
+import { join } from "path";
 import "./connectors"; // 注册 115网盘、阿里云盘等连接器
 
 initializeZvec();
+
+/** 启动时自动跑 migration（仅在 SQLite 路径下）。 */
+function runMigrations(): void {
+  // 触发 SQLite 初始化
+  getRawDb();
+  // migrations 目录：项目根 db/migrations（生产 esbuild bundle 后 import.meta.url 不可靠，优先用 cwd）
+  const migrationsFolder = join(process.cwd(), "db", "migrations");
+  try {
+    migrate(getDb(), { migrationsFolder });
+    console.log("[SQLite] migration 已应用");
+  } catch (err) {
+    console.error("[SQLite] migration 失败:", err);
+    throw err;
+  }
+}
+runMigrations();
 
 declare module "hono" {
   interface ContextVariableMap {
@@ -338,7 +357,7 @@ app.get("/api/upload/:id/ingestion", async (c) => {
       .select()
       .from(ingestionItems)
       .where(
-        sql`JSON_UNQUOTE(JSON_EXTRACT(${ingestionItems.metadata}, '$.uploadedFileId')) = ${String(id)}`,
+        sql`json_extract(${ingestionItems.metadata}, '$.uploadedFileId') = ${String(id)}`,
       )
       .orderBy(desc(ingestionItems.createdAt));
     return c.json({ success: true, items });

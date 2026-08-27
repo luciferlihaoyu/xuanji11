@@ -1,7 +1,7 @@
 {
-  "version": "5",
-  "dialect": "mysql",
-  "id": "c8e93b7e-73e6-4320-9b04-038428bfa887",
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "337f2ce6-095a-42dc-a56a-50eab46ee0ac",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "agents": {
@@ -9,14 +9,14 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "name": {
           "name": "name",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -30,7 +30,7 @@
         },
         "type": {
           "name": "type",
-          "type": "enum('assistant','analyst','curator','connector','custom')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -45,7 +45,7 @@
         },
         "status": {
           "name": "status",
-          "type": "enum('active','inactive','error','training')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -53,40 +53,40 @@
         },
         "config": {
           "name": "config",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "permissions": {
           "name": "permissions",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdBy": {
           "name": "createdBy",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -113,30 +113,258 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "agents_id": {
-          "name": "agents_id",
-          "columns": [
-            "id"
-          ]
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "api_keys": {
+      "name": "api_keys",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "keyHash": {
+          "name": "keyHash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "keyPrefix": {
+          "name": "keyPrefix",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "agentId": {
+          "name": "agentId",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "permissions": {
+          "name": "permissions",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "scopes": {
+          "name": "scopes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "isActive": {
+          "name": "isActive",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'true'"
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "lastUsedAt": {
+          "name": "lastUsedAt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "createdBy": {
+          "name": "createdBy",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch() * 1000)"
         }
       },
+      "indexes": {
+        "api_keys_keyHash_unique": {
+          "name": "api_keys_keyHash_unique",
+          "columns": [
+            "keyHash"
+          ],
+          "isUnique": true
+        },
+        "apiKeys_agentId_idx": {
+          "name": "apiKeys_agentId_idx",
+          "columns": [
+            "agentId"
+          ],
+          "isUnique": false
+        },
+        "apiKeys_keyPrefix_idx": {
+          "name": "apiKeys_keyPrefix_idx",
+          "columns": [
+            "keyPrefix"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "api_keys_agent_fk": {
+          "name": "api_keys_agent_fk",
+          "tableFrom": "api_keys",
+          "tableTo": "agents",
+          "columnsFrom": [
+            "agentId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "api_keys_created_by_fk": {
+          "name": "api_keys_created_by_fk",
+          "tableFrom": "api_keys",
+          "tableTo": "users",
+          "columnsFrom": [
+            "createdBy"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
+    },
+    "audit_logs": {
+      "name": "audit_logs",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "entityType": {
+          "name": "entityType",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "entityId": {
+          "name": "entityId",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "actorId": {
+          "name": "actorId",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "details": {
+          "name": "details",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch() * 1000)"
+        }
+      },
+      "indexes": {
+        "auditLogs_entity_idx": {
+          "name": "auditLogs_entity_idx",
+          "columns": [
+            "entityType",
+            "entityId"
+          ],
+          "isUnique": false
+        },
+        "auditLogs_actor_idx": {
+          "name": "auditLogs_actor_idx",
+          "columns": [
+            "actorId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "audit_logs_actor_fk": {
+          "name": "audit_logs_actor_fk",
+          "tableFrom": "audit_logs",
+          "tableTo": "users",
+          "columnsFrom": [
+            "actorId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
     },
     "backup_job_files": {
       "name": "backup_job_files",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "jobId": {
           "name": "jobId",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -150,21 +378,21 @@
         },
         "size": {
           "name": "size",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "checksum": {
           "name": "checksum",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "status": {
           "name": "status",
-          "type": "enum('pending','uploaded','failed')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -179,11 +407,11 @@
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -210,30 +438,23 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "backup_job_files_id": {
-          "name": "backup_job_files_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "backup_jobs": {
       "name": "backup_jobs",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "target": {
           "name": "target",
-          "type": "varchar(100)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -247,7 +468,7 @@
         },
         "status": {
           "name": "status",
-          "type": "enum('pending','running','completed','failed','partial')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -255,7 +476,7 @@
         },
         "progress": {
           "name": "progress",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -263,7 +484,7 @@
         },
         "filesTotal": {
           "name": "filesTotal",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -271,7 +492,7 @@
         },
         "filesDone": {
           "name": "filesDone",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -279,7 +500,7 @@
         },
         "filesFailed": {
           "name": "filesFailed",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -287,10 +508,63 @@
         },
         "manifest": {
           "name": "manifest",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "config": {
+          "name": "config",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cron": {
+          "name": "cron",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'false'"
+        },
+        "nextRunAt": {
+          "name": "nextRunAt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "keepLastN": {
+          "name": "keepLastN",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": 7
+        },
+        "maxRetries": {
+          "name": "maxRetries",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": 3
+        },
+        "retryCount": {
+          "name": "retryCount",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": 0
         },
         "error": {
           "name": "error",
@@ -301,40 +575,40 @@
         },
         "startedAt": {
           "name": "startedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "completedAt": {
           "name": "completedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdBy": {
           "name": "createdBy",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -358,6 +632,14 @@
             "createdBy"
           ],
           "isUnique": false
+        },
+        "backupJobs_enabled_nextRun_idx": {
+          "name": "backupJobs_enabled_nextRun_idx",
+          "columns": [
+            "enabled",
+            "nextRunAt"
+          ],
+          "isUnique": false
         }
       },
       "foreignKeys": {
@@ -375,51 +657,44 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "backup_jobs_id": {
-          "name": "backup_jobs_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "data_sources": {
       "name": "data_sources",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "name": {
           "name": "name",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "type": {
           "name": "type",
-          "type": "enum('cloud_drive','nas','database','api','webhook','rss','notion','obsidian')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "config": {
           "name": "config",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "status": {
           "name": "status",
-          "type": "enum('connected','disconnected','error','syncing')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -427,7 +702,7 @@
         },
         "lastSyncAt": {
           "name": "lastSyncAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -441,26 +716,26 @@
         },
         "createdBy": {
           "name": "createdBy",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -494,37 +769,30 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "data_sources_id": {
-          "name": "data_sources_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "document_chunks": {
       "name": "document_chunks",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "documentId": {
           "name": "documentId",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "itemId": {
           "name": "itemId",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -538,7 +806,7 @@
         },
         "chunkIndex": {
           "name": "chunkIndex",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -546,32 +814,32 @@
         },
         "embedding": {
           "name": "embedding",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "embeddingModel": {
           "name": "embeddingModel",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "metadata": {
           "name": "metadata",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -605,65 +873,58 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "document_chunks_id": {
-          "name": "document_chunks_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "ingestion_items": {
       "name": "ingestion_items",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "jobId": {
           "name": "jobId",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "externalId": {
           "name": "externalId",
-          "type": "varchar(500)",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "name": {
           "name": "name",
-          "type": "varchar(500)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "mimeType": {
           "name": "mimeType",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "size": {
           "name": "size",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "status": {
           "name": "status",
-          "type": "enum('pending','parsing','chunking','indexing','completed','failed','unsupported')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -692,33 +953,33 @@
         },
         "documentId": {
           "name": "documentId",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "metadata": {
           "name": "metadata",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -759,44 +1020,37 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "ingestion_items_id": {
-          "name": "ingestion_items_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "ingestion_jobs": {
       "name": "ingestion_jobs",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "sourceType": {
           "name": "sourceType",
-          "type": "enum('upload','datasource','backup','manual')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "sourceId": {
           "name": "sourceId",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "status": {
           "name": "status",
-          "type": "enum('pending','running','completed','failed','cancelled')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -804,7 +1058,7 @@
         },
         "totalItems": {
           "name": "totalItems",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -812,7 +1066,7 @@
         },
         "processedItems": {
           "name": "processedItems",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -820,7 +1074,7 @@
         },
         "failedItems": {
           "name": "failedItems",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -835,7 +1089,7 @@
         },
         "retryCount": {
           "name": "retryCount",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -843,33 +1097,33 @@
         },
         "metadata": {
           "name": "metadata",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdBy": {
           "name": "createdBy",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -910,37 +1164,30 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "ingestion_jobs_id": {
-          "name": "ingestion_jobs_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "kb_documents": {
       "name": "kb_documents",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "folderId": {
           "name": "folderId",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "title": {
           "name": "title",
-          "type": "varchar(500)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -954,7 +1201,7 @@
         },
         "format": {
           "name": "format",
-          "type": "enum('markdown','text','json','html','code')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -962,40 +1209,40 @@
         },
         "tags": {
           "name": "tags",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "metadata": {
           "name": "metadata",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdBy": {
           "name": "createdBy",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -1042,44 +1289,37 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "kb_documents_id": {
-          "name": "kb_documents_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "kb_folders": {
       "name": "kb_folders",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "name": {
           "name": "name",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "parentId": {
           "name": "parentId",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "icon": {
           "name": "icon",
-          "type": "varchar(100)",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -1087,7 +1327,7 @@
         },
         "sortOrder": {
           "name": "sortOrder",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -1095,26 +1335,26 @@
         },
         "createdBy": {
           "name": "createdBy",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -1161,51 +1401,44 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "kb_folders_id": {
-          "name": "kb_folders_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "knowledge_edges": {
       "name": "knowledge_edges",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "sourceId": {
           "name": "sourceId",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "targetId": {
           "name": "targetId",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "label": {
           "name": "label",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "type": {
           "name": "type",
-          "type": "enum('related','contains','references','extends','similar','sequence')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -1213,7 +1446,7 @@
         },
         "weight": {
           "name": "weight",
-          "type": "float",
+          "type": "real",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -1221,18 +1454,18 @@
         },
         "createdBy": {
           "name": "createdBy",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -1292,30 +1525,23 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "knowledge_edges_id": {
-          "name": "knowledge_edges_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "knowledge_nodes": {
       "name": "knowledge_nodes",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "title": {
           "name": "title",
-          "type": "varchar(500)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -1329,7 +1555,7 @@
         },
         "type": {
           "name": "type",
-          "type": "enum('concept','document','topic','entity','note','tag')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -1337,7 +1563,7 @@
         },
         "posX": {
           "name": "posX",
-          "type": "float",
+          "type": "real",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -1345,7 +1571,7 @@
         },
         "posY": {
           "name": "posY",
-          "type": "float",
+          "type": "real",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -1353,40 +1579,40 @@
         },
         "style": {
           "name": "style",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "metadata": {
           "name": "metadata",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdBy": {
           "name": "createdBy",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -1413,30 +1639,85 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "knowledge_nodes_id": {
-          "name": "knowledge_nodes_id",
-          "columns": [
-            "id"
-          ]
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "mcp_servers": {
+      "name": "mcp_servers",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "url": {
+          "name": "url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "authToken": {
+          "name": "authToken",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch() * 1000)"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch() * 1000)"
         }
       },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "restore_jobs": {
       "name": "restore_jobs",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "backupJobId": {
           "name": "backupJobId",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -1450,7 +1731,7 @@
         },
         "status": {
           "name": "status",
-          "type": "enum('pending','running','completed','failed','partial')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -1458,7 +1739,7 @@
         },
         "progress": {
           "name": "progress",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -1466,7 +1747,7 @@
         },
         "filesTotal": {
           "name": "filesTotal",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -1474,7 +1755,7 @@
         },
         "filesDone": {
           "name": "filesDone",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -1482,7 +1763,7 @@
         },
         "filesFailed": {
           "name": "filesFailed",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -1490,7 +1771,7 @@
         },
         "manifestVerified": {
           "name": "manifestVerified",
-          "type": "enum('pending','passed','failed')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -1505,40 +1786,40 @@
         },
         "startedAt": {
           "name": "startedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "completedAt": {
           "name": "completedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdBy": {
           "name": "createdBy",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -1585,30 +1866,23 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "restore_jobs_id": {
-          "name": "restore_jobs_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "system_settings": {
       "name": "system_settings",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "key": {
           "name": "key",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -1622,7 +1896,7 @@
         },
         "category": {
           "name": "category",
-          "type": "varchar(100)",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -1630,21 +1904,28 @@
         },
         "updatedBy": {
           "name": "updatedBy",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
+        "system_settings_key_unique": {
+          "name": "system_settings_key_unique",
+          "columns": [
+            "key"
+          ],
+          "isUnique": true
+        },
         "systemSettings_key_idx": {
           "name": "systemSettings_key_idx",
           "columns": [
@@ -1675,58 +1956,44 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "system_settings_id": {
-          "name": "system_settings_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
-      "uniqueConstraints": {
-        "system_settings_key_unique": {
-          "name": "system_settings_key_unique",
-          "columns": [
-            "key"
-          ]
-        }
-      },
-      "checkConstraint": {}
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
     },
     "uploaded_files": {
       "name": "uploaded_files",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "filename": {
           "name": "filename",
-          "type": "varchar(500)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "originalName": {
           "name": "originalName",
-          "type": "varchar(500)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "mimeType": {
           "name": "mimeType",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "size": {
           "name": "size",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -1740,25 +2007,25 @@
         },
         "metadata": {
           "name": "metadata",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "uploadedBy": {
           "name": "uploadedBy",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -1785,44 +2052,37 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "uploaded_files_id": {
-          "name": "uploaded_files_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "users": {
       "name": "users",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "unionId": {
           "name": "unionId",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "name": {
           "name": "name",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "email": {
           "name": "email",
-          "type": "varchar(320)",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -1836,7 +2096,7 @@
         },
         "role": {
           "name": "role",
-          "type": "enum('user','admin')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -1844,62 +2104,56 @@
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         },
         "lastSignInAt": {
           "name": "lastSignInAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "users_id": {
-          "name": "users_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
-      "uniqueConstraints": {
+      "indexes": {
         "users_unionId_unique": {
           "name": "users_unionId_unique",
           "columns": [
             "unionId"
-          ]
+          ],
+          "isUnique": true
         }
       },
-      "checkConstraint": {}
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
     },
     "vector_collections": {
       "name": "vector_collections",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "name": {
           "name": "name",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -1913,7 +2167,7 @@
         },
         "model": {
           "name": "model",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -1921,7 +2175,7 @@
         },
         "dimension": {
           "name": "dimension",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -1929,7 +2183,7 @@
         },
         "status": {
           "name": "status",
-          "type": "enum('ready','building','error')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -1937,7 +2191,7 @@
         },
         "documentCount": {
           "name": "documentCount",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -1945,26 +2199,26 @@
         },
         "createdBy": {
           "name": "createdBy",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -1991,51 +2245,44 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "vector_collections_id": {
-          "name": "vector_collections_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "workflow_nodes": {
       "name": "workflow_nodes",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "workflowId": {
           "name": "workflowId",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "type": {
           "name": "type",
-          "type": "varchar(100)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "label": {
           "name": "label",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "positionX": {
           "name": "positionX",
-          "type": "float",
+          "type": "real",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -2043,7 +2290,7 @@
         },
         "positionY": {
           "name": "positionY",
-          "type": "float",
+          "type": "real",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -2051,21 +2298,21 @@
         },
         "config": {
           "name": "config",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "connections": {
           "name": "connections",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "sortOrder": {
           "name": "sortOrder",
-          "type": "int",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false,
@@ -2073,11 +2320,11 @@
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -2104,44 +2351,37 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "workflow_nodes_id": {
-          "name": "workflow_nodes_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "workflow_run_nodes": {
       "name": "workflow_run_nodes",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "runId": {
           "name": "runId",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "nodeId": {
           "name": "nodeId",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "status": {
           "name": "status",
-          "type": "enum('pending','running','completed','failed','skipped')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -2149,14 +2389,14 @@
         },
         "input": {
           "name": "input",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "output": {
           "name": "output",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -2170,25 +2410,25 @@
         },
         "startedAt": {
           "name": "startedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "completedAt": {
           "name": "completedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -2235,37 +2475,30 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "workflow_run_nodes_id": {
-          "name": "workflow_run_nodes_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "workflow_runs": {
       "name": "workflow_runs",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "workflowId": {
           "name": "workflowId",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
         "status": {
           "name": "status",
-          "type": "enum('pending','running','completed','failed','cancelled')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -2273,7 +2506,7 @@
         },
         "triggeredBy": {
           "name": "triggeredBy",
-          "type": "enum('manual','api','cron','webhook')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -2281,14 +2514,14 @@
         },
         "input": {
           "name": "input",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "output": {
           "name": "output",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -2302,32 +2535,32 @@
         },
         "startedAt": {
           "name": "startedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "completedAt": {
           "name": "completedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdBy": {
           "name": "createdBy",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -2374,30 +2607,23 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "workflow_runs_id": {
-          "name": "workflow_runs_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     },
     "workflows": {
       "name": "workflows",
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "primaryKey": false,
+          "type": "integer",
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": true
         },
         "name": {
           "name": "name",
-          "type": "varchar(255)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -2411,7 +2637,7 @@
         },
         "status": {
           "name": "status",
-          "type": "enum('draft','active','paused','error','archived')",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -2419,40 +2645,40 @@
         },
         "canvas": {
           "name": "canvas",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "triggers": {
           "name": "triggers",
-          "type": "json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdBy": {
           "name": "createdBy",
-          "type": "bigint unsigned",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(now())"
+          "default": "(unixepoch() * 1000)"
         }
       },
       "indexes": {
@@ -2479,26 +2705,19 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "workflows_id": {
-          "name": "workflows_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraints": {}
     }
   },
   "views": {},
+  "enums": {},
   "_meta": {
     "schemas": {},
     "tables": {},
     "columns": {}
   },
   "internal": {
-    "tables": {},
     "indexes": {}
   }
 }

@@ -4,7 +4,18 @@ import path from "path";
 import { randomBytes } from "crypto";
 
 // 启动时检查必填环境变量
-const requiredEnvVars = ["ADMIN_USERNAME", "ADMIN_PASSWORD", "DATABASE_URL"];
+const requiredEnvVars = ["ADMIN_USERNAME", "ADMIN_PASSWORD"];
+
+/** 从历史 DATABASE_URL 协议中提取 SQLite 文件路径（向后兼容）。 */
+function deriveSqlitePathFromLegacyUrl(): string {
+  const url = process.env.DATABASE_URL;
+  if (url && url.startsWith("file:")) {
+    // 兼容 "file:/data/xuanji.db?param=..." 与 "file:./xuanji.db"
+    const path = url.slice("file:".length).split("?")[0] ?? "";
+    if (path.length > 0) return path;
+  }
+  return "/data/app/xuanji.db";
+}
 for (const key of requiredEnvVars) {
   if (!process.env[key]) {
     console.error(`❌ 缺少必填环境变量: ${key}，请在 .env 或 Zeabur 环境变量中配置`);
@@ -21,8 +32,9 @@ function loadOrCreateJwtSecret(): string {
   const configured = process.env.JWT_SECRET;
   if (configured) return configured;
   try {
-    const dataDir = process.env.ZVEC_DATA_DIR ?? "/data/app/zvec";
-    const secretFile = path.join(path.dirname(dataDir), ".jwt-secret");
+    // SQLite 文件所在目录同级 .jwt-secret（与 SQLite 同卷持久化），单容器部署时与 DB 同生共死
+    const dataDir = path.dirname(process.env.SQLITE_PATH ?? "/data/app/xuanji.db");
+    const secretFile = path.join(dataDir, ".jwt-secret");
     const existing = fs.readFileSync(secretFile, "utf8").trim();
     if (existing.length >= 32) return existing;
     const generated = randomBytes(32).toString("hex");
@@ -59,14 +71,16 @@ export const env = {
   kimiOpenUrl: process.env.KIMI_OPEN_URL ?? "https://open.kimi.com",
   ownerUnionId: process.env.OWNER_UNION_ID ?? "",
 
-  // 数据库
+  // 数据库（SQLite 单文件，向量通过 sqlite-vec 扩展；DATABASE_URL 仅作历史兼容）
+  sqlitePath: process.env.SQLITE_PATH ?? deriveSqlitePathFromLegacyUrl(),
   databaseUrl: process.env.DATABASE_URL ?? "",
 
   // 持久化存储
   uploadDir: process.env.UPLOAD_DIR ?? "/data/app/uploads",
   backupTempDir: process.env.BACKUP_TEMP_DIR ?? "/data/app/backups",
   backupEncryptionKey: process.env.BACKUP_ENCRYPTION_KEY ?? "",
-  zvecDataDir: process.env.ZVEC_DATA_DIR ?? "/data/app/zvec",
+  // 旧名 ZVEC_* 保留兼容（向量已并入 SQLite 扩展，不再单独存储目录）
+  zvecDataDir: process.env.ZVEC_DATA_DIR ?? path.dirname(process.env.SQLITE_PATH ?? "/data/app/xuanji.db"),
   zvecDimension: parseInt(process.env.ZVEC_DIMENSION ?? "1536", 10) || 1536,
   zvecEnabled: process.env.ZVEC_ENABLED !== "false",
 

@@ -1,59 +1,54 @@
 import {
-  mysqlTable,
-  mysqlEnum,
-  serial,
-  varchar,
+  sqliteTable,
   text,
-  timestamp,
-  bigint,
-  boolean,
-  json,
-  float,
-  int,
+  integer,
+  real,
   index,
   foreignKey,
-} from "drizzle-orm/mysql-core";
+} from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
+
+/** SQLite 时间戳默认值：毫秒精度的 unix epoch（适配 better-sqlite3 同步驱动）。 */
+const nowMs = sql`(unixepoch() * 1000)`;
 
 // ========== 用户表（OAuth认证） ==========
-export const users = mysqlTable("users", {
-  id: serial("id").primaryKey(),
-  unionId: varchar("unionId", { length: 255 }).notNull().unique(),
-  name: varchar("name", { length: 255 }),
-  email: varchar("email", { length: 320 }),
+export const users = sqliteTable("users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  unionId: text("unionId").notNull().unique(),
+  name: text("name"),
+  email: text("email"),
   avatar: text("avatar"),
-  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt")
-    .defaultNow()
-    .notNull()
-    .$onUpdate(() => new Date()),
-  lastSignInAt: timestamp("lastSignInAt").defaultNow().notNull(),
+  role: text("role", { enum: ["user", "admin"] }).default("user").notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
+    .default(nowMs)
+    .notNull(),
+  lastSignInAt: integer("lastSignInAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
 });
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
 // ========== Agent 智能助手表 ==========
-export const agents = mysqlTable("agents", {
-  id: serial("id").primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
+export const agents = sqliteTable("agents", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
   description: text("description"),
-  type: mysqlEnum("type", ["assistant", "analyst", "curator", "connector", "custom"])
+  type: text("type", { enum: ["assistant", "analyst", "curator", "connector", "custom"] })
     .default("assistant")
     .notNull(),
   avatarUrl: text("avatarUrl"),
-  status: mysqlEnum("status", ["active", "inactive", "error", "training"])
+  status: text("status", { enum: ["active", "inactive", "error", "training"] })
     .default("active")
     .notNull(),
-  config: json("config").$type<Record<string, unknown>>(),
+  config: text("config", { mode: "json" }).$type<Record<string, unknown>>(),
   // 权限配置（JSON存储7项权限）
-  permissions: json("permissions").$type<Record<string, unknown>>(),
-  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt")
-    .defaultNow()
-    .notNull()
-    .$onUpdate(() => new Date()),
+  permissions: text("permissions", { mode: "json" }).$type<Record<string, unknown>>(),
+  createdBy: integer("createdBy", { mode: "number" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
+    .default(nowMs)
+    .notNull(),
 }, (table) => [
   index("agents_created_by_idx").on(table.createdBy),
   foreignKey({
@@ -67,42 +62,40 @@ export type Agent = typeof agents.$inferSelect;
 export type InsertAgent = typeof agents.$inferInsert;
 
 // ========== 外部 MCP 服务器配置表 ==========
-export const mcpServers = mysqlTable("mcp_servers", {
-  id: serial("id").primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
-  url: varchar("url", { length: 2048 }).notNull(),
-  authToken: varchar("authToken", { length: 4096 }),
-  enabled: boolean("enabled").default(true).notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt")
-    .defaultNow()
-    .notNull()
-    .$onUpdate(() => new Date()),
+export const mcpServers = sqliteTable("mcp_servers", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  url: text("url").notNull(),
+  authToken: text("authToken"),
+  enabled: integer("enabled", { mode: "boolean" }).default(true).notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
+    .default(nowMs)
+    .notNull(),
 });
 
 export type McpServer = typeof mcpServers.$inferSelect;
 export type InsertMcpServer = typeof mcpServers.$inferInsert;
 
 // ========== 知识图谱节点表 ==========
-export const knowledgeNodes = mysqlTable("knowledge_nodes", {
-  id: serial("id").primaryKey(),
-  title: varchar("title", { length: 500 }).notNull(),
+export const knowledgeNodes = sqliteTable("knowledge_nodes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  title: text("title").notNull(),
   content: text("content"),
-  type: mysqlEnum("type", ["concept", "document", "topic", "entity", "note", "tag"])
+  type: text("type", { enum: ["concept", "document", "topic", "entity", "note", "tag"] })
     .default("concept")
     .notNull(),
   // 可视化位置
-  posX: float("posX").default(0),
-  posY: float("posY").default(0),
+  posX: real("posX").default(0),
+  posY: real("posY").default(0),
   // 样式配置
-  style: json("style").$type<Record<string, unknown>>(),
-  metadata: json("metadata").$type<Record<string, unknown>>(),
-  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt")
-    .defaultNow()
-    .notNull()
-    .$onUpdate(() => new Date()),
+  style: text("style", { mode: "json" }).$type<Record<string, unknown>>(),
+  metadata: text("metadata", { mode: "json" }).$type<Record<string, unknown>>(),
+  createdBy: integer("createdBy", { mode: "number" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
+    .default(nowMs)
+    .notNull(),
 }, (table) => [
   index("knowledgeNodes_createdBy_idx").on(table.createdBy),
   foreignKey({
@@ -116,17 +109,17 @@ export type KnowledgeNode = typeof knowledgeNodes.$inferSelect;
 export type InsertKnowledgeNode = typeof knowledgeNodes.$inferInsert;
 
 // ========== 知识图谱关系/边表 ==========
-export const knowledgeEdges = mysqlTable("knowledge_edges", {
-  id: serial("id").primaryKey(),
-  sourceId: bigint("sourceId", { mode: "number", unsigned: true }).notNull(),
-  targetId: bigint("targetId", { mode: "number", unsigned: true }).notNull(),
-  label: varchar("label", { length: 255 }),
-  type: mysqlEnum("type", ["related", "contains", "references", "extends", "similar", "sequence"])
+export const knowledgeEdges = sqliteTable("knowledge_edges", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  sourceId: integer("sourceId", { mode: "number" }).notNull(),
+  targetId: integer("targetId", { mode: "number" }).notNull(),
+  label: text("label"),
+  type: text("type", { enum: ["related", "contains", "references", "extends", "similar", "sequence"] })
     .default("related")
     .notNull(),
-  weight: float("weight").default(1),
-  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  weight: real("weight").default(1),
+  createdBy: integer("createdBy", { mode: "number" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
 }, (table) => [
   index("knowledgeEdges_targetId_idx").on(table.targetId),
   index("knowledgeEdges_sourceId_idx").on(table.sourceId),
@@ -151,18 +144,17 @@ export type KnowledgeEdge = typeof knowledgeEdges.$inferSelect;
 export type InsertKnowledgeEdge = typeof knowledgeEdges.$inferInsert;
 
 // ========== 知识库文件夹表 ==========
-export const kbFolders = mysqlTable("kb_folders", {
-  id: serial("id").primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
-  parentId: bigint("parentId", { mode: "number", unsigned: true }),
-  icon: varchar("icon", { length: 100 }).default("folder"),
-  sortOrder: int("sortOrder").default(0),
-  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt")
-    .defaultNow()
-    .notNull()
-    .$onUpdate(() => new Date()),
+export const kbFolders = sqliteTable("kb_folders", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  parentId: integer("parentId", { mode: "number" }),
+  icon: text("icon").default("folder"),
+  sortOrder: integer("sortOrder").default(0),
+  createdBy: integer("createdBy", { mode: "number" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
+    .default(nowMs)
+    .notNull(),
 }, (table) => [
   index("kbFolders_createdBy_idx").on(table.createdBy),
   index("kbFolders_parentId_idx").on(table.parentId),
@@ -182,27 +174,26 @@ export type KbFolder = typeof kbFolders.$inferSelect;
 export type InsertKbFolder = typeof kbFolders.$inferInsert;
 
 // ========== 知识库文档表 ==========
-export const kbDocuments = mysqlTable("kb_documents", {
-  id: serial("id").primaryKey(),
-  folderId: bigint("folderId", { mode: "number", unsigned: true }),
-  title: varchar("title", { length: 500 }).notNull(),
+export const kbDocuments = sqliteTable("kb_documents", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  folderId: integer("folderId", { mode: "number" }),
+  title: text("title").notNull(),
   content: text("content"),
-  format: mysqlEnum("format", ["markdown", "text", "json", "html", "code"])
+  format: text("format", { enum: ["markdown", "text", "json", "html", "code"] })
     .default("markdown")
     .notNull(),
-  tags: json("tags").$type<string[]>(),
-  metadata: json("metadata").$type<{
+  tags: text("tags", { mode: "json" }).$type<string[]>(),
+  metadata: text("metadata", { mode: "json" }).$type<{
     wordCount?: number;
     source?: string;
     vectorized?: boolean;
     lastOpenedAt?: string;
   }>(),
-  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt")
-    .defaultNow()
-    .notNull()
-    .$onUpdate(() => new Date()),
+  createdBy: integer("createdBy", { mode: "number" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
+    .default(nowMs)
+    .notNull(),
 }, (table) => [
   index("kbDocuments_createdBy_idx").on(table.createdBy),
   index("kbDocuments_folderId_idx").on(table.folderId),
@@ -222,23 +213,22 @@ export type KbDocument = typeof kbDocuments.$inferSelect;
 export type InsertKbDocument = typeof kbDocuments.$inferInsert;
 
 // ========== 工作流表 ==========
-export const workflows = mysqlTable("workflows", {
-  id: serial("id").primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
+export const workflows = sqliteTable("workflows", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
   description: text("description"),
-  status: mysqlEnum("status", ["draft", "active", "paused", "error", "archived"])
+  status: text("status", { enum: ["draft", "active", "paused", "error", "archived"] })
     .default("draft")
     .notNull(),
   // 画布配置
-  canvas: json("canvas").$type<Record<string, unknown>>(),
+  canvas: text("canvas", { mode: "json" }).$type<Record<string, unknown>>(),
   // 触发器配置
-  triggers: json("triggers").$type<unknown[]>(),
-  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt")
-    .defaultNow()
-    .notNull()
-    .$onUpdate(() => new Date()),
+  triggers: text("triggers", { mode: "json" }).$type<unknown[]>(),
+  createdBy: integer("createdBy", { mode: "number" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
+    .default(nowMs)
+    .notNull(),
 }, (table) => [
   index("workflows_createdBy_idx").on(table.createdBy),
   foreignKey({
@@ -252,17 +242,17 @@ export type Workflow = typeof workflows.$inferSelect;
 export type InsertWorkflow = typeof workflows.$inferInsert;
 
 // ========== 工作流节点表 ==========
-export const workflowNodes = mysqlTable("workflow_nodes", {
-  id: serial("id").primaryKey(),
-  workflowId: bigint("workflowId", { mode: "number", unsigned: true }).notNull(),
-  type: varchar("type", { length: 100 }).notNull(),
-  label: varchar("label", { length: 255 }),
-  positionX: float("positionX").default(0),
-  positionY: float("positionY").default(0),
-  config: json("config").$type<Record<string, unknown>>(),
-  connections: json("connections").$type<unknown[]>(),
-  sortOrder: int("sortOrder").default(0),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+export const workflowNodes = sqliteTable("workflow_nodes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  workflowId: integer("workflowId", { mode: "number" }).notNull(),
+  type: text("type").notNull(),
+  label: text("label"),
+  positionX: real("positionX").default(0),
+  positionY: real("positionY").default(0),
+  config: text("config", { mode: "json" }).$type<Record<string, unknown>>(),
+  connections: text("connections", { mode: "json" }).$type<unknown[]>(),
+  sortOrder: integer("sortOrder").default(0),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
 }, (table) => [
   index("workflowNodes_workflowId_idx").on(table.workflowId),
   foreignKey({
@@ -276,10 +266,10 @@ export type WorkflowNode = typeof workflowNodes.$inferSelect;
 export type InsertWorkflowNode = typeof workflowNodes.$inferInsert;
 
 // ========== 数据源表 ==========
-export const dataSources = mysqlTable("data_sources", {
-  id: serial("id").primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
-  type: mysqlEnum("type", [
+export const dataSources = sqliteTable("data_sources", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  type: text("type", { enum: [
     "cloud_drive",
     "nas",
     "database",
@@ -288,19 +278,18 @@ export const dataSources = mysqlTable("data_sources", {
     "rss",
     "notion",
     "obsidian",
-  ]).notNull(),
-  config: json("config").$type<Record<string, unknown>>(),
-  status: mysqlEnum("status", ["connected", "disconnected", "error", "syncing"])
+  ] }).notNull(),
+  config: text("config", { mode: "json" }).$type<Record<string, unknown>>(),
+  status: text("status", { enum: ["connected", "disconnected", "error", "syncing"] })
     .default("disconnected")
     .notNull(),
-  lastSyncAt: timestamp("lastSyncAt"),
+  lastSyncAt: integer("lastSyncAt", { mode: "timestamp_ms" }),
   lastError: text("lastError"),
-  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt")
-    .defaultNow()
-    .notNull()
-    .$onUpdate(() => new Date()),
+  createdBy: integer("createdBy", { mode: "number" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
+    .default(nowMs)
+    .notNull(),
 }, (table) => [
   index("dataSources_type_idx").on(table.type),
   index("dataSources_createdBy_idx").on(table.createdBy),
@@ -315,16 +304,16 @@ export type DataSource = typeof dataSources.$inferSelect;
 export type InsertDataSource = typeof dataSources.$inferInsert;
 
 // ========== 上传文件表 ==========
-export const uploadedFiles = mysqlTable("uploaded_files", {
-  id: serial("id").primaryKey(),
-  filename: varchar("filename", { length: 500 }).notNull(),
-  originalName: varchar("originalName", { length: 500 }).notNull(),
-  mimeType: varchar("mimeType", { length: 255 }),
-  size: bigint("size", { mode: "number", unsigned: true }),
+export const uploadedFiles = sqliteTable("uploaded_files", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  filename: text("filename").notNull(),
+  originalName: text("originalName").notNull(),
+  mimeType: text("mimeType"),
+  size: integer("size", { mode: "number" }),
   storagePath: text("storagePath").notNull(),
-  metadata: json("metadata").$type<Record<string, unknown>>(),
-  uploadedBy: bigint("uploadedBy", { mode: "number", unsigned: true }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  metadata: text("metadata", { mode: "json" }).$type<Record<string, unknown>>(),
+  uploadedBy: integer("uploadedBy", { mode: "number" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
 }, (table) => [
   index("uploadedFiles_uploadedBy_idx").on(table.uploadedBy),
   foreignKey({
@@ -338,22 +327,21 @@ export type UploadedFile = typeof uploadedFiles.$inferSelect;
 export type InsertUploadedFile = typeof uploadedFiles.$inferInsert;
 
 // ========== 向量集合表（用于向量化模型配置） ==========
-export const vectorCollections = mysqlTable("vector_collections", {
-  id: serial("id").primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
+export const vectorCollections = sqliteTable("vector_collections", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
   description: text("description"),
-  model: varchar("model", { length: 255 }).default("text-embedding-3-small"),
-  dimension: int("dimension").default(1536),
-  status: mysqlEnum("status", ["ready", "building", "error"])
+  model: text("model").default("text-embedding-3-small"),
+  dimension: integer("dimension").default(1536),
+  status: text("status", { enum: ["ready", "building", "error"] })
     .default("ready")
     .notNull(),
-  documentCount: int("documentCount").default(0),
-  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt")
-    .defaultNow()
-    .notNull()
-    .$onUpdate(() => new Date()),
+  documentCount: integer("documentCount").default(0),
+  createdBy: integer("createdBy", { mode: "number" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
+    .default(nowMs)
+    .notNull(),
 }, (table) => [
   index("vectorCollections_createdBy_idx").on(table.createdBy),
   foreignKey({
@@ -367,16 +355,15 @@ export type VectorCollection = typeof vectorCollections.$inferSelect;
 export type InsertVectorCollection = typeof vectorCollections.$inferInsert;
 
 // ========== 系统设置表 ==========
-export const systemSettings = mysqlTable("system_settings", {
-  id: serial("id").primaryKey(),
-  key: varchar("key", { length: 255 }).notNull().unique(),
+export const systemSettings = sqliteTable("system_settings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  key: text("key").notNull().unique(),
   value: text("value"),
-  category: varchar("category", { length: 100 }).default("general"),
-  updatedBy: bigint("updatedBy", { mode: "number", unsigned: true }),
-  updatedAt: timestamp("updatedAt")
-    .defaultNow()
-    .notNull()
-    .$onUpdate(() => new Date()),
+  category: text("category").default("general"),
+  updatedBy: integer("updatedBy", { mode: "number" }),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
+    .default(nowMs)
+    .notNull(),
 }, (table) => [
   index("systemSettings_key_idx").on(table.key),
   index("systemSettings_category_idx").on(table.category),
@@ -391,20 +378,20 @@ export type SystemSetting = typeof systemSettings.$inferSelect;
 export type InsertSystemSetting = typeof systemSettings.$inferInsert;
 
 // ========== 摄取任务表（上传/数据源同步/备份等统一入口） ==========
-export const ingestionJobs = mysqlTable("ingestion_jobs", {
-  id: serial("id").primaryKey(),
-  sourceType: mysqlEnum("sourceType", ["upload", "datasource", "backup", "manual"]).notNull(),
-  sourceId: varchar("sourceId", { length: 255 }),
-  status: mysqlEnum("status", ["pending", "running", "completed", "failed", "cancelled"]).default("pending").notNull(),
-  totalItems: int("totalItems").default(0),
-  processedItems: int("processedItems").default(0),
-  failedItems: int("failedItems").default(0),
+export const ingestionJobs = sqliteTable("ingestion_jobs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  sourceType: text("sourceType", { enum: ["upload", "datasource", "backup", "manual"] }).notNull(),
+  sourceId: text("sourceId"),
+  status: text("status", { enum: ["pending", "running", "completed", "failed", "cancelled"] }).default("pending").notNull(),
+  totalItems: integer("totalItems").default(0),
+  processedItems: integer("processedItems").default(0),
+  failedItems: integer("failedItems").default(0),
   error: text("error"),
-  retryCount: int("retryCount").default(0),
-  metadata: json("metadata").$type<Record<string, unknown>>(),
-  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+  retryCount: integer("retryCount").default(0),
+  metadata: text("metadata", { mode: "json" }).$type<Record<string, unknown>>(),
+  createdBy: integer("createdBy", { mode: "number" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
 }, (table) => [
   index("ingestionJobs_sourceType_idx").on(table.sourceType),
   index("ingestionJobs_status_idx").on(table.status),
@@ -420,21 +407,21 @@ export type IngestionJob = typeof ingestionJobs.$inferSelect;
 export type InsertIngestionJob = typeof ingestionJobs.$inferInsert;
 
 // ========== 摄取项目表（任务中的单个文件/对象） ==========
-export const ingestionItems = mysqlTable("ingestion_items", {
-  id: serial("id").primaryKey(),
-  jobId: bigint("jobId", { mode: "number", unsigned: true }).notNull(),
-  externalId: varchar("externalId", { length: 500 }),
-  name: varchar("name", { length: 500 }).notNull(),
-  mimeType: varchar("mimeType", { length: 255 }),
-  size: bigint("size", { mode: "number", unsigned: true }),
-  status: mysqlEnum("status", ["pending", "parsing", "chunking", "indexing", "completed", "failed", "unsupported"]).default("pending").notNull(),
+export const ingestionItems = sqliteTable("ingestion_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  jobId: integer("jobId", { mode: "number" }).notNull(),
+  externalId: text("externalId"),
+  name: text("name").notNull(),
+  mimeType: text("mimeType"),
+  size: integer("size", { mode: "number" }),
+  status: text("status", { enum: ["pending", "parsing", "chunking", "indexing", "completed", "failed", "unsupported"] }).default("pending").notNull(),
   error: text("error"),
   sourceUrl: text("sourceUrl"),
   storagePath: text("storagePath"),
-  documentId: bigint("documentId", { mode: "number", unsigned: true }),
-  metadata: json("metadata").$type<Record<string, unknown>>(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+  documentId: integer("documentId", { mode: "number" }),
+  metadata: text("metadata", { mode: "json" }).$type<Record<string, unknown>>(),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
 }, (table) => [
   index("ingestionItems_jobId_idx").on(table.jobId),
   index("ingestionItems_status_idx").on(table.status),
@@ -450,16 +437,16 @@ export type IngestionItem = typeof ingestionItems.$inferSelect;
 export type InsertIngestionItem = typeof ingestionItems.$inferInsert;
 
 // ========== 文档分块表（向量搜索基本单元） ==========
-export const documentChunks = mysqlTable("document_chunks", {
-  id: serial("id").primaryKey(),
-  documentId: bigint("documentId", { mode: "number", unsigned: true }).notNull(),
-  itemId: bigint("itemId", { mode: "number", unsigned: true }),
+export const documentChunks = sqliteTable("document_chunks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  documentId: integer("documentId", { mode: "number" }).notNull(),
+  itemId: integer("itemId", { mode: "number" }),
   content: text("content").notNull(),
-  chunkIndex: int("chunkIndex").default(0).notNull(),
-  embedding: json("embedding").$type<number[]>(),
-  embeddingModel: varchar("embeddingModel", { length: 255 }),
-  metadata: json("metadata").$type<Record<string, unknown>>(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  chunkIndex: integer("chunkIndex").default(0).notNull(),
+  embedding: text("embedding", { mode: "json" }).$type<number[]>(),
+  embeddingModel: text("embeddingModel"),
+  metadata: text("metadata", { mode: "json" }).$type<Record<string, unknown>>(),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
 }, (table) => [
   index("documentChunks_documentId_idx").on(table.documentId),
   index("documentChunks_itemId_idx").on(table.itemId),
@@ -474,29 +461,29 @@ export type DocumentChunk = typeof documentChunks.$inferSelect;
 export type InsertDocumentChunk = typeof documentChunks.$inferInsert;
 
 // ========== 备份任务表（持久化备份状态） ==========
-export const backupJobs = mysqlTable("backup_jobs", {
-  id: serial("id").primaryKey(),
-  target: varchar("target", { length: 100 }).notNull(),
+export const backupJobs = sqliteTable("backup_jobs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  target: text("target").notNull(),
   sourcePath: text("sourcePath").notNull(),
-  status: mysqlEnum("status", ["pending", "running", "completed", "failed", "partial"]).default("pending").notNull(),
-  progress: int("progress").default(0),
-  filesTotal: int("filesTotal").default(0),
-  filesDone: int("filesDone").default(0),
-  filesFailed: int("filesFailed").default(0),
-  manifest: json("manifest").$type<Record<string, unknown>>(),
-  config: json("config").$type<Record<string, unknown>>(),
-  cron: varchar("cron", { length: 100 }),
-  enabled: mysqlEnum("enabled", ["true", "false"]).default("false").notNull(),
-  nextRunAt: timestamp("nextRunAt"),
-  keepLastN: int("keepLastN").default(7),
-  maxRetries: int("maxRetries").default(3),
-  retryCount: int("retryCount").default(0),
+  status: text("status", { enum: ["pending", "running", "completed", "failed", "partial"] }).default("pending").notNull(),
+  progress: integer("progress").default(0),
+  filesTotal: integer("filesTotal").default(0),
+  filesDone: integer("filesDone").default(0),
+  filesFailed: integer("filesFailed").default(0),
+  manifest: text("manifest", { mode: "json" }).$type<Record<string, unknown>>(),
+  config: text("config", { mode: "json" }).$type<Record<string, unknown>>(),
+  cron: text("cron"),
+  enabled: text("enabled", { enum: ["true", "false"] }).default("false").notNull(),
+  nextRunAt: integer("nextRunAt", { mode: "timestamp_ms" }),
+  keepLastN: integer("keepLastN").default(7),
+  maxRetries: integer("maxRetries").default(3),
+  retryCount: integer("retryCount").default(0),
   error: text("error"),
-  startedAt: timestamp("startedAt"),
-  completedAt: timestamp("completedAt"),
-  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+  startedAt: integer("startedAt", { mode: "timestamp_ms" }),
+  completedAt: integer("completedAt", { mode: "timestamp_ms" }),
+  createdBy: integer("createdBy", { mode: "number" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
 }, (table) => [
   index("backupJobs_target_idx").on(table.target),
   index("backupJobs_status_idx").on(table.status),
@@ -513,15 +500,15 @@ export type BackupJob = typeof backupJobs.$inferSelect;
 export type InsertBackupJob = typeof backupJobs.$inferInsert;
 
 // ========== 备份任务文件表 ==========
-export const backupJobFiles = mysqlTable("backup_job_files", {
-  id: serial("id").primaryKey(),
-  jobId: bigint("jobId", { mode: "number", unsigned: true }).notNull(),
+export const backupJobFiles = sqliteTable("backup_job_files", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  jobId: integer("jobId", { mode: "number" }).notNull(),
   relativePath: text("relativePath").notNull(),
-  size: bigint("size", { mode: "number", unsigned: true }),
-  checksum: varchar("checksum", { length: 255 }),
-  status: mysqlEnum("status", ["pending", "uploaded", "failed"]).default("pending").notNull(),
+  size: integer("size", { mode: "number" }),
+  checksum: text("checksum"),
+  status: text("status", { enum: ["pending", "uploaded", "failed"] }).default("pending").notNull(),
   error: text("error"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
 }, (table) => [
   index("backupJobFiles_jobId_idx").on(table.jobId),
   foreignKey({
@@ -535,22 +522,22 @@ export type BackupJobFile = typeof backupJobFiles.$inferSelect;
 export type InsertBackupJobFile = typeof backupJobFiles.$inferInsert;
 
 // ========== 恢复任务表 ==========
-export const restoreJobs = mysqlTable("restore_jobs", {
-  id: serial("id").primaryKey(),
-  backupJobId: bigint("backupJobId", { mode: "number", unsigned: true }).notNull(),
+export const restoreJobs = sqliteTable("restore_jobs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  backupJobId: integer("backupJobId", { mode: "number" }).notNull(),
   targetPath: text("targetPath").notNull(),
-  status: mysqlEnum("status", ["pending", "running", "completed", "failed", "partial"]).default("pending").notNull(),
-  progress: int("progress").default(0),
-  filesTotal: int("filesTotal").default(0),
-  filesDone: int("filesDone").default(0),
-  filesFailed: int("filesFailed").default(0),
-  manifestVerified: mysqlEnum("manifestVerified", ["pending", "passed", "failed"]).default("pending").notNull(),
+  status: text("status", { enum: ["pending", "running", "completed", "failed", "partial"] }).default("pending").notNull(),
+  progress: integer("progress").default(0),
+  filesTotal: integer("filesTotal").default(0),
+  filesDone: integer("filesDone").default(0),
+  filesFailed: integer("filesFailed").default(0),
+  manifestVerified: text("manifestVerified", { enum: ["pending", "passed", "failed"] }).default("pending").notNull(),
   error: text("error"),
-  startedAt: timestamp("startedAt"),
-  completedAt: timestamp("completedAt"),
-  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+  startedAt: integer("startedAt", { mode: "timestamp_ms" }),
+  completedAt: integer("completedAt", { mode: "timestamp_ms" }),
+  createdBy: integer("createdBy", { mode: "number" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  updatedAt: integer("updatedAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
 }, (table) => [
   index("restoreJobs_backupJobId_idx").on(table.backupJobId),
   index("restoreJobs_status_idx").on(table.status),
@@ -570,18 +557,18 @@ export type RestoreJob = typeof restoreJobs.$inferSelect;
 export type InsertRestoreJob = typeof restoreJobs.$inferInsert;
 
 // ========== 工作流运行表 ==========
-export const workflowRuns = mysqlTable("workflow_runs", {
-  id: serial("id").primaryKey(),
-  workflowId: bigint("workflowId", { mode: "number", unsigned: true }).notNull(),
-  status: mysqlEnum("status", ["pending", "running", "completed", "failed", "cancelled"]).default("pending").notNull(),
-  triggeredBy: mysqlEnum("triggeredBy", ["manual", "api", "cron", "webhook"]).default("manual").notNull(),
-  input: json("input").$type<Record<string, unknown>>(),
-  output: json("output").$type<Record<string, unknown>>(),
+export const workflowRuns = sqliteTable("workflow_runs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  workflowId: integer("workflowId", { mode: "number" }).notNull(),
+  status: text("status", { enum: ["pending", "running", "completed", "failed", "cancelled"] }).default("pending").notNull(),
+  triggeredBy: text("triggeredBy", { enum: ["manual", "api", "cron", "webhook"] }).default("manual").notNull(),
+  input: text("input", { mode: "json" }).$type<Record<string, unknown>>(),
+  output: text("output", { mode: "json" }).$type<Record<string, unknown>>(),
   error: text("error"),
-  startedAt: timestamp("startedAt"),
-  completedAt: timestamp("completedAt"),
-  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  startedAt: integer("startedAt", { mode: "timestamp_ms" }),
+  completedAt: integer("completedAt", { mode: "timestamp_ms" }),
+  createdBy: integer("createdBy", { mode: "number" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
 }, (table) => [
   index("workflowRuns_workflowId_idx").on(table.workflowId),
   index("workflowRuns_status_idx").on(table.status),
@@ -601,17 +588,17 @@ export type WorkflowRun = typeof workflowRuns.$inferSelect;
 export type InsertWorkflowRun = typeof workflowRuns.$inferInsert;
 
 // ========== 工作流运行节点结果表 ==========
-export const workflowRunNodes = mysqlTable("workflow_run_nodes", {
-  id: serial("id").primaryKey(),
-  runId: bigint("runId", { mode: "number", unsigned: true }).notNull(),
-  nodeId: bigint("nodeId", { mode: "number", unsigned: true }).notNull(),
-  status: mysqlEnum("status", ["pending", "running", "completed", "failed", "skipped"]).default("pending").notNull(),
-  input: json("input").$type<Record<string, unknown>>(),
-  output: json("output").$type<Record<string, unknown>>(),
+export const workflowRunNodes = sqliteTable("workflow_run_nodes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  runId: integer("runId", { mode: "number" }).notNull(),
+  nodeId: integer("nodeId", { mode: "number" }).notNull(),
+  status: text("status", { enum: ["pending", "running", "completed", "failed", "skipped"] }).default("pending").notNull(),
+  input: text("input", { mode: "json" }).$type<Record<string, unknown>>(),
+  output: text("output", { mode: "json" }).$type<Record<string, unknown>>(),
   error: text("error"),
-  startedAt: timestamp("startedAt"),
-  completedAt: timestamp("completedAt"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  startedAt: integer("startedAt", { mode: "timestamp_ms" }),
+  completedAt: integer("completedAt", { mode: "timestamp_ms" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
 }, (table) => [
   index("workflowRunNodes_runId_idx").on(table.runId),
   index("workflowRunNodes_nodeId_idx").on(table.nodeId),
@@ -631,15 +618,15 @@ export type WorkflowRunNode = typeof workflowRunNodes.$inferSelect;
 export type InsertWorkflowRunNode = typeof workflowRunNodes.$inferInsert;
 
 // ========== 审计日志表 ==========
-export const auditActionEnumValues = ["create", "update", "delete", "run"] as const;
-export const auditLogs = mysqlTable("audit_logs", {
-  id: serial("id").primaryKey(),
-  entityType: varchar("entityType", { length: 100 }).notNull(),
-  entityId: bigint("entityId", { mode: "number", unsigned: true }).notNull(),
-  action: mysqlEnum("action", ["create", "update", "delete", "run"]).notNull(),
-  actorId: bigint("actorId", { mode: "number", unsigned: true }),
-  details: json("details").$type<Record<string, unknown>>(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+export const auditActionEnumValues = ["create", "update", "delete", "run"];
+export const auditLogs = sqliteTable("audit_logs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  entityType: text("entityType").notNull(),
+  entityId: integer("entityId", { mode: "number" }).notNull(),
+  action: text("action", { enum: ["create", "update", "delete", "run"] }).notNull(),
+  actorId: integer("actorId", { mode: "number" }),
+  details: text("details", { mode: "json" }).$type<Record<string, unknown>>(),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
 }, (table) => [
   index("auditLogs_entity_idx").on(table.entityType, table.entityId),
   index("auditLogs_actor_idx").on(table.actorId),
@@ -654,19 +641,19 @@ export type AuditLog = typeof auditLogs.$inferSelect;
 export type InsertAuditLog = typeof auditLogs.$inferInsert;
 
 // ========== 外部 Agent API 密钥表 ==========
-export const apiKeys = mysqlTable("api_keys", {
-  id: serial("id").primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
-  keyHash: varchar("keyHash", { length: 255 }).notNull().unique(),
-  keyPrefix: varchar("keyPrefix", { length: 12 }).notNull(),
-  agentId: bigint("agentId", { mode: "number", unsigned: true }).notNull(),
-  permissions: json("permissions").$type<Record<string, unknown>>(),
-  scopes: json("scopes").$type<string[]>(),
-  isActive: mysqlEnum("isActive", ["true", "false"]).default("true").notNull(),
-  expiresAt: timestamp("expiresAt"),
-  lastUsedAt: timestamp("lastUsedAt"),
-  createdBy: bigint("createdBy", { mode: "number", unsigned: true }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+export const apiKeys = sqliteTable("api_keys", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  keyHash: text("keyHash").notNull().unique(),
+  keyPrefix: text("keyPrefix").notNull(),
+  agentId: integer("agentId", { mode: "number" }).notNull(),
+  permissions: text("permissions", { mode: "json" }).$type<Record<string, unknown>>(),
+  scopes: text("scopes", { mode: "json" }).$type<string[]>(),
+  isActive: text("isActive", { enum: ["true", "false"] }).default("true").notNull(),
+  expiresAt: integer("expiresAt", { mode: "timestamp_ms" }),
+  lastUsedAt: integer("lastUsedAt", { mode: "timestamp_ms" }),
+  createdBy: integer("createdBy", { mode: "number" }),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
 }, (table) => [
   index("apiKeys_agentId_idx").on(table.agentId),
   index("apiKeys_keyPrefix_idx").on(table.keyPrefix),
