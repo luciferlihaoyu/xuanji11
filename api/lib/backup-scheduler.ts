@@ -117,7 +117,7 @@ export async function runDueBackupSchedules(): Promise<void> {
       config,
       createdBy: schedule.createdBy,
     });
-    const runJobId = Number(result[0].insertId);
+    const runJobId = Number(result.lastInsertRowid);
     console.log(`[BackupScheduler] Created backup run job ${runJobId} for schedule ${schedule.id}`);
 
     // 计算下次运行时间

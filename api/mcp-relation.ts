@@ -41,7 +41,7 @@ async function handleRelationsCreate(args: Record<string, unknown>, user: User, 
     weight: z.number().default(1),
   }).parse(args);
   const result = await getDb().insert(knowledgeEdges).values(clean({ ...input, createdBy: user.id }));
-  return textResult({ id: Number(result[0].insertId) });
+  return textResult({ id: Number(result.lastInsertRowid) });
 }
 
 async function handleRelationsDiscover(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {

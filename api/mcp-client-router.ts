@@ -143,7 +143,7 @@ export const mcpClientRouter = createRouter({
         authToken: normalizeAuthToken(input.authToken),
         enabled: input.enabled ?? true,
       }));
-      const id = Number(result[0].insertId);
+      const id = Number(result.lastInsertRowid);
       await logAudit(ctx, "mcp_server", "create", id, auditDetails(input));
       return { id };
     }),

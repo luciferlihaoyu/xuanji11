@@ -45,7 +45,7 @@ export const workflowRouter = createRouter({
         triggers: input.triggers as unknown[],
         createdBy: ctx.user?.id ?? null,
       }));
-      const id = Number(result[0].insertId);
+      const id = Number(result.lastInsertRowid);
       await logAudit(ctx, "workflow", "create", id, input as Record<string, unknown>);
       return { id };
     }),
@@ -130,7 +130,7 @@ export const workflowRouter = createRouter({
       if (input.config !== undefined) values.config = input.config;
       if (input.connections !== undefined) values.connections = input.connections;
       const result = await db.insert(workflowNodes).values(values as typeof workflowNodes.$inferInsert);
-      const id = Number(result[0].insertId);
+      const id = Number(result.lastInsertRowid);
       await logAudit(ctx, "workflow_node", "create", id, input as Record<string, unknown>);
       return { id };
     }),
@@ -221,7 +221,7 @@ export const workflowRouter = createRouter({
           clientIdToDbId.set(node.clientId, node.id);
         } else {
           const result = await db.insert(workflowNodes).values(baseValues as typeof workflowNodes.$inferInsert);
-          const newId = Number(result[0].insertId);
+          const newId = Number(result.lastInsertRowid);
           clientIdToDbId.set(node.clientId, newId);
         }
       }

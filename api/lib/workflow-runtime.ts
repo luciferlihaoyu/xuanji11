@@ -122,7 +122,7 @@ const nodeExecutors: Record<string, NodeExecutor> = {
       tags: ['workflow'],
       metadata: { source: 'workflow' },
     });
-    return { saved: true, documentId: Number(result[0].insertId), title };
+    return { saved: true, documentId: Number(result.lastInsertRowid), title };
   },
 
   'text-extract': async (config) => {
@@ -167,7 +167,7 @@ const nodeExecutors: Record<string, NodeExecutor> = {
       label,
       type: 'related',
     });
-    return { sourceId, targetId, edgeId: Number(result[0].insertId), created: true };
+    return { sourceId, targetId, edgeId: Number(result.lastInsertRowid), created: true };
   },
 
   'call-agent': async (config) => executeCallAgent(config),
@@ -277,7 +277,7 @@ export async function executeWorkflow(
     startedAt: new Date(),
     createdBy: createdBy ?? null,
   });
-  const runId = Number(runResult[0].insertId);
+  const runId = Number(runResult.lastInsertRowid);
 
   const nodeResultRows = new Map<number, number>();
   // N+1 优化：一次 values 批量插入所有节点运行记录，drizzle 返回值为有序数组
@@ -292,8 +292,8 @@ export async function executeWorkflow(
         error: null as string | null,
       })),
     );
-    // MySQL 批量 insert 自增 id 在 result[0].insertId 中按入参顺序连续分配（drizzle/mysql2 行为）
-    const baseInsertId = Number(bulkInsertResult[0].insertId);
+    // MySQL 批量 insert 自增 id 在 result.lastInsertRowid 中按入参顺序连续分配（drizzle/mysql2 行为）
+    const baseInsertId = Number(bulkInsertResult.lastInsertRowid);
     sorted.forEach((node, index) => {
       nodeResultRows.set(node.id, baseInsertId + index);
     });

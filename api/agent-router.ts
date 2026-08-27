@@ -89,7 +89,7 @@ export const agentRouter = createRouter({
         permissions: input.permissions as Record<string, unknown>,
         createdBy: ctx.user?.id ?? null,
       }));
-      const id = Number(result[0].insertId);
+      const id = Number(result.lastInsertRowid);
       await logAudit(ctx, "agent", "create", id, input as Record<string, unknown>);
       return { id };
     }),
@@ -170,7 +170,7 @@ export const agentRouter = createRouter({
         createdBy: ctx.user?.id ?? null,
       }));
 
-      const keyId = Number(result[0].insertId);
+      const keyId = Number(result.lastInsertRowid);
       await logAction(ctx.user?.id ?? null, "create", {
         entityType: "api_key",
         entityId: keyId,

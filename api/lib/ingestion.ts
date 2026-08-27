@@ -123,7 +123,7 @@ export async function createIngestionJob(
     createdBy,
   };
   const result = await db.insert(ingestionJobs).values(values);
-  return Number(result[0].insertId);
+  return Number(result.lastInsertRowid);
 }
 
 export async function ingestFile(options: IngestFileOptions): Promise<{ itemId: number; documentId?: number }> {
@@ -165,7 +165,7 @@ export async function ingestFile(options: IngestFileOptions): Promise<{ itemId: 
       metadata: { ...(extraMetadata ?? {}), uploadedFileId: uploadedFileId ?? null },
     });
     await db.update(ingestionJobs).set({ totalItems: 1, processedItems: 1, failedItems: 1, status: "completed" }).where(eq(ingestionJobs.id, jobId));
-    return { itemId: Number(itemResult[0].insertId) };
+    return { itemId: Number(itemResult.lastInsertRowid) };
   }
 
   const ext = path.extname(fileName).toLowerCase();
@@ -185,7 +185,7 @@ export async function ingestFile(options: IngestFileOptions): Promise<{ itemId: 
     metadata: { ...(extraMetadata ?? {}), uploadedFileId: uploadedFileId ?? null },
   };
   const itemResult = await db.insert(ingestionItems).values(itemValues);
-  const itemId = Number(itemResult[0].insertId);
+  const itemId = Number(itemResult.lastInsertRowid);
 
   await db
     .update(ingestionJobs)
@@ -222,7 +222,7 @@ export async function ingestFile(options: IngestFileOptions): Promise<{ itemId: 
     createdBy: createdBy ?? null,
   };
   const docResult = await db.insert(kbDocuments).values(docValues);
-  const documentId = Number(docResult[0].insertId);
+  const documentId = Number(docResult.lastInsertRowid);
 
   await db.update(ingestionItems).set({ status: "chunking", documentId }).where(eq(ingestionItems.id, itemId));
 

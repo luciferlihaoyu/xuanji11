@@ -784,7 +784,7 @@ export async function createCollection(input: CreateCollectionInput): Promise<{ 
     dimension: input.dimension ?? 1536,
     createdBy: input.createdBy ?? null,
   });
-  return { id: Number(result[0].insertId) };
+  return { id: Number(result.lastInsertRowid) };
 }
 
 export async function deleteCollection(name: string): Promise<void> {

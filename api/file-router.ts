@@ -69,7 +69,7 @@ export const fileRouter = createRouter({
         metadata: input.metadata as Record<string, unknown>,
         uploadedBy: ctx.user?.id ?? null,
       }));
-      const id = Number(result[0].insertId);
+      const id = Number(result.lastInsertRowid);
       await logAudit(ctx, "uploaded_file", "create", id, input as Record<string, unknown>);
       return { id };
     }),

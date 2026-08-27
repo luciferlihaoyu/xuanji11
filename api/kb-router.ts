@@ -55,7 +55,7 @@ export const kbRouter = createRouter({
         sortOrder: input.sortOrder,
         createdBy: ctx.user?.id ?? null,
       });
-      const id = Number(result[0].insertId);
+      const id = Number(result.lastInsertRowid);
       await logAudit(ctx, "kb_folder", "create", id, input as Record<string, unknown>);
       return { id };
     }),
@@ -166,7 +166,7 @@ export const kbRouter = createRouter({
         metadata: input.metadata as Record<string, unknown>,
         createdBy: ctx.user?.id ?? null,
       }));
-      const id = Number(result[0].insertId);
+      const id = Number(result.lastInsertRowid);
       await logAction(ctx.user?.id ?? null, "create", {
         entityType: "kb_document",
         entityId: id,

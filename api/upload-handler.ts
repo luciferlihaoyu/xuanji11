@@ -147,7 +147,7 @@ export async function saveUploadedFile(
     throw new Error("文件保存失败");
   }
 
-  const id = Number(result[0].insertId);
+  const id = Number(result.lastInsertRowid);
 
   return {
     id,

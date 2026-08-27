@@ -68,7 +68,7 @@ export const knowledgeRouter = createRouter({
         metadata: input.metadata as Record<string, unknown>,
         createdBy: ctx.user?.id ?? null,
       }));
-      const id = Number(result[0].insertId);
+      const id = Number(result.lastInsertRowid);
       await logAudit(ctx, "knowledge_node", "create", id, input as Record<string, unknown>);
       return { id };
     }),
@@ -166,7 +166,7 @@ export const knowledgeRouter = createRouter({
         weight: input.weight,
         createdBy: ctx.user?.id ?? null,
       }));
-      const id = Number(result[0].insertId);
+      const id = Number(result.lastInsertRowid);
       await logAudit(ctx, "knowledge_edge", "create", id, input as Record<string, unknown>);
       return { id };
     }),

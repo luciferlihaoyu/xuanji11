@@ -50,7 +50,7 @@ export const vectorRouter = createRouter({
         status: input.status,
         createdBy: ctx.user?.id ?? null,
       }));
-      const id = Number(result[0].insertId);
+      const id = Number(result.lastInsertRowid);
       await logAudit(ctx, "vector_collection", "create", id, input as Record<string, unknown>);
       return { id };
     }),

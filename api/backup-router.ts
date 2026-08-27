@@ -121,7 +121,7 @@ export const backupRouter = createRouter({
       }
 
       const result = await db.insert(backupJobs).values(values);
-      const jobId = Number(result[0].insertId);
+      const jobId = Number(result.lastInsertRowid);
 
       if (!isScheduled) {
         executeBackup(jobId, connConfig).catch(console.error);
@@ -218,7 +218,7 @@ export const backupRouter = createRouter({
         manifestVerified: "pending",
         createdBy: ctx.user?.id ?? null,
       });
-      const restoreJobId = Number(result[0].insertId);
+      const restoreJobId = Number(result.lastInsertRowid);
 
       executeRestore(restoreJobId).catch(console.error);
 

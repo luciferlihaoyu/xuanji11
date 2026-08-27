@@ -189,7 +189,7 @@ export async function writeTaskMemory(input: z.infer<typeof writeTaskMemoryInput
     createdBy: null,
   };
   const docResult = await db.insert(kbDocuments).values(docValues as never);
-  const documentId = Number(docResult[0].insertId);
+  const documentId = Number(docResult.lastInsertRowid);
 
   // 2.2 建 document 节点
   const docNodeResult = await db.insert(knowledgeNodes).values({
@@ -208,7 +208,7 @@ export async function writeTaskMemory(input: z.infer<typeof writeTaskMemoryInput
     },
     createdBy: null,
   });
-  const docNodeId = Number(docNodeResult[0].insertId);
+  const docNodeId = Number(docNodeResult.lastInsertRowid);
 
   // 2.3 建 project 节点（不存在才建）
   const existingProject = await db
@@ -227,7 +227,7 @@ export async function writeTaskMemory(input: z.infer<typeof writeTaskMemoryInput
       metadata: { sourceSystem: "tiangong", externalType: "project", externalId: memory.project },
       createdBy: null,
     });
-    projectNodeId = Number(pr[0].insertId);
+    projectNodeId = Number(pr.lastInsertRowid);
   }
 
   // 2.4 建边：project contains document
@@ -239,7 +239,7 @@ export async function writeTaskMemory(input: z.infer<typeof writeTaskMemoryInput
     weight: 1,
     createdBy: null,
   });
-  const edgeId = Number(edgeResult[0].insertId);
+  const edgeId = Number(edgeResult.lastInsertRowid);
 
   // 2.5 向量化（失败不阻断）
   const indexed = await tryIndexDocumentById(documentId);
@@ -282,7 +282,7 @@ export async function linkArtifact(input: z.infer<typeof linkArtifactInputSchema
     },
     createdBy: null,
   });
-  const nodeId = Number(nodeResult[0].insertId);
+  const nodeId = Number(nodeResult.lastInsertRowid);
 
   // 3.2 document -> artifact references 边
   const edgeResult = await db.insert(knowledgeEdges).values({
@@ -293,7 +293,7 @@ export async function linkArtifact(input: z.infer<typeof linkArtifactInputSchema
     weight: 1,
     createdBy: null,
   });
-  const edgeId = Number(edgeResult[0].insertId);
+  const edgeId = Number(edgeResult.lastInsertRowid);
 
   return { linked: true, nodeId, edgeId };
 }

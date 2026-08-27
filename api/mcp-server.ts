@@ -125,7 +125,7 @@ async function handleKnowledgeCreate(args: Record<string, unknown>, user: User, 
   assertScope(auth, "knowledge:write");
   const input = z.object({ title: z.string().min(1).max(500), content: z.string().optional(), type: knowledgeTypeSchema.default("concept") }).parse(args);
   const result = await getDb().insert(knowledgeNodes).values(clean({ ...input, createdBy: user.id }));
-  return textResult({ id: Number(result[0].insertId) });
+  return textResult({ id: Number(result.lastInsertRowid) });
 }
 
 async function handleDocumentRead(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
@@ -156,7 +156,7 @@ async function handleDocumentWrite(args: Record<string, unknown>, user: User, au
     folderId: input.folderId ?? null,
     createdBy: user.id,
   }));
-  const id = Number(result[0].insertId);
+  const id = Number(result.lastInsertRowid);
   // 自动索引：有内容即入向量库；索引失败不影响文档创建
   const indexed = input.content ? await tryIndexDocumentById(id) : { chunks: 0, skipped: true };
   return textResult({ id, chunks: indexed.chunks });
