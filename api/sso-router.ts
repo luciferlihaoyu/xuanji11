@@ -26,8 +26,10 @@ import { env } from "./lib/env";
 const SSO_JWT_ALG = "HS256";
 const SSO_TOKEN_TYP = "sso-launch";
 const SSO_TOKEN_APP = "xuanji";
-/** SSO 令牌有效期（秒），与签发方契约 exp = iat + 120 一致；仅用于一次性账本的过期清理兜底。 */
-const SSO_TOKEN_TTL_SECONDS = 120;
+/** 验签时钟容差（秒）：与本地 verifyLocalToken 的 60s 容差保持一致。 */
+const SSO_CLOCK_TOLERANCE_SECONDS = 60;
+/** 容差窗口毫秒：jti 一次性账本须保留到 exp + 容差窗口结束，封堵容差窗口内的重放。 */
+const SSO_CLOCK_TOLERANCE_MS = SSO_CLOCK_TOLERANCE_SECONDS * 1000;
 
 /** 已消费 jti 的一次性账本：jti -> 过期时间戳（ms）。协议 v1 单实例内存 Map。 */
 const usedSsoJtis = new Map<string, number>();
@@ -67,15 +69,20 @@ ssoRouter.get("/launch", async (c) => {
     const result = await jose.jwtVerify(token, secret, {
       algorithms: [SSO_JWT_ALG],
       // 与本地 verifyLocalToken 的 60s 时钟容差保持一致，避免签发/校验两端时钟微小偏差误杀
-      clockTolerance: 60,
+      clockTolerance: SSO_CLOCK_TOLERANCE_SECONDS,
     });
     payload = result.payload;
   } catch {
     return c.json({ error: "凭证无效或已过期" }, 401);
   }
 
-  // 4. 类型 / 应用校验
-  if (payload.typ !== SSO_TOKEN_TYP || payload.app !== SSO_TOKEN_APP) {
+  // 4. 类型 / 应用校验；jose 默认不拒绝缺失 exp 的 token，显式要求 exp 为有效数字（否则 401）
+  if (
+    payload.typ !== SSO_TOKEN_TYP ||
+    payload.app !== SSO_TOKEN_APP ||
+    typeof payload.exp !== "number" ||
+    !Number.isFinite(payload.exp)
+  ) {
     return c.json({ error: "凭证无效或已过期" }, 401);
   }
 
@@ -96,7 +103,8 @@ ssoRouter.get("/launch", async (c) => {
   if (!jti || usedSsoJtis.has(jti)) {
     return c.json({ error: "凭证无效或已过期" }, 401);
   }
-  const expiresAt = typeof payload.exp === "number" ? payload.exp * 1000 : now + SSO_TOKEN_TTL_SECONDS * 1000;
+  // 账本保留到 exp 后 60s 容差窗口结束（exp 已在第 4 步校验为有效数字），封堵窗口内重放
+  const expiresAt = payload.exp * 1000 + SSO_CLOCK_TOLERANCE_MS;
   usedSsoJtis.set(jti, expiresAt);
 
   // 7. 建本地登录态：与本地管理员登录同一机制（signLocalToken → xuanji_session cookie）
