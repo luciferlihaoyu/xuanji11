@@ -71,6 +71,9 @@ export const env = {
   kimiOpenUrl: process.env.KIMI_OPEN_URL ?? "https://open.kimi.com",
   ownerUnionId: process.env.OWNER_UNION_ID ?? "",
 
+  // 天宫 SSO 联邦认证（可选；配置后开放 GET /sso/launch）
+  tiangongSsoSecret: process.env.TIANGONG_SSO_SECRET ?? "",
+
   // 数据库（SQLite 单文件，向量通过 sqlite-vec 扩展；DATABASE_URL 仅作历史兼容）
   sqlitePath: process.env.SQLITE_PATH ?? deriveSqlitePathFromLegacyUrl(),
   databaseUrl: process.env.DATABASE_URL ?? "",
