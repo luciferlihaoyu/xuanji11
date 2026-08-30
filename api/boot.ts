@@ -26,6 +26,7 @@ import {
 import { createCsrfMiddleware } from "./lib/csrf-middleware";
 import { handleWebhookTrigger, parsePositiveIntId } from "./lib/webhook-handler";
 import { createMcpHandler } from "./mcp-server";
+import { ssoRouter } from "./sso-router";
 import type { User } from "@db/schema";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { getRawDb } from "./queries/connection";
@@ -106,6 +107,11 @@ if (env.appId && env.appSecret) {
   const { createOAuthCallbackHandler } = await import("./kimi/auth");
   app.get(Paths.oauthCallback, createOAuthCallbackHandler());
 }
+
+// ========== 天宫 SSO 联邦认证（可选）==========
+// GET /sso/launch：天宫签发的一次性 JWT 换取本地会话（实现见 api/sso-router.ts）。
+// 挂载在 /api/* 之外，天然绕过 CSRF 与 JWT 认证中间件（匿名入口）。
+app.route("/sso", ssoRouter);
 
 // ========== JWT 认证中间件 ==========
 const authMiddleware: MiddlewareHandler<{ Bindings: HttpBindings }> = async (c, next) => {
