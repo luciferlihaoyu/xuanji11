@@ -483,7 +483,12 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
 }
 
 export async function searchVectors(query: string, topK: number = 10): Promise<SearchResult[]> {
-  return vectorEngine.searchByText(query, topK);
+  // 先把查询文本 embedding 成向量，再走向量检索。
+  // R3 重构时 SqliteVecEngine.searchByText 移除了 embed 逻辑，
+  // 这里在 service 层补回（与旧 zvec 行为一致）。
+  const [queryVector] = await embedWithFallback([query]);
+  if (!queryVector || queryVector.length === 0) return [];
+  return vectorEngine.search(queryVector, topK);
 }
 
 export async function searchByVector(vector: number[], topK: number = 10): Promise<SearchResult[]> {

@@ -5,6 +5,7 @@ import { getDb } from "./queries/connection";
 import { knowledgeNodes, knowledgeEdges, documentChunks } from "@db/schema";
 import { clean } from "./lib/clean";
 import { vectorEngine } from "./lib/vector";
+import { searchVectors as semanticSearchVectors } from "./lib/vector-service";
 import { logAudit, logAction } from "./lib/audit";
 
 export const knowledgeRouter = createRouter({
@@ -191,7 +192,9 @@ export const knowledgeRouter = createRouter({
   semanticSearch: authedQuery
     .input(z.object({ query: z.string().min(1).max(500), topK: z.number().min(1).max(50).default(10) }))
     .query(async ({ input }) => {
-      const results = await vectorEngine.searchByText(input.query, input.topK);
+      // 走 vectorService.searchVectors：内部先 embed query 再 search（与旧 zvec 行为一致）。
+      // R3 重构时 SqliteVecEngine.searchByText 移除了 embed 逻辑，这里改用带 embed 的入口。
+      const results = await semanticSearchVectors(input.query, input.topK);
 
       // 回退：向量库为空时回退到 LIKE 搜索
       if (results.length === 0) {
