@@ -72,6 +72,9 @@ export const env = {
   ownerUnionId: process.env.OWNER_UNION_ID ?? "",
 
   // 天宫 SSO 联邦认证（可选；配置后开放 GET /sso/launch）
+  // v2：EdDSA 票据从天宫 JWKS 端点拉公钥验签（模块级缓存 10 分钟）
+  tiangongJwksUrl: process.env.TIANGONG_JWKS_URL ?? "https://tiangg.zeabur.app/api/sso/jwks.json",
+  // v1 历史兼容：HS256 票据仍用共享密钥验签（部署顺序错位与回滚的安全网）
   tiangongSsoSecret: process.env.TIANGONG_SSO_SECRET ?? "",
 
   // 数据库（SQLite 单文件，向量通过 sqlite-vec 扩展；DATABASE_URL 仅作历史兼容）
