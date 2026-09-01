@@ -132,6 +132,9 @@ export function startReindexAll(): ReindexProgress {
 
 async function runReindexAll(): Promise<void> {
   try {
+    // 启动前异步校准向量表维度（修复 R3 维度不匹配导致 0 条向量的 bug）
+    const { ensureCorrectDimension } = await import("./vector-service");
+    await ensureCorrectDimension();
     const db = getDb();
     const docs = await db.select({ id: kbDocuments.id }).from(kbDocuments).where(isNotNull(kbDocuments.content));
     progress = { ...progress, total: docs.length };

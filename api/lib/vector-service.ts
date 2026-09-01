@@ -11,7 +11,7 @@ import { systemSettings, vectorCollections, type VectorCollection } from "@db/sc
 import { env } from "./env";
 import { assertEgressAllowed } from "./egress";
 import { tianshuApiUrl, tianshuApiKey, tianshuEnabled } from "./tianshu";
-import { getDb } from "../queries/connection";
+import { getDb, getRawDb } from "../queries/connection";
 import { getVectorEngine, type VectorEngine } from "./vector-engine";
 import { randomUUID } from "crypto";
 
@@ -474,7 +474,71 @@ export async function markVectorModelTemplateTest(id: string, result: VectorMode
   await writeVectorTemplates(next);
 }
 
-export const vectorEngine: VectorEngine = getVectorEngine(env.zvecDimension);
+// ==================== 向量引擎异步初始化 ====================
+// 修复 R3 引入的维度不匹配 bug：
+// 旧实现里 vectorEngine 在 module top-level 用 env.zvecDimension(默认 1536) 同步初始化，
+// 但用户的 embedding 模型（如 doubao-embedding-vision）实际输出 1024 维向量，
+// 导致 vec_chunks 表用 1536 维建好但写入 1024 维向量被 vec0 拒绝，表现为"reindex 完成但 0 条向量"。
+//
+// 修复：vectorEngine 改为可变单例 + ensureCorrectDimension() 在使用前异步读取
+// system_settings.embedding_dimension 拿到真实 dim，若与已建表不一致则 drop 旧表并重建。
+let vectorEngineInstance: VectorEngine = getVectorEngine(env.zvecDimension);
+export const vectorEngine: VectorEngine = new Proxy({} as VectorEngine, {
+  get(_target, prop) {
+    return (vectorEngineInstance as unknown as Record<string | symbol, unknown>)[prop];
+  },
+});
+
+let dimensionInitialized = false;
+let dimensionInitPromise: Promise<void> | null = null;
+
+/**
+ * 在使用向量引擎前调用：异步从 system_settings 读取真实 dim，
+ * 若与现有 vec_chunks 表不一致则 drop 旧表 + 重建（vec0 虚拟表维表不可改）。
+ * 幂等：并发调用只执行一次；dim 匹配时直接跳过。
+ */
+export async function ensureCorrectDimension(): Promise<void> {
+  if (dimensionInitialized) return;
+  if (dimensionInitPromise) return dimensionInitPromise;
+  dimensionInitPromise = (async () => {
+    try {
+      // 读取 system_settings 里的 embedding_dimension（更可靠：用户通过 UI 改的）
+      const settingValue = await getSettingValue("embedding_dimension");
+      let realDim: number;
+      if (settingValue) {
+        const parsed = parseInt(settingValue, 10);
+        realDim = parsed > 0 ? parsed : env.zvecDimension;
+      } else {
+        // 兜底：尝试 loadEmbeddingConfig（会从 env/system_settings 综合读）
+        try {
+          const cfg = await loadEmbeddingConfig();
+          realDim = cfg.dimension > 0 ? cfg.dimension : env.zvecDimension;
+        } catch {
+          realDim = env.zvecDimension;
+        }
+      }
+      const currentDim = vectorEngineInstance.dimension ?? (vectorEngineInstance as unknown as { dim?: number }).dim;
+      if (realDim === currentDim) {
+        dimensionInitialized = true;
+        return;
+      }
+      console.warn(`[VectorEngine] 维度不匹配: 当前 ${currentDim}, 真实 ${realDim}. 重建向量表...`);
+      // drop 旧 vec0 虚拟表 + 元数据表（不同 dim 不能共存）
+      const raw = getRawDb();
+      raw.exec("DROP TABLE IF EXISTS vec_chunks");
+      raw.exec("DROP TABLE IF EXISTS vec_chunk_meta");
+      // 用真实 dim 重新初始化 engine
+      vectorEngineInstance = getVectorEngine(realDim);
+      dimensionInitialized = true;
+      console.log(`[VectorEngine] 已用 dim=${realDim} 重建向量表`);
+    } catch (err) {
+      console.error("[VectorEngine] ensureCorrectDimension 失败:", err instanceof Error ? err.message : String(err));
+      // 失败时仍标记初始化完成，避免无限重试
+      dimensionInitialized = true;
+    }
+  })();
+  return dimensionInitPromise;
+}
 
 // ==================== M1: ZVec REST API 公共函数 ====================
 
@@ -483,6 +547,8 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
 }
 
 export async function searchVectors(query: string, topK: number = 10): Promise<SearchResult[]> {
+  // 启动前异步校准向量表维度（修复 R3 维度不匹配 bug）
+  await ensureCorrectDimension();
   // 先把查询文本 embedding 成向量，再走向量检索。
   // R3 重构时 SqliteVecEngine.searchByText 移除了 embed 逻辑，
   // 这里在 service 层补回（与旧 zvec 行为一致）。

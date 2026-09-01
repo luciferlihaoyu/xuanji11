@@ -19,6 +19,8 @@ export interface VectorEngine {
   embedText(text: string): Promise<number[]>;
   addDocuments(docs: Array<{ content: string; metadata?: Record<string, unknown> }>): Promise<number>;
   readonly size: number;
+  /** 向量维度（vec0 虚拟表建表时确定；用于启动期异步校准）。 */
+  readonly dimension: number;
   clear(): void;
   healthCheck(): Promise<{ ok: boolean; engine: string; size: number; mode: "empty" | "indexed"; error?: string; dimension?: number }>;
 }
@@ -109,6 +111,7 @@ class MemoryVectorEngine implements VectorEngine {
   async embedText(_text: string): Promise<number[]> { return []; }
   async addDocuments(_docs: Array<{ content: string; metadata?: Record<string, unknown> }>): Promise<number> { return 0; }
   get size(): number { return this.store.length; }
+  get dimension(): number { return DIM_DEFAULT; }
   clear(): void { this.store.length = 0; }
   async healthCheck(): Promise<{ ok: boolean; engine: string; size: number; mode: "empty" | "indexed"; error?: string; dimension?: number }> {
     return { ok: true, engine: "memory-fallback", size: this.store.length, mode: this.store.length === 0 ? "empty" : "indexed" };
@@ -140,6 +143,8 @@ class SqliteVecEngine implements VectorEngine {
   static create(dim: number = DIM_DEFAULT): SqliteVecEngine {
     return new SqliteVecEngine(dim);
   }
+
+  get dimension(): number { return this.dim; }
 
   private vectorToBlob(v: number[]): Buffer {
     const arr = new Float32Array(v);
