@@ -6,7 +6,8 @@
  * - v2：天宫用 Ed25519 私钥签票（EdDSA，header 带 kid），公钥经 JWKS 端点发布。
  *   本端读 token header 的 alg/kid → 从 TIANGONG_JWKS_URL 拉取 JWKS
  *   （模块级缓存 10 分钟，AbortSignal 5s 超时；遇到未知 kid 强制刷新一次再找，
- *   防轮换窗口 401 误杀）→ jose importJWK + jwtVerify（clockTolerance 60s）
+ *   防轮换窗口 401 误杀；强刷带 30s 全局节流 + 单飞合并，防缓存击穿与出站放大；
+ *   content-length > 64KB 视为异常响应）→ jose importJWK + jwtVerify（clockTolerance 60s）
  * - v1 兼容：alg=HS256 时仍用共享密钥 TIANGONG_SSO_SECRET 验签，逻辑不变
  *   ——这是两端部署顺序错位与回滚场景的安全网
  * - 配置语义：无 secret 且无 JWKS URL → 501（"SSO 未配置"，沿用 v1）；
@@ -39,12 +40,20 @@ const SSO_CLOCK_TOLERANCE_MS = SSO_CLOCK_TOLERANCE_SECONDS * 1000;
 const JWKS_CACHE_TTL_MS = 10 * 60 * 1000;
 /** JWKS 拉取超时（毫秒）：验签失败优于无限挂起。 */
 const JWKS_FETCH_TIMEOUT_MS = 5000;
+/** 未知 kid 强制刷新的全局节流：距上次成功拉取 <30s 不再出站（刚拉到的公钥集合不会立刻变化）。 */
+const JWKS_FORCE_REFRESH_THROTTLE_MS = 30_000;
+/** JWKS 响应体大小上限（字节）：content-length 超限视为异常响应，直接判失败。 */
+const JWKS_MAX_BODY_BYTES = 64 * 1024;
 
 /** 已消费 jti 的一次性账本：jti -> 过期时间戳（ms）。单实例内存 Map。 */
 const usedSsoJtis = new Map<string, number>();
 
 /** JWKS 模块级缓存：{keys, fetchedAt}，TTL 10 分钟；kid 未命中可强制刷新。 */
 let jwksCache: { keys: jose.JWK[]; fetchedAt: number } | null = null;
+/** 上次成功拉取 JWKS 的时间戳（ms）：未知 kid 强刷节流的依据。 */
+let lastJwksFetchAt = 0;
+/** 全局单飞：进行中的 JWKS 拉取共享同一 Promise，并发请求合并为一次出站。 */
+let jwksFetchInFlight: Promise<{ keys: jose.JWK[]; fetchedAt: number }> | null = null;
 
 /** 惰性清理已过期的 jti（协议要求"顺手清理过期项"）。 */
 function pruneExpiredJtis(now: number): void {
@@ -60,10 +69,13 @@ function getSsoSecret(): Uint8Array | null {
 }
 
 /**
- * 拉取天宫 JWKS（带缓存）。
+ * 拉取天宫 JWKS（带缓存 + 全局单飞 + 响应体大小守卫）。
  * - force=false：TTL 内直接用缓存；
- * - force=true：跳过缓存强制刷新（未知 kid 轮换窗口用）。
- * 网络失败 / 非 2xx / 结构不对 → 抛错（调用方转 401，绝不泄露内部细节）。
+ * - force=true：跳过缓存强制刷新（未知 kid 轮换窗口用；节流判定在调用方 verifyEdDsaToken）。
+ * - 单飞：任一时刻至多一次出站拉取，并发调用（含 force）共享同一 in-flight Promise，
+ *   防缓存击穿把 TTL 到期瞬间放大成 N 次出站。
+ * 网络失败 / 非 2xx / 响应体超限 / 结构不对 → 抛错（调用方转 401，绝不泄露内部细节）；
+ * 失败不写缓存、不记成功时间戳，后续调用可重新出站。
  */
 async function fetchJwks(force = false): Promise<{ keys: jose.JWK[]; fetchedAt: number }> {
   const url = env.tiangongJwksUrl;
@@ -71,12 +83,27 @@ async function fetchJwks(force = false): Promise<{ keys: jose.JWK[]; fetchedAt: 
   if (!force && jwksCache && Date.now() - jwksCache.fetchedAt < JWKS_CACHE_TTL_MS) {
     return jwksCache;
   }
-  const resp = await fetch(url, { signal: AbortSignal.timeout(JWKS_FETCH_TIMEOUT_MS) });
-  if (!resp.ok) throw new Error(`JWKS 拉取失败: HTTP ${resp.status}`);
-  const body = (await resp.json()) as { keys?: jose.JWK[] };
-  const keys = Array.isArray(body?.keys) ? body.keys : [];
-  jwksCache = { keys, fetchedAt: Date.now() };
-  return jwksCache;
+  if (jwksFetchInFlight) return jwksFetchInFlight;
+  const task = (async (): Promise<{ keys: jose.JWK[]; fetchedAt: number }> => {
+    const resp = await fetch(url, { signal: AbortSignal.timeout(JWKS_FETCH_TIMEOUT_MS) });
+    if (!resp.ok) throw new Error(`JWKS 拉取失败: HTTP ${resp.status}`);
+    // m-5 响应体守卫：content-length 超限视为异常（缺失该头时放行，交由解析兜底）
+    const contentLength = Number(resp.headers.get("content-length") ?? "0");
+    if (Number.isFinite(contentLength) && contentLength > JWKS_MAX_BODY_BYTES) {
+      throw new Error(`JWKS 响应体超过 ${JWKS_MAX_BODY_BYTES} 字节上限`);
+    }
+    const body = (await resp.json()) as { keys?: jose.JWK[] };
+    const keys = Array.isArray(body?.keys) ? body.keys : [];
+    jwksCache = { keys, fetchedAt: Date.now() };
+    lastJwksFetchAt = jwksCache.fetchedAt;
+    return jwksCache;
+  })();
+  jwksFetchInFlight = task;
+  try {
+    return await task;
+  } finally {
+    jwksFetchInFlight = null;
+  }
 }
 
 /** 从 JWKS 里找可用的 Ed25519 公钥（按 kid 精确匹配） */
@@ -85,14 +112,16 @@ function findEd25519Jwk(keys: jose.JWK[], kid: string): jose.JWK | null {
 }
 
 /**
- * EdDSA 验签：JWKS 取公钥（未知 kid 强制刷新一次）→ jwtVerify。
+ * EdDSA 验签：JWKS 取公钥（未知 kid 强制刷新一次，带 30s 全局节流）→ jwtVerify。
  * 任何失败抛错，由调用方统一转 401。
  */
 async function verifyEdDsaToken(token: string, kid: string): Promise<jose.JWTPayload> {
   let jwks = await fetchJwks();
   let jwk = findEd25519Jwk(jwks.keys, kid);
-  if (!jwk) {
-    // 未知 kid：可能是天宫刚轮换密钥而本端缓存已旧，强制刷新一次再找
+  if (!jwk && Date.now() - lastJwksFetchAt >= JWKS_FORCE_REFRESH_THROTTLE_MS) {
+    // 未知 kid：可能是天宫刚轮换密钥而本端缓存已旧 → 强制刷新一次再找。
+    // 但距上次成功拉取 <30s 时不再出站：刚拉到的集合不含该 kid，立刻重拉也不会含，
+    // 直接用现有缓存判定（401），避免攻击者伪造随机 kid 打出站请求。
     jwks = await fetchJwks(true);
     jwk = findEd25519Jwk(jwks.keys, kid);
   }
@@ -116,9 +145,16 @@ async function verifyHs256Token(token: string, secret: Uint8Array): Promise<jose
 
 export const ssoRouter = new Hono();
 
-/** 测试辅助：重置 JWKS 缓存（仅测试用，勿在业务代码调用） */
+/** 测试辅助：重置 JWKS 缓存与节流时间戳（仅测试用，勿在业务代码调用） */
 export function _resetSsoJwksCacheForTest(): void {
   jwksCache = null;
+  lastJwksFetchAt = 0;
+  jwksFetchInFlight = null;
+}
+
+/** 测试辅助：把"上次成功拉取"时间戳前移，模拟强刷节流窗口已过（仅测试用） */
+export function _ageLastJwksFetchForTest(ms: number): void {
+  lastJwksFetchAt -= ms;
 }
 
 // GET /sso/launch?token=<jwt>

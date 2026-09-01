@@ -22,7 +22,7 @@ vi.hoisted(() => {
   process.env.TIANGONG_JWKS_URL = "https://tiangong.test/api/sso/jwks.json";
 });
 
-import { ssoRouter, _resetSsoJwksCacheForTest } from "./sso-router";
+import { ssoRouter, _resetSsoJwksCacheForTest, _ageLastJwksFetchForTest } from "./sso-router";
 
 // ─── Ed25519 测试钥匙对（模拟天宫 JWKS）───
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -31,23 +31,28 @@ const kid = createHash("sha256").update(publicJwk.x!).digest("hex").slice(0, 16)
 
 /** 天宫 v2 形态的 JWKS 条目 */
 const tiangongJwk = { kty: "OKP", crv: "Ed25519", x: publicJwk.x, kid, alg: "EdDSA", use: "sig" };
-/** 干扰用：另一把不相关的公钥 */
-const otherJwk = (() => {
-  const { publicKey: otherPub } = generateKeyPairSync("ed25519");
-  const jwk = jose.exportJWK(otherPub) as unknown as Record<string, string>;
-  // exportJWK 是异步的，这里用占位 x 规避顶层 await 叠加（仅需 kid 不命中）
-  return { kty: "OKP", crv: "Ed25519", x: "AAAA_other_key_placeholder", kid: "other000000000000", ...{}, ...jwk };
-})();
+/** 干扰用：另一把不相关的密钥对（真实公钥 + 固定 kid，可用其私钥签"未知 kid"票据） */
+const otherKeyPair = generateKeyPairSync("ed25519");
+const otherPublicJwk = (await jose.exportJWK(otherKeyPair.publicKey)) as Record<string, string>;
+const otherJwk = { kty: "OKP", crv: "Ed25519", x: otherPublicJwk.x!, kid: "other000000000000", alg: "EdDSA", use: "sig" };
+
+/** 轮换后的新密钥对（模拟天宫换钥：旧缓存不含其 kid，强刷后才出现） */
+const rotatedKeyPair = generateKeyPairSync("ed25519");
+const rotatedPublicJwk = (await jose.exportJWK(rotatedKeyPair.publicKey)) as Record<string, string>;
+const rotatedKid = createHash("sha256").update(rotatedPublicJwk.x!).digest("hex").slice(0, 16);
+const rotatedJwk = { kty: "OKP", crv: "Ed25519", x: rotatedPublicJwk.x!, kid: rotatedKid, alg: "EdDSA", use: "sig" };
 
 const app = new Hono();
 app.route("/sso", ssoRouter);
 
 const fetchMock = vi.fn();
 
+function jwksResponse(keys: unknown[]): Response {
+  return new Response(JSON.stringify({ keys }), { status: 200, headers: { "content-type": "application/json" } });
+}
+
 function mockJwks(keys: unknown[]): void {
-  fetchMock.mockResolvedValue(
-    new Response(JSON.stringify({ keys }), { status: 200, headers: { "content-type": "application/json" } }),
-  );
+  fetchMock.mockResolvedValue(jwksResponse(keys));
 }
 
 beforeEach(() => {
@@ -62,15 +67,18 @@ afterEach(() => {
 
 // ─── 票据签发辅助 ───
 
-async function eddsaToken(claims: Record<string, unknown>, opts?: { exp?: string }): Promise<string> {
+async function eddsaToken(
+  claims: Record<string, unknown>,
+  opts?: { exp?: string; kid?: string; signKey?: Parameters<typeof jose.SignJWT.prototype.sign>[0] },
+): Promise<string> {
   const builder = new jose.SignJWT(claims).setProtectedHeader({
     alg: "EdDSA",
-    kid,
+    kid: opts?.kid ?? kid,
   });
   if (!("iat" in claims)) builder.setIssuedAt();
   builder.setExpirationTime(opts?.exp ?? "120s");
   if (!("jti" in claims)) builder.setJti(randomUUID());
-  return builder.sign(privateKey);
+  return builder.sign(opts?.signKey ?? privateKey);
 }
 
 async function hs256Token(claims: Record<string, unknown>): Promise<string> {
@@ -114,27 +122,71 @@ describe("GET /sso/launch（协议 v2：EdDSA 主路径）", () => {
     expect(replay.status).toBe(401);
   });
 
-  it("未知 kid：强制刷新一次 JWKS 后命中 → 302（防轮换窗口误杀）", async () => {
-    // 第一次 JWKS 不含该 kid（轮换前的旧集合），刷新后含
-    fetchMock
-      .mockResolvedValueOnce(new Response(JSON.stringify({ keys: [otherJwk] }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ keys: [tiangongJwk] }), { status: 200 }));
-    const token = await eddsaToken(baseClaims);
-
-    const res = await app.request(launchUrl(token));
-
+  it("未知 kid：节流窗外强制刷新一次后命中 → 302（防轮换窗口误杀）", async () => {
+    // 第一步：轮换前票据完成一次成功拉取（建立缓存与节流时间戳）
+    fetchMock.mockResolvedValueOnce(jwksResponse([tiangongJwk]));
+    const warmup = await app.request(launchUrl(await eddsaToken(baseClaims)));
+    expect(warmup.status).toBe(302);
+    // 模拟距上次成功拉取已超过 30s 强刷节流窗口
+    _ageLastJwksFetchForTest(31_000);
+    // 第二步：轮换后新票据（缓存 TTL 内命中不出站；强刷一次拿到新公钥）→ 命中
+    fetchMock.mockResolvedValueOnce(jwksResponse([tiangongJwk, rotatedJwk]));
+    const res = await app.request(
+      launchUrl(await eddsaToken(baseClaims, { kid: rotatedKid, signKey: rotatedKeyPair.privateKey })),
+    );
     expect(res.status).toBe(302);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("未知 kid 且刷新后仍无：401", async () => {
-    mockJwks([otherJwk]);
-    const token = await eddsaToken(baseClaims);
-
-    const res = await app.request(launchUrl(token));
-
-    expect(res.status).toBe(401);
+  it("未知 kid：节流窗外强刷一次仍无 → 401（fetch 共 2 次）", async () => {
+    // JWKS 永远只含天宫已知公钥；票据用另一把私钥签（kid 不在任何响应里）
+    mockJwks([tiangongJwk]);
+    const tokenOpts = { kid: otherJwk.kid, signKey: otherKeyPair.privateKey };
+    // 第一次：冷缓存拉取 1 次；强刷被节流（刚拉取成功，窗口内）→ 401
+    const first = await app.request(launchUrl(await eddsaToken(baseClaims, tokenOpts)));
+    expect(first.status).toBe(401);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // 节流窗外再来一次：缓存命中不出站 → 强刷 1 次 → 仍无 → 401
+    _ageLastJwksFetchForTest(31_000);
+    const second = await app.request(launchUrl(await eddsaToken(baseClaims, tokenOpts)));
+    expect(second.status).toBe(401);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("强刷节流：30s 窗口内第二次未知 kid 不再出站（fetch 计数不 +1）", async () => {
+    mockJwks([tiangongJwk]);
+    const tokenOpts = { kid: otherJwk.kid, signKey: otherKeyPair.privateKey };
+    await app.request(launchUrl(await eddsaToken(baseClaims, tokenOpts)));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const res = await app.request(launchUrl(await eddsaToken(baseClaims, tokenOpts)));
+    expect(res.status).toBe(401);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("并发单飞：3 个未知 kid 请求并发到达只发 1 次 fetch", async () => {
+    mockJwks([tiangongJwk]);
+    const token = await eddsaToken(baseClaims, { kid: otherJwk.kid, signKey: otherKeyPair.privateKey });
+    const results = await Promise.all([
+      app.request(launchUrl(token)),
+      app.request(launchUrl(token)),
+      app.request(launchUrl(token)),
+    ]);
+    // 全部 401（kid 未命中 + 强刷被节流）；出站拉取合并为一次
+    for (const res of results) expect(res.status).toBe(401);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("JWKS 响应体超限（content-length > 64KB）：401（m-5 大小守卫）", async () => {
+    // 显式声明超限 content-length（守卫在解析前拦截）
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ keys: [tiangongJwk] }), {
+        status: 200,
+        headers: { "content-length": String(70 * 1024) },
+      }),
+    );
+    const res = await app.request(launchUrl(await eddsaToken(baseClaims)));
+    expect(res.status).toBe(401);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("header 无 kid 的 EdDSA 票据：401（不接受盲选密钥）", async () => {
@@ -228,6 +280,26 @@ describe("GET /sso/launch（声明与协议校验，v2 沿用 v1 语义）", () 
   it("exp 已过期：401", async () => {
     mockJwks([tiangongJwk]);
     const token = await eddsaToken(baseClaims, { exp: "-120s" });
+    const res = await app.request(launchUrl(token));
+    expect(res.status).toBe(401);
+  });
+
+  it("60s 时钟容差：容差窗内的过期票据（-30s）可验签成功，且 jti 保留到窗末（重放 401）", async () => {
+    mockJwks([tiangongJwk]);
+    const token = await eddsaToken(baseClaims, { exp: "-30s" });
+
+    const first = await app.request(launchUrl(token));
+    expect(first.status).toBe(302);
+    expect(first.headers.get("set-cookie")).toContain("xuanji_session=");
+
+    // 窗末之前重放：jti 账本保留到 exp + 60s 容差窗结束 → 401
+    const replay = await app.request(launchUrl(token));
+    expect(replay.status).toBe(401);
+  });
+
+  it("60s 时钟容差：超过容差窗的过期票据（-90s）→ 401", async () => {
+    mockJwks([tiangongJwk]);
+    const token = await eddsaToken(baseClaims, { exp: "-90s" });
     const res = await app.request(launchUrl(token));
     expect(res.status).toBe(401);
   });
