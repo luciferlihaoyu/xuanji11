@@ -282,3 +282,15 @@ export function _resetVectorEngineForTests(): void {
   engineInstance = null;
   initialized = false;
 }
+
+/**
+ * 用指定维度重建向量引擎（修复 R3 维度不匹配时 DROP 旧表后无法重建的 bug）。
+ * 会重置两个模块级单例（engineInstance / schema initialized），
+ * 强制用新 dim 重新探测 sqlite-vec 并建表（vec0 维表不可改，维度变化必须重建）。
+ * 仅在启动期维度校准（ensureCorrectDimension）调用；正常运行期不要调用。
+ */
+export function recreateVectorEngine(dim: number): VectorEngine {
+  engineInstance = null;
+  initialized = false;
+  return getVectorEngine(dim);
+}

@@ -12,7 +12,7 @@ import { env } from "./env";
 import { assertEgressAllowed } from "./egress";
 import { tianshuApiUrl, tianshuApiKey, tianshuEnabled } from "./tianshu";
 import { getDb, getRawDb } from "../queries/connection";
-import { getVectorEngine, type VectorEngine } from "./vector-engine";
+import { getVectorEngine, recreateVectorEngine, type VectorEngine } from "./vector-engine";
 import { randomUUID } from "crypto";
 
 function simpleTextHash(text: string, dims: number = 64): number[] {
@@ -527,8 +527,8 @@ export async function ensureCorrectDimension(): Promise<void> {
       const raw = getRawDb();
       raw.exec("DROP TABLE IF EXISTS vec_chunks");
       raw.exec("DROP TABLE IF EXISTS vec_chunk_meta");
-      // 用真实 dim 重新初始化 engine
-      vectorEngineInstance = getVectorEngine(realDim);
+      // 用真实 dim 重新初始化 engine（重置模块级单例，强制重建 schema）
+      vectorEngineInstance = recreateVectorEngine(realDim);
       dimensionInitialized = true;
       console.log(`[VectorEngine] 已用 dim=${realDim} 重建向量表`);
     } catch (err) {

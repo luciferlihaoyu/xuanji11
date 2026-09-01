@@ -77,6 +77,7 @@ vi.mock("../queries/connection", () => ({
 
 vi.mock("./vector-engine", () => ({
   getVectorEngine: () => fakeEngine,
+  recreateVectorEngine: () => fakeEngine,
   DIM_DEFAULT: 1536,
 }));
 
