@@ -18,8 +18,15 @@ vi.mock("./vector", () => ({
   vectorEngine: {
     indexDocumentChunks: vi.fn(),
     deleteByDocumentId: vi.fn(),
+    insertBatch: vi.fn(async () => {}),
     size: 0,
   },
+}));
+
+// 模拟 embed：每个文本返回固定维度向量
+vi.mock("./vector-service", () => ({
+  embedTextsWithFallback: vi.fn(async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3])),
+  ensureCorrectDimension: vi.fn(async () => {}),
 }));
 
 import { chunkText, indexDocumentById, tryIndexDocumentById, startReindexAll, getReindexProgress } from "./document-indexer";
@@ -107,7 +114,7 @@ describe("indexDocumentById", () => {
 
     expect(result).toEqual({ chunks: 0, skipped: true });
     expect(vectorEngine.deleteByDocumentId).toHaveBeenCalledWith(1);
-    expect(vectorEngine.indexDocumentChunks).not.toHaveBeenCalled();
+    expect(vectorEngine.insertBatch).not.toHaveBeenCalled();
   });
 
   it("chunks content, stores chunks and indexes into the vector engine", async () => {
@@ -123,11 +130,15 @@ describe("indexDocumentById", () => {
     expect(inserted[0]).toEqual([
       { documentId: 7, content: "第一段内容。第二段内容。", chunkIndex: 0 },
     ]);
-    expect(vectorEngine.indexDocumentChunks).toHaveBeenCalledWith(
-      7,
-      [{ content: "第一段内容。第二段内容。", index: 0 }],
-      { title: "测试文档", format: "markdown" }
-    );
+    // 新实现：embed 后真正写入 vec 表（insertBatch），不再调空壳 indexDocumentChunks
+    expect(vectorEngine.insertBatch).toHaveBeenCalledTimes(1);
+    const [entries] = vi.mocked(vectorEngine.insertBatch).mock.calls[0] as unknown as [
+      Array<{ id: string; vector: number[]; metadata: Record<string, unknown> }>,
+    ];
+    expect(entries).toHaveLength(1);
+    expect(entries[0].id).toBe("chunk-7-0");
+    expect(entries[0].vector).toEqual([0.1, 0.2, 0.3]);
+    expect(entries[0].metadata.documentId).toBe("7");
     expect(db.update).toHaveBeenCalled();
   });
 });
@@ -180,7 +191,7 @@ describe("startReindexAll", () => {
     expect(final.failed).toBe(0);
     expect(final.chunksTotal).toBe(2);
     expect(final.finishedAt).toBeDefined();
-    expect(vectorEngine.indexDocumentChunks).toHaveBeenCalledTimes(2);
+    expect(vectorEngine.insertBatch).toHaveBeenCalledTimes(2);
   }, 15_000);
 
   it("counts failures without aborting the whole run", async () => {
@@ -190,8 +201,8 @@ describe("startReindexAll", () => {
     ];
     const { db } = createFakeDb(docs);
     vi.mocked(getDb).mockReturnValue(db as never);
-    vi.mocked(vectorEngine.indexDocumentChunks)
-      .mockResolvedValueOnce(1)
+    vi.mocked(vectorEngine.insertBatch)
+      .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("embedding API down"));
 
     startReindexAll();

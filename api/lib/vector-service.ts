@@ -387,6 +387,14 @@ async function embedWithFallback(texts: string[]): Promise<number[][]> {
   return texts.map((t) => simpleTextHash(t, 64));
 }
 
+/**
+ * 公开的 embedding 入口（供 document-indexer 全量回填时使用）。
+ * 尝试所有已配置 embedding 候选，全部失败时兜底 simpleTextHash。
+ */
+export async function embedTextsWithFallback(texts: string[]): Promise<number[][]> {
+  return embedWithFallback(texts);
+}
+
 export interface SearchResult {
   id: string;
   score: number;

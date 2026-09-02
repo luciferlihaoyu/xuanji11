@@ -10,6 +10,7 @@ import { eq, isNotNull } from "drizzle-orm";
 import { getDb } from "../queries/connection";
 import { kbDocuments, documentChunks } from "@db/schema";
 import { vectorEngine } from "./vector";
+import { embedTextsWithFallback, ensureCorrectDimension } from "./vector-service";
 
 export function chunkText(text: string, maxChars = 800, overlap = 100): string[] {
   const normalized = text.replace(/\r\n/g, "\n").trim();
@@ -60,16 +61,33 @@ export async function indexDocumentById(documentId: number): Promise<IndexDocume
     return { chunks: 0, skipped: true };
   }
 
-  await db.insert(documentChunks).values(chunks.map((chunkContent, index) => ({
+  // 校准向量表维度（确保用 system_settings 的真实 dim 建表，否则 insertBatch 维度检查会静默跳过）
+  await ensureCorrectDimension();
+
+  // 真正 embed 每个 chunk（修复 R3 空壳：此前从不 embed/写入向量表）
+  const chunkContents = chunks.map((content, index) => ({ content, index }));
+  const vectors = await embedTextsWithFallback(chunkContents.map((c) => c.content));
+
+  // 插入 document_chunks（embedding 列无人读取，不写大 JSON，向量只存 vec 表）
+  await db.insert(documentChunks).values(chunkContents.map((c) => ({
     documentId,
-    content: chunkContent,
-    chunkIndex: index,
+    content: c.content,
+    chunkIndex: c.index,
   })));
 
-  await vectorEngine.indexDocumentChunks(
-    documentId,
-    chunks.map((chunkContent, index) => ({ content: chunkContent, index })),
-    { title: doc.title, format: doc.format }
+  // 写入 vec 表（vec_chunks + vec_chunk_meta）
+  await vectorEngine.insertBatch(
+    chunkContents.map((c, index) => ({
+      id: `chunk-${documentId}-${c.index}`,
+      vector: vectors[index] ?? [],
+      metadata: {
+        documentId: String(documentId),
+        chunkIndex: c.index,
+        content: c.content,
+        title: doc.title,
+        format: doc.format,
+      },
+    })),
   );
 
   await db.update(kbDocuments)
