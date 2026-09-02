@@ -374,17 +374,33 @@ async function embeddingCandidates(): Promise<EmbeddingConfig[]> {
   });
 }
 
+/** 火山方舟等 embedding API 单次 input 上限（实测 doubao-embedding-vision max 10）。 */
+const EMBED_BATCH_MAX = 10;
+
 async function embedWithFallback(texts: string[]): Promise<number[][]> {
   const candidates = await embeddingCandidates();
+  if (texts.length === 0) return [];
   for (const cfg of candidates) {
     try {
-      return await fetchEmbeddingsWithConfig(texts, cfg);
+      // 分批（≤EMBED_BATCH_MAX/批）调用：单配置整批超出上限会被 API 拒绝
+      // （实测 doubao-embedding-vision 报 "max 10, got 107"），分批后逐批聚合
+      const results: number[][] = [];
+      for (let i = 0; i < texts.length; i += EMBED_BATCH_MAX) {
+        const slice = texts.slice(i, i + EMBED_BATCH_MAX);
+        results.push(...(await fetchEmbeddingsWithConfig(slice, cfg)));
+      }
+      return results;
     } catch (err) {
       const label = cfg.templateName ?? cfg.model;
       console.warn(`[VectorEngine] Embedding model ${label} failed, trying fallback:`, err instanceof Error ? err.message : String(err));
     }
   }
-  return texts.map((t) => simpleTextHash(t, 64));
+  // 兜底：用候选配置的 dimension 生成 hash 向量（而非固定 64 维），
+  // 保证与 vec0 表维度一致、能真正写入——embedding API 不可用时检索仍可用
+  // （hash 相似度，语义质量低于真实 embedding，但不会 0 向量）。
+  const first = candidates.find((c) => c.dimension > 0);
+  const fallbackDim = first?.dimension ?? 64;
+  return texts.map((t) => simpleTextHash(t, fallbackDim));
 }
 
 /**
