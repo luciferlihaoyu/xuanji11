@@ -91,14 +91,16 @@ function toSearchResult(hit: MergedHit, query: string): SearchResult {
 async function fetchKeywordResults(query: string, limit: number): Promise<InternalHit[]> {
   const db = getDb();
   const q = `%${query}%`;
-  const rows = (await db
+
+  // 1) 知识图谱节点（原有路径）
+  const nodeRows = (await db
     .select()
     .from(knowledgeNodes)
     .where(sql`${knowledgeNodes.title} LIKE ${q} OR ${knowledgeNodes.content} LIKE ${q}`)
     .orderBy(desc(knowledgeNodes.updatedAt))
     .limit(limit)) as KnowledgeNode[];
 
-  return rows.map((node, index) => ({
+  const nodeHits = nodeRows.map((node, index) => ({
     id: documentIdFromMetadata(node.metadata) ?? String(node.id),
     title: node.title,
     content: node.content ?? node.title ?? "",
@@ -108,6 +110,28 @@ async function fetchKeywordResults(query: string, limit: number): Promise<Intern
     source: "keyword" as Source,
     rank: index + 1,
   }));
+
+  // 2) 知识库文档（kb_documents）——修复"关键词搜索搜不到文档"缺陷
+  // 薇子实测：search.hybrid 的 keyword 部分只查 knowledge_nodes，文档搜不到。
+  const docRows = (await db
+    .select()
+    .from(kbDocuments)
+    .where(sql`${kbDocuments.title} LIKE ${q} OR ${kbDocuments.content} LIKE ${q}`)
+    .orderBy(desc(kbDocuments.updatedAt))
+    .limit(limit)) as KbDocument[];
+
+  const docHits = docRows.map((doc, index) => ({
+    id: String(doc.id),
+    title: doc.title,
+    content: doc.content ?? doc.title ?? "",
+    type: "document",
+    tags: doc.tags ?? [],
+    folderId: doc.folderId ?? null,
+    source: "keyword" as Source,
+    rank: nodeHits.length + index + 1,
+  }));
+
+  return [...nodeHits, ...docHits];
 }
 
 async function fetchVectorResults(query: string, limit: number): Promise<InternalHit[]> {

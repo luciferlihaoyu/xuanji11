@@ -38,6 +38,8 @@ vi.mock("./lib/vector-service", () => ({
 }));
 
 vi.mock("./queries/connection", () => {
+  // select 调用计数器：第 1 次 = knowledgeNodes，第 2 次 = kbDocuments
+  let selectCall = 0;
   const createChain = (finalValue: unknown) => {
     const chain: Record<string, ReturnType<typeof vi.fn>> = {};
     chain.select = vi.fn(() => chain);
@@ -48,7 +50,14 @@ vi.mock("./queries/connection", () => {
     return chain;
   };
   return {
-    getDb: vi.fn(() => createChain([])),
+    getDb: vi.fn(() => {
+      const isDocQuery = selectCall >= 1;
+      selectCall += 1;
+      // 让调用方可注入每个查询的返回行
+      const rowStore = (globalThis as unknown as { __kbDocRows?: unknown[]; __kbNodeRows?: unknown[] });
+      const rows = isDocQuery ? rowStore.__kbDocRows ?? [] : rowStore.__kbNodeRows ?? [];
+      return createChain(rows);
+    }),
   };
 });
 
