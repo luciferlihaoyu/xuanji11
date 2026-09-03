@@ -143,6 +143,8 @@ export default function WorkflowBuilder() {
   const runMutation = useRunWorkflow();
   const mcpUtils = trpc.useUtils();
   const { data: mcpServersData } = trpc.mcpClient.list.useQuery();
+  const tianshuModelsQuery = trpc.tianshu.listModels.useQuery(undefined, { retry: 1, staleTime: 60_000 });
+  const tianshuModels = tianshuModelsQuery.data?.ok ? tianshuModelsQuery.data.models : [];
   const [remoteTools, setRemoteTools] = useState<{ serverId: number; tools: readonly { name: string; description?: string }[] } | null>(null);
   const [argumentsDraft, setArgumentsDraft] = useState<{ nodeId: string; raw: string } | null>(null);
 
@@ -776,11 +778,29 @@ export default function WorkflowBuilder() {
                       value={(selectedNodeData.config.model as string) || 'text-embedding-3-small'}
                       onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, model: e.target.value } }))}
                     >
-                      <option value="text-embedding-3-large">OpenAI text-embedding-3-large</option>
-                      <option value="text-embedding-3-small">OpenAI text-embedding-3-small</option>
-                      <option value="bge-large-zh">BGE-large-zh</option>
-                      <option value="m3e-base">M3E-base</option>
+                      {tianshuModels.length > 0 && (
+                        <optgroup label="天枢模型">
+                          {tianshuModels.map((m) => (
+                            <option key={m} value={m}>{m}</option>
+                          ))}
+                        </optgroup>
+                      )}
+                      <optgroup label="常用模型（兜底）">
+                        <option value="text-embedding-3-large">OpenAI text-embedding-3-large</option>
+                        <option value="text-embedding-3-small">OpenAI text-embedding-3-small</option>
+                        <option value="bge-large-zh">BGE-large-zh</option>
+                        <option value="m3e-base">M3E-base</option>
+                      </optgroup>
                     </select>
+                    {tianshuModelsQuery.isError || (tianshuModelsQuery.data && !tianshuModelsQuery.data.ok) ? (
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                        天枢未配置或拉取失败，仅显示常用模型（兜底）。
+                      </p>
+                    ) : tianshuModels.length > 0 ? (
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                        已接入天枢 {tianshuModels.length} 个模型。
+                      </p>
+                    ) : null}
                   </div>
                   <div>
                     <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>向量维度</label>
