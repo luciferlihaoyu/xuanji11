@@ -84,5 +84,27 @@ for (const { table, column } of jsonColumns) {
   }
 }
 
-console.log(`修复 ${dryRun ? "(dry-run)" : ""}: 共 ${totalRows} 行 json 值，修复 ${totalFixed} 个 (${jsonColumns.length} 个表列)`);
+// === 额外：system_settings 已知 JSON 值键（结构化 JSON 存在 value 文本列里） ===
+const settingsJsonKeys = ["embedding_model_templates"];
+if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='system_settings'").get()) {
+  for (const key of settingsJsonKeys) {
+    const row = db
+      .prepare("SELECT value FROM system_settings WHERE key = ? AND value IS NOT NULL AND value != ''")
+      .get(key);
+    if (!row) continue;
+    totalRows++;
+    const fixed = fixJsonValue(row.value);
+    if (fixed !== row.value) {
+      if (!dryRun) {
+        db.prepare("UPDATE system_settings SET value = ? WHERE key = ?").run(fixed, key);
+      }
+      totalFixed++;
+      console.log(`system_settings.${key}: 已修复双转义`);
+    } else {
+      console.log(`system_settings.${key}: 无需修复（已是合法 JSON 或不可解析）`);
+    }
+  }
+}
+
+console.log(`修复 ${dryRun ? "(dry-run)" : ""}: 共 ${totalRows} 行 json 值，修复 ${totalFixed} 个 (${jsonColumns.length} 个表列 + system_settings 专项)`);
 db.close();
