@@ -52,15 +52,20 @@ export async function deleteDocumentCascade(
   const deletedVectors = await vectorEngineArg.deleteByDocumentId(id);
 
   // 3) SQL 事务：chunks → 图谱边 → 图谱节点 → 文档行
-  const result = await db.transaction(async (tx) => {
+  // 注意：drizzle-orm/better-sqlite3 的 db.transaction 把回调直接传给
+  // better-sqlite3 的 client.transaction()，后者要求回调【同步执行】——
+  // 传 async 回调会抛 "Transaction function cannot return a promise"。
+  // better-sqlite3 驱动下 tx.delete/select 均同步返回，直接写同步代码。
+  const result = db.transaction((tx) => {
     // 3a) document_chunks
-    const chunksResult = await tx
+    const chunksResult = tx
       .delete(documentChunks)
-      .where(eq(documentChunks.documentId, id));
+      .where(eq(documentChunks.documentId, id))
+      .run();
     const deletedChunks = Number((chunksResult as { changes?: number }).changes ?? 0);
 
     // 3b) 查图谱节点（document 类型节点，metadata.documentId = id）
-    const nodeRows = await tx
+    const nodeRows: Array<{ id: number }> = tx
       .select({ id: knowledgeNodes.id })
       .from(knowledgeNodes)
       .where(
@@ -68,31 +73,34 @@ export async function deleteDocumentCascade(
           eq(knowledgeNodes.type, "document"),
           sql`json_extract(${knowledgeNodes.metadata}, '$.documentId') = ${String(id)}`,
         ),
-      );
+      )
+      .all();
     const nodeIds = nodeRows.map((row) => row.id);
 
     let deletedEdges = 0;
     let deletedNodes = 0;
     if (nodeIds.length > 0) {
       // 3c) 先删边（引用 nodeIds），再删节点
-      const edgesResult = await tx
+      const edgesResult = tx
         .delete(knowledgeEdges)
         .where(
           or(
             inArray(knowledgeEdges.sourceId, nodeIds),
             inArray(knowledgeEdges.targetId, nodeIds),
           ),
-        );
+        )
+        .run();
       deletedEdges = Number((edgesResult as { changes?: number }).changes ?? 0);
 
-      const nodesResult = await tx
+      const nodesResult = tx
         .delete(knowledgeNodes)
-        .where(inArray(knowledgeNodes.id, nodeIds));
+        .where(inArray(knowledgeNodes.id, nodeIds))
+        .run();
       deletedNodes = Number((nodesResult as { changes?: number }).changes ?? 0);
     }
 
     // 3d) 最后删文档行
-    await tx.delete(kbDocuments).where(eq(kbDocuments.id, id));
+    tx.delete(kbDocuments).where(eq(kbDocuments.id, id)).run();
 
     return { deletedChunks, deletedEdges, deletedNodes };
   });
