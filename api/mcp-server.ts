@@ -1,8 +1,9 @@
-import { desc, eq, like, or, and } from "drizzle-orm";
+import { desc, eq, like, or, and, isNull, count } from "drizzle-orm";
 import { z } from "zod";
 import {
   backupJobs,
   kbDocuments,
+  kbFolders,
   knowledgeEdges,
   knowledgeNodes,
   workflows,
@@ -19,6 +20,8 @@ import { relationTools, handleRelationTool } from "./mcp-relation";
 import { analyticsTool, handleAnalyticsTool } from "./mcp-analytics";
 import { tryIndexDocumentById, startReindexAll, getReindexProgress } from "./lib/document-indexer";
 import { vectorEngine } from "./lib/vector";
+import { deleteDocumentCascade } from "./lib/document-removal";
+import { normalizeTitle } from "./lib/title-normalize";
 import type { AuthenticatedIdentity, AuthInfo } from "./lib/auth";
 import { authenticateApiKey, hasScope, sessionAuth } from "./lib/auth";
 import { authenticateLocalRequest } from "./local-auth";
@@ -65,6 +68,11 @@ const tools: readonly McpTool[] = [
   { name: "knowledge_create", description: "Create a new knowledge graph node", inputSchema: { type: "object", properties: { title: { type: "string", description: "Node title" }, content: { type: "string", description: "Node content" }, type: { type: "string", description: "Node type", enum: knowledgeTypeSchema.options } }, required: ["title"] } },
   { name: "document_read", description: "Read a knowledge base document", inputSchema: { type: "object", properties: { id: { type: "number", description: "Document id" } }, required: ["id"] } },
   { name: "document_write", description: "Create or update a knowledge base document. Content is automatically chunked and indexed into the vector store.", inputSchema: { type: "object", properties: { id: { type: "number", description: "Existing document id; omit to create" }, folderId: { type: "number", description: "Folder id" }, title: { type: "string", description: "Document title; required when creating" }, content: { type: "string", description: "Document content" }, format: { type: "string", description: "Document format", enum: documentFormatSchema.options } } } },
+  { name: "document_delete", description: "Delete a knowledge base document and cascade-clean chunks, vectors, and linked knowledge graph nodes/edges", inputSchema: { type: "object", properties: { id: { type: "number", description: "Document id" } }, required: ["id"] } },
+  { name: "document_set_folder", description: "Assign a document to a folder (or null to remove). Lightweight; does not re-chunk or re-vectorize", inputSchema: { type: "object", properties: { id: { type: "number", description: "Document id" }, folderId: { type: "number", description: "Folder id; null to remove" } }, required: ["id", "folderId"] } },
+  { name: "document_upsert", description: "Create a document or update the earliest existing document with the same normalized title (bracket prefixes, case, and whitespace ignored). Idempotent for sync writers", inputSchema: { type: "object", properties: { title: { type: "string", description: "Document title (1-500 chars)" }, content: { type: "string", description: "Document content" }, format: { type: "string", description: "Document format", enum: documentFormatSchema.options }, tags: { type: "array", description: "Document tags" }, metadata: { type: "object", description: "Document metadata" }, folderId: { type: "number", description: "Folder id" } }, required: ["title"] } },
+  { name: "folder_create", description: "Create a knowledge base folder (optionally under a parent folder)", inputSchema: { type: "object", properties: { name: { type: "string", description: "Folder name (1-255 chars)" }, parentId: { type: "number", description: "Parent folder id; omit or null for root" } }, required: ["name"] } },
+  { name: "folder_list", description: "List knowledge base folders with document counts", inputSchema: { type: "object", properties: {} } },
   { name: "kb.reindex_all", description: "Start a full reindex of all knowledge base documents into the vector store (runs in background, idempotent). Returns initial progress.", inputSchema: { type: "object", properties: {} } },
   { name: "kb.reindex_status", description: "Get the progress of the running or last reindex-all job plus current vector store size", inputSchema: { type: "object", properties: {} } },
   { name: "backup_list", description: "List backup jobs and status", inputSchema: { type: "object", properties: { status: { type: "string", description: "Optional backup status filter" } } } },
@@ -162,6 +170,148 @@ async function handleDocumentWrite(args: Record<string, unknown>, user: User, au
   return textResult({ id, chunks: indexed.chunks });
 }
 
+async function handleDocumentDelete(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
+  assertScope(auth, "documents:write");
+  const input = z.object({ id: z.number().int().positive() }).parse(args);
+  try {
+    const r = await deleteDocumentCascade(getDb(), vectorEngine, input.id);
+    return textResult({ success: true, id: input.id, ...r });
+  } catch (e) {
+    // 文档不存在：返回 isError=true，让 MCP 调用方能区分"业务失败"与"协议错误"
+    if (e instanceof Error && e.message.includes("Document not found")) {
+      return { content: [{ type: "text", text: e.message }], isError: true };
+    }
+    throw e;
+  }
+}
+
+async function handleDocumentSetFolder(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
+  assertScope(auth, "documents:write");
+  const input = z.object({ id: z.number().int().positive(), folderId: z.number().int().positive().nullable() }).parse(args);
+  const db = getDb();
+  // 1) 文档存在性校验
+  const existing = await db.select({ id: kbDocuments.id }).from(kbDocuments).where(eq(kbDocuments.id, input.id)).limit(1);
+  if (existing.length === 0) {
+    return { content: [{ type: "text", text: `Document not found: ${input.id}` }], isError: true };
+  }
+  // 2) folderId 非空时校验文件夹存在
+  if (input.folderId !== null && input.folderId !== undefined) {
+    const folderExisting = await db.select({ id: kbFolders.id }).from(kbFolders).where(eq(kbFolders.id, input.folderId)).limit(1);
+    if (folderExisting.length === 0) {
+      return { content: [{ type: "text", text: `Folder not found: ${input.folderId}` }], isError: true };
+    }
+  }
+  // 3) 轻量更新：只动 folderId，绝不重索引
+  await db.update(kbDocuments).set({ folderId: input.folderId ?? null }).where(eq(kbDocuments.id, input.id));
+  return textResult({ success: true, id: input.id, folderId: input.folderId ?? null });
+}
+
+async function handleDocumentUpsert(args: Record<string, unknown>, user: User, auth: AuthInfo): Promise<McpToolResult> {
+  assertScope(auth, "documents:write");
+  const input = z.object({
+    title: z.string().min(1).max(500),
+    content: z.string().optional(),
+    format: documentFormatSchema.default("markdown"),
+    tags: z.array(z.string()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    folderId: z.number().int().positive().nullable().optional(),
+  }).parse(args);
+  const db = getDb();
+  // 按归一化标题全表查重：量级 ~1800 行可接受，文档表全表扫描是已知的轻量操作；
+  // 这里走应用层比对是为了用 normalizeTitle（库内 SQL 函数无法表达"[xxx] 前缀剥离"规则）。
+  const candidates = await db.select({ id: kbDocuments.id, title: kbDocuments.title }).from(kbDocuments);
+  const norm = normalizeTitle(input.title);
+  const match = candidates
+    .filter((row) => normalizeTitle(row.title) === norm)
+    .sort((a, b) => a.id - b.id)[0];
+  if (match) {
+    // 命中：更新 title/content/format/updatedAt（其余字段不动；folderId 不在 upsert 范围）
+    await db.update(kbDocuments).set(clean({
+      title: input.title,
+      content: input.content,
+      format: input.format,
+      updatedAt: new Date(),
+    })).where(eq(kbDocuments.id, match.id));
+    if (input.content !== undefined) {
+      await tryIndexDocumentById(match.id);
+    }
+    return textResult({ id: match.id, action: "updated" });
+  }
+  // 未命中：插入新文档（参考 handleDocumentWrite 的 insert 分支）
+  const result = await db.insert(kbDocuments).values(clean({
+    title: input.title,
+    content: input.content,
+    format: input.format,
+    tags: input.tags,
+    metadata: input.metadata,
+    folderId: input.folderId ?? null,
+    createdBy: user.id,
+  }));
+  const newId = Number(result.lastInsertRowid);
+  if (input.content !== undefined) {
+    await tryIndexDocumentById(newId);
+  }
+  return textResult({ id: newId, action: "created" });
+}
+
+async function handleFolderCreate(args: Record<string, unknown>, user: User, auth: AuthInfo): Promise<McpToolResult> {
+  assertScope(auth, "documents:write");
+  const input = z.object({
+    name: z.string().min(1).max(255),
+    parentId: z.number().int().positive().nullable().optional(),
+  }).parse(args);
+  const db = getDb();
+  const parentId = input.parentId ?? null;
+  // 1) parentId 非空时校验父目录存在
+  if (parentId !== null) {
+    const parentExisting = await db.select({ id: kbFolders.id }).from(kbFolders).where(eq(kbFolders.id, parentId)).limit(1);
+    if (parentExisting.length === 0) {
+      return { content: [{ type: "text", text: `Parent folder not found: ${parentId}` }], isError: true };
+    }
+  }
+  // 2) 同层同名查重（parentId 可能为 null，按 isNull 分支匹配）
+  const dupWhere = parentId === null
+    ? and(eq(kbFolders.name, input.name), isNull(kbFolders.parentId))
+    : and(eq(kbFolders.name, input.name), eq(kbFolders.parentId, parentId));
+  const existing = await db.select({ id: kbFolders.id }).from(kbFolders).where(dupWhere).limit(1);
+  if (existing.length > 0) {
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({ success: false, error: "folder exists", id: existing[0].id }),
+      }],
+      isError: true,
+    };
+  }
+  // 3) 插入
+  const result = await db.insert(kbFolders).values({
+    name: input.name,
+    parentId,
+    createdBy: user.id,
+  });
+  return textResult({ id: Number(result.lastInsertRowid), name: input.name, parentId });
+}
+
+async function handleFolderList(auth: AuthInfo): Promise<McpToolResult> {
+  assertScope(auth, "documents:read");
+  const rows = await getDb()
+    .select({
+      id: kbFolders.id,
+      name: kbFolders.name,
+      parentId: kbFolders.parentId,
+      icon: kbFolders.icon,
+      sortOrder: kbFolders.sortOrder,
+      createdAt: kbFolders.createdAt,
+      updatedAt: kbFolders.updatedAt,
+      documentCount: count(kbDocuments.id),
+    })
+    .from(kbFolders)
+    .leftJoin(kbDocuments, eq(kbDocuments.folderId, kbFolders.id))
+    .groupBy(kbFolders.id)
+    .orderBy(kbFolders.sortOrder);
+  return textResult(rows);
+}
+
 async function handleKbReindexAll(auth: AuthInfo): Promise<McpToolResult> {
   assertScope(auth, "documents:write");
   return textResult(startReindexAll());
@@ -209,6 +359,11 @@ async function callTool(call: McpToolCall, user: User, auth: AuthInfo): Promise<
     case "knowledge_create": return handleKnowledgeCreate(call.arguments, user, auth);
     case "document_read": return handleDocumentRead(call.arguments, auth);
     case "document_write": return handleDocumentWrite(call.arguments, user, auth);
+    case "document_delete": return handleDocumentDelete(call.arguments, auth);
+    case "document_set_folder": return handleDocumentSetFolder(call.arguments, auth);
+    case "document_upsert": return handleDocumentUpsert(call.arguments, user, auth);
+    case "folder_create": return handleFolderCreate(call.arguments, user, auth);
+    case "folder_list": return handleFolderList(auth);
     case "kb.reindex_all": return handleKbReindexAll(auth);
     case "kb.reindex_status": return handleKbReindexStatus(auth);
     case "backup_list": return handleBackupList(call.arguments, auth);
