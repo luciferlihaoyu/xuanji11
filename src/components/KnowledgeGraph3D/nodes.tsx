@@ -23,6 +23,11 @@ interface NodeInstanceProps {
   readonly hiddenNodeIds: ReadonlySet<string>;
 }
 
+// 共享几何体单例：163 个节点各自 new 一份 sphere/ring geometry 会产生
+// 数百个 GPU buffer 与独立开销；同参几何体全局共享一份即可。
+const SPHERE_GEOMETRY = new THREE.SphereGeometry(1, 20, 14);
+const RING_GEOMETRY = new THREE.RingGeometry(0.85, 1, 48);
+
 export default function GraphNodes({
   nodes,
   selectedNodeId,
@@ -66,16 +71,17 @@ function NodeInstance({
   const selectedScale = isSelected ? 1.15 : 1;
   const visibleScale = hiddenNodeIds.has(node.id) ? 0.0001 : 1;
   const scale = baseScale * hoverScale * selectedScale * visibleScale;
+  const active = isSelected || isMultiSelected;
 
   useFrame(({ clock }) => {
-    if (!meshRef.current || !ringRef.current) return;
-    const pulse = isSelected ? 1 + Math.sin(clock.getElapsedTime() * 3) * 0.08 : 1;
+    // 仅选中/多选节点需要呼吸与圆环动画；其余 160+ 节点每帧直接跳过，
+    // 静态 scale 已由 props 设置，无需逐帧 setScalar。
+    if (!active || !meshRef.current || !ringRef.current) return;
+    const pulse = 1 + Math.sin(clock.getElapsedTime() * 3) * 0.08;
     meshRef.current.scale.setScalar(scale * pulse);
-    ringRef.current.visible = isSelected || isMultiSelected;
+    ringRef.current.visible = true;
     ringRef.current.rotation.z = clock.getElapsedTime() * 0.5;
-    if (isSelected || isMultiSelected) {
-      ringRef.current.scale.setScalar(1.4 * pulse);
-    }
+    ringRef.current.scale.setScalar(1.4 * pulse);
   });
 
   const handleClick = useCallback(
@@ -98,13 +104,13 @@ function NodeInstance({
     <group position={[node.x, node.y, node.z]}>
       <mesh
         ref={meshRef}
+        geometry={SPHERE_GEOMETRY}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
         onPointerOver={() => setHovered(true)}
         onPointerOut={() => setHovered(false)}
         scale={scale}
       >
-        <sphereGeometry args={[1, 32, 32]} />
         <meshStandardMaterial
           color={color}
           emissive={color}
@@ -115,8 +121,7 @@ function NodeInstance({
           opacity={hiddenNodeIds.has(node.id) ? 0.05 : 0.92}
         />
       </mesh>
-      <mesh ref={ringRef} visible={false} rotation={[Math.PI / 2, 0, 0]} scale={1.4}>
-        <ringGeometry args={[0.85, 1, 64]} />
+      <mesh ref={ringRef} geometry={RING_GEOMETRY} visible={false} rotation={[Math.PI / 2, 0, 0]} scale={1.4}>
         <meshBasicMaterial color={isSelected ? '#ffffff' : color} transparent opacity={0.75} side={THREE.DoubleSide} />
       </mesh>
     </group>

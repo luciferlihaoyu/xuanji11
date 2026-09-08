@@ -112,23 +112,50 @@ export function calculate3DLayout(
     });
   }
 
-  return nodes.map((node) => {
+  // 归一化到球体：先按质心居中，再整体等比缩放，使整张图恰好收进
+  // 固定半径的球内（"类脑球体"观感）。等比缩放保留簇间相对结构，
+  // 避免逐点 clamp 造成的球壳堆积。相机取景以 GRAPH_SPHERE_RADIUS 为基准。
+  const laid = nodes.map((node) => {
     const pos = positions.get(node.id);
     if (!pos) {
       throw new Error(`Missing position for node ${node.id}`);
     }
-    return {
-      id: node.id,
-      name: node.name,
-      category: node.category,
-      x: pos.x,
-      y: pos.y,
-      z: pos.z,
-      radius: getNodeRadius(node.edgeCount),
-      edgeCount: node.edgeCount,
-    };
+    return { node, pos };
   });
+
+  const n = laid.length || 1;
+  const cx = laid.reduce((s, d) => s + d.pos.x, 0) / n;
+  const cy = laid.reduce((s, d) => s + d.pos.y, 0) / n;
+  const cz = laid.reduce((s, d) => s + d.pos.z, 0) / n;
+
+  let maxDist = 0;
+  for (const { pos } of laid) {
+    const dx = pos.x - cx;
+    const dy = pos.y - cy;
+    const dz = pos.z - cz;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (dist > maxDist) maxDist = dist;
+  }
+  // 留 8% 余量给节点半径/标签
+  const fitScale = maxDist > 1e-6 ? (GRAPH_SPHERE_RADIUS * 0.92) / maxDist : 1;
+
+  return laid.map(({ node, pos }) => ({
+    id: node.id,
+    name: node.name,
+    category: node.category,
+    x: (pos.x - cx) * fitScale,
+    y: (pos.y - cy) * fitScale,
+    z: (pos.z - cz) * fitScale,
+    radius: getNodeRadius(node.edgeCount),
+    edgeCount: node.edgeCount,
+  }));
 }
+
+/** 归一化后图谱球体的目标半径（世界坐标单位）。相机取景与 reset 均以此为基准。 */
+export const GRAPH_SPHERE_RADIUS = 42;
+
+/** 默认相机距离：恰好把整个球体框进 fov=60 的视锥（含少量边距）。 */
+export const GRAPH_CAMERA_DISTANCE = Math.ceil(GRAPH_SPHERE_RADIUS / Math.sin((Math.PI / 180) * 30) * 1.1);
 
 interface Vector3Like {
   x: number;

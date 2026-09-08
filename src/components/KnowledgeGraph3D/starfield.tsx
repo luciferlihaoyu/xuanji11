@@ -23,7 +23,7 @@ function generateStarfield(count: number, radius: number): Float32Array {
   return array;
 }
 
-export default function Starfield({ count = 2500, radius = 500 }: StarfieldProps) {
+export default function Starfield({ count = 2000, radius = 260 }: StarfieldProps) {
   const positions = useMemo(() => generateStarfield(count, radius), [count, radius]);
 
   return (

@@ -3,6 +3,8 @@ import { useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
+import { GRAPH_CAMERA_DISTANCE } from '@/lib/graph-layout-3d';
+import { updateGraphHash } from './webgl';
 
 export interface GraphControlsHandle {
   flyTo: (x: number, y: number, z: number) => void;
@@ -15,6 +17,9 @@ interface GraphControlsProps {
   readonly initialCamera?: [number, number, number];
 }
 
+/** 陈旧机位阈值：布局已归一化到固定球体，存档机位离原点超过此值视为旧版遗留，忽略之。 */
+const STALE_CAMERA_DISTANCE = 250;
+
 const GraphControls = forwardRef<GraphControlsHandle, GraphControlsProps>(
   function GraphControls({ onCameraChange, initialCamera }, ref) {
     const controlsRef = useRef<OrbitControlsImpl>(null);
@@ -22,9 +27,15 @@ const GraphControls = forwardRef<GraphControlsHandle, GraphControlsProps>(
 
     useEffect(() => {
       if (initialCamera) {
-        camera.position.set(...initialCamera);
+        const dist = Math.hypot(...initialCamera);
+        // 旧版散布布局的存档机位会把新球体布局甩出视野——只在合理范围内恢复
+        if (dist < STALE_CAMERA_DISTANCE) {
+          camera.position.set(...initialCamera);
+        } else {
+          camera.position.set(0, 0, GRAPH_CAMERA_DISTANCE);
+        }
       } else {
-        camera.position.set(0, 0, 120);
+        camera.position.set(0, 0, GRAPH_CAMERA_DISTANCE);
       }
     }, [camera, initialCamera]);
 
@@ -67,10 +78,13 @@ const GraphControls = forwardRef<GraphControlsHandle, GraphControlsProps>(
         requestAnimationFrame(animate);
       },
       reset: () => {
-        camera.position.set(0, 0, 120);
+        camera.position.set(0, 0, GRAPH_CAMERA_DISTANCE);
         if (controlsRef.current) {
           controlsRef.current.target.set(0, 0, 0);
+          controlsRef.current.update();
         }
+        // 复位同时清掉 URL 里的陈旧机位存档，避免刷新后又跳回远处
+        updateGraphHash([0, 0, GRAPH_CAMERA_DISTANCE], null);
       },
       getCameraPosition: (): [number, number, number] => [camera.position.x, camera.position.y, camera.position.z],
     }));

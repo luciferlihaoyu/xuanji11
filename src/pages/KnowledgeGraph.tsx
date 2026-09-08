@@ -63,6 +63,8 @@ export default function KnowledgeGraph() {
   const containerRef = useRef<HTMLDivElement>(null);
   const simulationRef = useRef<d3.Simulation<RenderNode, RenderEdge> | null>(null);
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  // 2D 自动适配视图的变换（仿真收敛后按包围盒计算）；reset 时恢复
+  const fitTransformRef = useRef<d3.ZoomTransform | null>(null);
   const visibleNodesRef = useRef<RenderNode[]>([]);
   const { agents, graphBgImage } = useAppStore();
   const {
@@ -227,7 +229,7 @@ export default function KnowledgeGraph() {
 
     // Zoom
     const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.25, 2])
+      .scaleExtent([0.25, 3])
       .on('zoom', (event) => { g.attr('transform', event.transform.toString()); });
     zoomRef.current = zoom;
     svg.call(zoom);
@@ -400,12 +402,13 @@ export default function KnowledgeGraph() {
         setContextMenu({ x, y, nodeId: d.id });
       });
 
-    // Simulation
+    // Simulation：力参数收敛——旧版 charge(-500)/link(220) 会把图幅撑到数千像素，
+    // 远超视口且"不居中"。缩距聚拢后整图可被视口完整容纳。
     const simulation = d3.forceSimulation<RenderNode>(nodes)
-      .force('link', d3.forceLink<RenderNode, RenderEdge>(links).id((d) => d.id).distance((d) => 220 - d.strength * 25))
-      .force('charge', d3.forceManyBody().strength(-gravityStrength * 10))
+      .force('link', d3.forceLink<RenderNode, RenderEdge>(links).id((d) => d.id).distance((d) => Math.max(36, 80 - d.strength * 10)))
+      .force('charge', d3.forceManyBody().strength(-gravityStrength * 4))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide<RenderNode>().radius((d) => d.radius + nodeSpacing * 0.4));
+      .force('collision', d3.forceCollide<RenderNode>().radius((d) => d.radius + nodeSpacing * 0.25));
 
     simulationRef.current = simulation;
 
@@ -420,6 +423,29 @@ export default function KnowledgeGraph() {
         .attr('cx', (d: any) => d.source.x + (d.target.x - d.source.x) * ((t * d.strength * 0.3) % 1))
         .attr('cy', (d: any) => d.source.y + (d.target.y - d.source.y) * ((t * d.strength * 0.3) % 1));
     });
+
+    // 同步收敛：一次性跑完仿真（163 节点 ×160 tick 远低于 1s），替代
+    // 原先 3 秒的动态 tick 抖动；位置确定后按包围盒自动 fit 居中进视口。
+    simulation.stop();
+    simulation.tick(160);
+
+    const xExtent = d3.extent(nodes, (d) => d.x) as [number, number];
+    const yExtent = d3.extent(nodes, (d) => d.y) as [number, number];
+    const fitPad = 60;
+    const bboxW = Math.max(1, xExtent[1] - xExtent[0] + fitPad * 2);
+    const bboxH = Math.max(1, yExtent[1] - yExtent[0] + fitPad * 2);
+    const fitScale = Math.min(width / bboxW, height / bboxH, 1.6);
+    const fitTransform = d3.zoomIdentity
+      .translate(width / 2, height / 2)
+      .scale(fitScale)
+      .translate(-(xExtent[0] + xExtent[1]) / 2, -(yExtent[0] + yExtent[1]) / 2);
+    fitTransformRef.current = fitTransform;
+    // 平移范围放宽到内容外围一圈视口大小：可自由滑动探索，但不会迷失在空白里
+    zoom.translateExtent([
+      [xExtent[0] - width, yExtent[0] - height],
+      [xExtent[1] + width, yExtent[1] + height],
+    ]);
+    svg.call(zoom.transform, fitTransform);
 
     // Entrance animation
     nodeGroups.attr('transform', `translate(${width / 2},${height / 2}) scale(0)`);
@@ -475,7 +501,10 @@ export default function KnowledgeGraph() {
     const svgElement = svgRef.current;
     const zoom = zoomRef.current;
     if (!svgElement || !zoom) return;
-    d3.select(svgElement).transition().duration(450).call(zoom.transform, d3.zoomIdentity);
+    // 复位到"适配视图"（整图居中），而非恒等变换——恒等变换会把
+    // 收敛后的图又变回左上角局部
+    const fit = fitTransformRef.current ?? d3.zoomIdentity;
+    d3.select(svgElement).transition().duration(450).call(zoom.transform, fit);
   }, [spatialMode, reset3D]);
 
   const handleExportGraph = useCallback(() => {

@@ -15,7 +15,7 @@ import { Canvas } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { LayoutEdge } from '@/lib/graph-layout-3d';
 import type { LayoutNode3D } from '@/lib/graph-layout-3d';
-import { getConnectedNodeIds } from '@/lib/graph-layout-3d';
+import { getConnectedNodeIds, GRAPH_CAMERA_DISTANCE } from '@/lib/graph-layout-3d';
 import GraphNodes from './KnowledgeGraph3D/nodes';
 import GraphEdges from './KnowledgeGraph3D/edges';
 import GraphLabels from './KnowledgeGraph3D/labels';
@@ -70,10 +70,28 @@ export default function KnowledgeGraph3D({
   const [threeTimedOut, setThreeTimedOut] = useState(false);
 
   // Timeout: if the Canvas never calls onCreated, force fallback.
+  // 关键：onCreated 成功后必须撤销计时器——旧实现只在卸载时清理，
+  // 导致 3D 渲染成功 30 秒后被误杀成"加载超时"；后台标签页（rAF 停摆、
+  // setTimeout 照跑）一回来也会中招。可见性恢复时重新计时。
   useEffect(() => {
-    const id = setTimeout(() => setThreeTimedOut(true), THREE_LOAD_TIMEOUT_MS);
-    return () => clearTimeout(id);
-  }, []);
+    if (canvasReady) return;
+    let id: ReturnType<typeof setTimeout> | null = null;
+    const arm = () => {
+      id = setTimeout(() => setThreeTimedOut(true), THREE_LOAD_TIMEOUT_MS);
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        if (id) clearTimeout(id);
+        arm();
+      }
+    };
+    arm();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      if (id) clearTimeout(id);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [canvasReady]);
 
   const handleNodeClick = useCallback(
     (nodeId: string, event: ThreeEvent<MouseEvent>) => {
@@ -148,8 +166,9 @@ export default function KnowledgeGraph3D({
       ) : (
         <ErrorBoundary fallback={(error) => <GraphErrorFallback onFallbackTo2D={onFallbackTo2D} message={error?.message} />}>
           <Canvas
-            camera={{ position: [0, 0, 120], fov: 60, near: 0.1, far: 1000 }}
-            gl={{ antialias: true, preserveDrawingBuffer: true }}
+            camera={{ position: [0, 0, GRAPH_CAMERA_DISTANCE], fov: 60, near: 0.1, far: 1000 }}
+            dpr={[1, 1.5]}
+            gl={{ antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' }}
             onCreated={({ gl }) => {
               gl.setClearColor(new THREE.Color('#060a14'));
               setCanvasReady(true);
