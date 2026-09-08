@@ -4,7 +4,7 @@
 # ============================================================
 
 # ------------------ 闃舵1: 鏋勫缓 ------------------
-FROM node:22-slim AS builder
+FROM mirror.gcr.io/library/node:22-slim AS builder
 
 WORKDIR /app
 
@@ -19,7 +19,7 @@ COPY . .
 RUN npm run build
 
 # ------------------ 闃舵2: 杩愯 ------------------
-FROM node:22-slim AS runner
+FROM mirror.gcr.io/library/node:22-slim AS runner
 
 WORKDIR /app
 
