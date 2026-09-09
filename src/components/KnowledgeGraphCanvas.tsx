@@ -208,12 +208,27 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         const oldIdx = prev.get(n.id);
         const old = oldIdx !== undefined ? prevNodes[oldIdx] : undefined;
         nextIndex.set(n.id, nextNodes.length);
+        // 位置来源：① 已在模拟中的节点保留原位；② 后端保存的位置；
+        // ③ 后端坐标为 (0,0)（未布局过）时随机散开——否则全堆原点、
+        //    距离为 0 斥力无方向，布局死锁
+        let px: number;
+        let py: number;
+        if (old) {
+          px = old.x;
+          py = old.y;
+        } else if (Math.abs(n.x) > 0.5 || Math.abs(n.y) > 0.5) {
+          px = n.x;
+          py = n.y;
+        } else {
+          px = cx + (Math.random() - 0.5) * 120;
+          py = cy + (Math.random() - 0.5) * 120;
+        }
         nextNodes.push({
           id: n.id,
           name: n.name,
           category: n.category,
-          x: old ? old.x : cx + (Math.random() - 0.5) * 120,
-          y: old ? old.y : cy + (Math.random() - 0.5) * 120,
+          x: px,
+          y: py,
           vx: old?.vx ?? 0,
           vy: old?.vy ?? 0,
           fx: old?.fx ?? null,
