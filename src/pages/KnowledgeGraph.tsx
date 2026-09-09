@@ -5,19 +5,17 @@ import GraphControlPanel from '@/components/GraphControlPanel';
 import NodeDetailPanel from '@/components/NodeDetailPanel';
 import BottomInfoBar from '@/components/BottomInfoBar';
 import BgImageUpload from '@/components/BgImageUpload';
-import KnowledgeGraph3D from '@/components/KnowledgeGraph3D';
-import { calculate3DLayout, findNodeByName, type LayoutEdge, type LayoutNode } from '@/lib/graph-layout-3d';
-import { isWebGLAvailable, shouldUse2DByDefault, parseGraphHash } from '@/components/KnowledgeGraph3D/webgl';
-import * as d3 from 'd3';
+import KnowledgeGraphCanvas, { type KnowledgeGraphCanvasHandle } from '@/components/KnowledgeGraphCanvas';
 import { Plus, Link2, X, ExternalLink, Edit3, Trash2 } from 'lucide-react';
 
+/** Tokyo Night 配色（云霄设计稿定稿色板） */
 const CATEGORY_COLORS: Record<string, string> = {
-  concept: '#00e5ff',
-  document: '#a78bfa',
-  topic: '#00d68f',
-  entity: '#ff8c42',
-  note: '#ff6b81',
-  tag: '#f0f0f0',
+  concept: '#7aa2f7',
+  document: '#9ece6a',
+  topic: '#e0af68',
+  entity: '#f7768e',
+  note: '#bb9af7',
+  tag: '#7dcfff',
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -29,26 +27,19 @@ const CATEGORY_LABELS: Record<string, string> = {
   tag: '标签',
 };
 
-/**
- * 后端 GraphNode → 前端渲染数据映射
- */
 interface RenderNode {
   id: string;
   name: string;
   category: string;
   posX: number;
   posY: number;
-  radius: number;
   summary: string;
   lastUpdate: string;
   tags: string[];
   importance: number;
   metadata: Record<string, unknown>;
-  // D3 simulation internals
   x: number;
   y: number;
-  fx: number | null;
-  fy: number | null;
 }
 
 interface RenderEdge {
@@ -59,13 +50,8 @@ interface RenderEdge {
 }
 
 export default function KnowledgeGraph() {
-  const svgRef = useRef<SVGSVGElement>(null);
+  const canvasRef = useRef<KnowledgeGraphCanvasHandle>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const simulationRef = useRef<d3.Simulation<RenderNode, RenderEdge> | null>(null);
-  const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
-  // 2D 自动适配视图的变换（仿真收敛后按包围盒计算）；reset 时恢复
-  const fitTransformRef = useRef<d3.ZoomTransform | null>(null);
-  const visibleNodesRef = useRef<RenderNode[]>([]);
   const { agents, graphBgImage } = useAppStore();
   const {
     nodes: backendNodes,
@@ -83,8 +69,6 @@ export default function KnowledgeGraph() {
   useEffect(() => { selectedNodeIdRef.current = selectedNodeId; }, [selectedNodeId]);
 
   const [edgeMode, setEdgeMode] = useState<false | 'source'>(false);
-  const edgeModeRef = useRef(edgeMode);
-  useEffect(() => { edgeModeRef.current = edgeMode; }, [edgeMode]);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [newNode, setNewNode] = useState({ title: '', content: '', type: 'concept' as const, importance: 5, tags: '' });
@@ -94,24 +78,8 @@ export default function KnowledgeGraph() {
   const [gravityStrength, setGravityStrength] = useState(50);
   const [nodeSpacing, setNodeSpacing] = useState(50);
   const [viewMode, setViewMode] = useState<'nodes' | 'edges'>('nodes');
-  const [spatialMode, setSpatialMode] = useState<'2d' | '3d'>(() => {
-    if (typeof window === 'undefined') return '2d';
-    if (!isWebGLAvailable()) return '2d';
-    return shouldUse2DByDefault() ? '2d' : '3d';
-  });
-  const [flyToTarget, setFlyToTarget] = useState<{ id: string; x: number; y: number; z: number } | null>(null);
-  const [exportPng3D, setExportPng3D] = useState<(() => void) | null>(null);
-  const [reset3D, setReset3D] = useState<(() => void) | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [entranceDone, setEntranceDone] = useState(false);
-
-  // Restore selected node from URL hash on mount
-  useEffect(() => {
-    const hash = parseGraphHash();
-    if (hash.selectedNodeId) {
-      setSelectedNodeId(hash.selectedNodeId);
-    }
-  }, []);
 
   // Right-click context menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
@@ -119,14 +87,13 @@ export default function KnowledgeGraph() {
   // Edit trigger — when set, NodeDetailPanel starts in edit mode
   const [editTriggerId, setEditTriggerId] = useState<string | null>(null);
 
-  // 将后端数据转为前端渲染格式（useMemo 稳定引用，避免 layout useMemo 每帧过期）
-  const renderNodes = useMemo(() => backendNodes.map((n: any) => ({
+  // 后端数据 → 渲染格式（useMemo 稳定引用）
+  const renderNodes = useMemo<RenderNode[]>(() => backendNodes.map((n: any) => ({
     id: String(n.id),
     name: n.title ?? '未命名',
     category: n.type ?? 'concept',
-    posX: (n.posX ?? 0) * 3,
-    posY: (n.posY ?? 0) * 3,
-    radius: 16,
+    posX: n.posX ?? 0,
+    posY: n.posY ?? 0,
     summary: n.content?.slice(0, 120) ?? '',
     lastUpdate: n.updatedAt?.toString()?.slice(0, 10) ?? '',
     tags: Array.isArray(n.metadata?.tags) ? n.metadata.tags : [],
@@ -134,57 +101,46 @@ export default function KnowledgeGraph() {
     metadata: (n.metadata as Record<string, unknown>) ?? {},
     x: (n.posX ?? 0) * 3,
     y: (n.posY ?? 0) * 3,
-    fx: null,
-    fy: null,
   })), [backendNodes]);
 
-  const renderEdges = useMemo(() => backendEdges.map((e: any) => ({
+  const renderEdges = useMemo<RenderEdge[]>(() => backendEdges.map((e: any) => ({
     source: String(e.sourceId),
     target: String(e.targetId),
     strength: e.weight ?? 1,
     label: e.label,
   })), [backendEdges]);
 
-  // 3D layout for filtered nodes
-  const layoutNodes3D = useMemo(() => {
-    const filtered = renderNodes.filter((n) => filteredCategories.has(n.category));
-    const layoutNodes: LayoutNode[] = filtered.map((n) => ({
-      id: n.id,
-      name: n.name,
-      category: n.category,
-      x: n.x,
-      y: n.y,
-      edgeCount: renderEdges.filter((e) => e.source === n.id || e.target === n.id).length,
-    }));
-    const layoutEdges: LayoutEdge[] = renderEdges
-      .filter((e) => layoutNodes.some((n) => n.id === e.source) && layoutNodes.some((n) => n.id === e.target))
-      .map((e) => ({ source: e.source, target: e.target, strength: e.strength }));
-    return calculate3DLayout(layoutNodes, layoutEdges);
-  }, [renderNodes, renderEdges, filteredCategories]);
-
-  const layoutEdges3D = useMemo(() => {
-    const nodeIds = new Set(layoutNodes3D.map((n) => n.id));
+  // 过滤后的画布数据
+  const canvasNodes = useMemo(
+    () => renderNodes
+      .filter((n) => filteredCategories.has(n.category))
+      .map((n) => ({ id: n.id, name: n.name, category: n.category, x: n.x, y: n.y })),
+    [renderNodes, filteredCategories]
+  );
+  const canvasEdges = useMemo(() => {
+    const ids = new Set(canvasNodes.map((n) => n.id));
     return renderEdges
-      .filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target))
+      .filter((e) => ids.has(e.source) && ids.has(e.target))
       .map((e) => ({ source: e.source, target: e.target, strength: e.strength }));
-  }, [layoutNodes3D, renderEdges]);
+  }, [canvasNodes, renderEdges]);
 
-  // Listen for graph search events from TopNavbar
+  // 顶栏搜索事件：按名称定位节点并聚焦
   useEffect(() => {
     const handler = (event: Event) => {
       const query = (event as CustomEvent<string>).detail;
-      if (!query || spatialMode !== '3d') return;
-      const target = findNodeByName(layoutNodes3D, query);
+      if (!query) return;
+      const q = query.toLowerCase();
+      const target = canvasNodes.find((n) => n.name.toLowerCase().includes(q));
       if (!target) {
         addToastRef.current({ type: 'warning', title: '未找到匹配节点' });
         return;
       }
-      setFlyToTarget({ id: target.id, x: target.x, y: target.y, z: target.z });
       setSelectedNodeId(target.id);
+      canvasRef.current?.focusNode(target.id);
     };
     window.addEventListener('knowledge-graph-search', handler);
     return () => window.removeEventListener('knowledge-graph-search', handler);
-  }, [layoutNodes3D, spatialMode]);
+  }, [canvasNodes]);
 
   // Entrance animation
   useEffect(() => {
@@ -193,359 +149,67 @@ export default function KnowledgeGraph() {
     return () => { clearTimeout(timer); clearTimeout(timer2); };
   }, []);
 
-  // Build D3 force simulation — driven by backend data
+  // 数据加载完成后移除加载罩（canvas 内部会自行 fit）
   useEffect(() => {
-    if (!svgRef.current || isLoading || isGraphLoading) return;
+    if (!isGraphLoading) setIsLoading(false);
+  }, [isGraphLoading]);
 
-    const svg = d3.select(svgRef.current);
-    const container = containerRef.current;
-    if (!container) return;
-    const width = container.clientWidth;
-    const height = container.clientHeight;
+  // ---- 画布回调 ----
 
-    // Stop previous simulation
-    if (simulationRef.current) {
-      simulationRef.current.stop();
-      simulationRef.current = null;
-    }
-
-    svg.selectAll('*').remove();
-
-    const g = svg.append('g');
-
-    // Filter nodes
-    const nodes: RenderNode[] = renderNodes
-      .filter((n) => filteredCategories.has(n.category))
-      .map((n) => ({
-        ...n,
-        radius: Math.max(8, Math.min(28, 8 + n.tags.length * 3)),
-      }));
-    visibleNodesRef.current = nodes;
-
-    const nodeIds = new Set(nodes.map((n) => n.id));
-    const links = renderEdges
-      .filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target))
-      .map((e) => ({ ...e }));
-
-    // Zoom
-    const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.25, 3])
-      .on('zoom', (event) => { g.attr('transform', event.transform.toString()); });
-    zoomRef.current = zoom;
-    svg.call(zoom);
-
-    // Arrow marker
-    const defs = svg.append('defs');
-    defs.append('marker')
-      .attr('id', 'arrowhead')
-      .attr('viewBox', '0 -5 10 10')
-      .attr('refX', 24).attr('refY', 0)
-      .attr('markerWidth', 6).attr('markerHeight', 6)
-      .attr('orient', 'auto')
-      .append('path')
-      .attr('d', 'M0,-4L10,0L0,4 L3,0')
-      .attr('fill', 'var(--accent-cyan)')
-      .attr('opacity', 0.4);
-
-    // Glow filter
-    const filter = defs.append('filter').attr('id', 'node-glow').attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%');
-    filter.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '6').attr('result', 'blur');
-    const feMerge = filter.append('feMerge');
-    feMerge.append('feMergeNode').attr('in', 'blur');
-    feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
-
-    // Links
-    const linkGroup = g.append('g');
-    linkGroup.selectAll('line')
-      .data(links)
-      .join('line')
-      .attr('stroke', 'var(--border-active)')
-      .attr('stroke-width', (d: RenderEdge) => d.strength * 0.5 + 1)
-      .attr('opacity', viewMode === 'edges' ? 0.55 : 0.25)
-      .transition()
-      .delay((_: unknown, i: number) => i * 30 + 500)
-      .duration(800)
-      .attr('opacity', viewMode === 'edges' ? 0.85 : 0.45);
-
-    // Flow dots
-    const flowG = g.append('g');
-    flowG.selectAll('circle')
-      .data(links)
-      .join('circle')
-      .attr('r', 2)
-      .attr('fill', 'var(--accent-cyan)')
-      .style('opacity', viewMode === 'edges' ? 0.75 : 0.35);
-
-    // Node groups
-    // Drag behavior (must be defined before .call())
-    const dragHandler: any = d3.drag<SVGGElement, RenderNode>()
-      .on('start', (event: any, d: any) => {
-        if (!event.active) simulation.alphaTarget(0.3).restart();
-        d.fx = d.x; d.fy = d.y;
-      })
-      .on('drag', (event: any, d: any) => {
-        d.fx = event.x; d.fy = event.y;
-      })
-      .on('end', (event: any, d: any) => {
-        if (!event.active) simulation.alphaTarget(0);
-        d.fx = null; d.fy = null;
-        updatePositionsRef.current(nodes.map((n: RenderNode) => ({ id: Number(n.id), posX: n.x / 3, posY: n.y / 3 }))).catch((err: unknown) => {
-          console.error('保存位置失败:', err);
-        });
-      });
-
-    const nodeGroups = g.append('g')
-      .selectAll('g')
-      .data(nodes)
-      .join('g')
-      .style('opacity', viewMode === 'edges' ? 0.55 : 1)
-      .style('cursor', 'pointer')
-      .call(dragHandler);
-
-    // Outer glow
-    nodeGroups.append('circle')
-      .attr('r', (d) => d.radius + 8)
-      .attr('fill', (d) => CATEGORY_COLORS[d.category] ?? 'var(--accent-cyan)')
-      .attr('opacity', 0.08)
-      .style('filter', 'url(#node-glow)');
-
-    // Middle ring
-    nodeGroups.append('circle')
-      .attr('r', (d) => d.radius + 3)
-      .attr('fill', 'none')
-      .attr('stroke', (d) => CATEGORY_COLORS[d.category] ?? 'var(--accent-cyan)')
-      .attr('stroke-width', 0.5)
-      .attr('opacity', 0.3);
-
-    // Main node
-    nodeGroups.append('circle')
-      .attr('r', (d) => d.radius)
-      .attr('fill', (d) => CATEGORY_COLORS[d.category] ?? 'var(--accent-cyan)')
-      .attr('opacity', 0.85)
-      .attr('stroke', (d) => CATEGORY_COLORS[d.category] ?? 'var(--accent-cyan)')
-      .attr('stroke-width', 1.5)
-      .attr('stroke-opacity', 0.6);
-
-    // Inner highlight
-    nodeGroups.append('circle')
-      .attr('r', (d) => d.radius * 0.4)
-      .attr('fill', 'rgba(255,255,255,0.25)')
-      .attr('opacity', 0.6);
-
-    // Labels
-    const labels = g.append('g')
-      .selectAll('text')
-      .data(nodes)
-      .join('text')
-      .text((d) => d.name)
-      .attr('font-size', 11)
-      .attr('fill', 'var(--text-secondary)')
-      .attr('text-anchor', 'middle')
-      .attr('dy', (d) => d.radius + 16)
-      .style('pointer-events', 'none')
-      .style('opacity', 0)
-      .style('text-shadow', '0 1px 4px rgba(0,0,0,0.8)')
-      .transition()
-      .delay((_: unknown, i: number) => i * 50 + 1500)
-      .duration(500)
-      .style('opacity', 0.85);
-
-    // Interactions
-    nodeGroups
-      .on('click', (_event: unknown, d: RenderNode) => {
-        if (edgeModeRef.current === 'source') {
-          if (selectedNodeIdRef.current === d.id) {
+  const handleCanvasNodeClick = useCallback((id: string | null) => {
+    if (edgeMode === 'source') {
+      if (id === null) return; // 连线模式点空白：不变更
+      if (selectedNodeIdRef.current === id) {
+        setEdgeMode(false);
+        setSelectedNodeId(null);
+        return;
+      }
+      if (selectedNodeIdRef.current) {
+        createEdgeRef.current({ sourceId: Number(selectedNodeIdRef.current), targetId: Number(id), type: 'related' })
+          .then(() => {
             setEdgeMode(false);
-            setSelectedNodeId(null);
-            return;
-          }
-          if (selectedNodeIdRef.current) {
-            createEdgeRef.current({ sourceId: Number(selectedNodeIdRef.current), targetId: Number(d.id), type: 'related' })
-              .then(() => {
-                setEdgeMode(false);
-                setSelectedNodeId(null);
-                addToastRef.current({ type: 'success', title: '连线已创建' });
-              })
-              .catch((err: unknown) => {
-                setEdgeMode(false);
-                addToastRef.current({ type: 'error', title: '创建连线失败', description: err instanceof Error ? err.message : String(err) });
-              });
-            return;
-          }
-        }
-        setSelectedNodeId(d.id);
-      })
-      .on('mouseenter', function(_event: unknown, d: RenderNode) {
-        const idx = nodes.indexOf(d);
-        linkGroup.selectAll('line').transition().duration(150)
-          .attr('stroke', (l: any) => (l.source.id === d.id || l.target.id === d.id ? 'var(--accent-cyan)' : 'var(--border-subtle)'))
-          .attr('stroke-width', (l: any) => (l.source.id === d.id || l.target.id === d.id ? l.strength * 1.5 : l.strength * 0.4))
-          .attr('opacity', (l: any) => (l.source.id === d.id || l.target.id === d.id ? 0.9 : 0.15));
-        d3.select(nodeGroups.nodes()[idx] as SVGGElement).selectAll('circle').transition().duration(150)
-          .attr('transform', 'scale(1.25)');
-      })
-      .on('mouseleave', function(_event: unknown, d: RenderNode) {
-        const idx = nodes.indexOf(d);
-        linkGroup.selectAll('line').transition().duration(150)
-          .attr('stroke', 'var(--border-active)')
-          .attr('stroke-width', (l: any) => l.strength * 0.5)
-          .attr('opacity', 0.4);
-        d3.select(nodeGroups.nodes()[idx] as SVGGElement).selectAll('circle').transition().duration(150)
-          .attr('transform', 'scale(1)');
-      })
-      .on('contextmenu', (event: MouseEvent, d: RenderNode) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const rect = container.getBoundingClientRect();
-        const x = event.clientX - rect.left;
-        const y = event.clientY - rect.top;
-        setContextMenu({ x, y, nodeId: d.id });
-      });
+            addToastRef.current({ type: 'success', title: '连线已创建' });
+          })
+          .catch((err: unknown) => {
+            setEdgeMode(false);
+            addToastRef.current({ type: 'error', title: '创建连线失败', description: err instanceof Error ? err.message : String(err) });
+          });
+        return;
+      }
+    }
+    setSelectedNodeId(id);
+  }, [edgeMode]);
 
-    // Simulation：力参数收敛——旧版 charge(-500)/link(220) 会把图幅撑到数千像素，
-    // 远超视口且"不居中"。缩距聚拢后整图可被视口完整容纳。
-    const simulation = d3.forceSimulation<RenderNode>(nodes)
-      .force('link', d3.forceLink<RenderNode, RenderEdge>(links).id((d) => d.id).distance((d) => Math.max(36, 80 - d.strength * 10)))
-      .force('charge', d3.forceManyBody().strength(-gravityStrength * 4))
-      .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide<RenderNode>().radius((d) => d.radius + nodeSpacing * 0.25));
+  const handleCanvasContextMenu = useCallback((nodeId: string, x: number, y: number) => {
+    setContextMenu({ x, y, nodeId });
+  }, []);
 
-    simulationRef.current = simulation;
-
-    simulation.on('tick', () => {
-      linkGroup.selectAll('line')
-        .attr('x1', (d: any) => d.source.x).attr('y1', (d: any) => d.source.y)
-        .attr('x2', (d: any) => d.target.x).attr('y2', (d: any) => d.target.y);
-      nodeGroups.attr('transform', (d) => `translate(${d.x},${d.y})`);
-      labels.attr('x', (d) => d.x).attr('y', (d) => d.y);
-      const t = Date.now() / 2000;
-      flowG.selectAll('circle')
-        .attr('cx', (d: any) => d.source.x + (d.target.x - d.source.x) * ((t * d.strength * 0.3) % 1))
-        .attr('cy', (d: any) => d.source.y + (d.target.y - d.source.y) * ((t * d.strength * 0.3) % 1));
+  const handleSavePositions = useCallback((positions: Array<{ id: string; x: number; y: number }>) => {
+    updatePositionsRef.current(
+      positions.map((p) => ({ id: Number(p.id), posX: p.x / 3, posY: p.y / 3 }))
+    ).catch((err: unknown) => {
+      console.error('保存位置失败:', err);
     });
-
-    // 同步收敛：一次性跑完仿真（163 节点 ×160 tick 远低于 1s），替代
-    // 原先 3 秒的动态 tick 抖动；位置确定后按包围盒自动 fit 居中进视口。
-    simulation.stop();
-    simulation.tick(160);
-
-    const xExtent = d3.extent(nodes, (d) => d.x) as [number, number];
-    const yExtent = d3.extent(nodes, (d) => d.y) as [number, number];
-    const fitPad = 60;
-    const bboxW = Math.max(1, xExtent[1] - xExtent[0] + fitPad * 2);
-    const bboxH = Math.max(1, yExtent[1] - yExtent[0] + fitPad * 2);
-    const fitScale = Math.min(width / bboxW, height / bboxH, 1.6);
-    const fitTransform = d3.zoomIdentity
-      .translate(width / 2, height / 2)
-      .scale(fitScale)
-      .translate(-(xExtent[0] + xExtent[1]) / 2, -(yExtent[0] + yExtent[1]) / 2);
-    fitTransformRef.current = fitTransform;
-    // 平移范围放宽到内容外围一圈视口大小：可自由滑动探索，但不会迷失在空白里
-    zoom.translateExtent([
-      [xExtent[0] - width, yExtent[0] - height],
-      [xExtent[1] + width, yExtent[1] + height],
-    ]);
-    svg.call(zoom.transform, fitTransform);
-
-    // Entrance animation
-    nodeGroups.attr('transform', `translate(${width / 2},${height / 2}) scale(0)`);
-    nodeGroups.transition().duration(1500).ease(d3.easeCubicOut)
-      .attr('transform', (d) => `translate(${d.x},${d.y}) scale(1)`);
-
-    // Cleanup: stop simulation, clear SVG, remove zoom listeners
-    return () => {
-      simulation.stop();
-      simulationRef.current = null;
-      zoomRef.current = null;
-      visibleNodesRef.current = [];
-      svg.on('.zoom', null); // remove zoom event listeners
-      svg.selectAll('*').remove();
-    };
-  }, [isLoading, isGraphLoading, renderNodes.length, renderEdges.length, gravityStrength, nodeSpacing, filteredCategories, viewMode, spatialMode]);
+  }, []);
 
   const handleFocusSelected = useCallback(() => {
     if (!selectedNodeId) {
       addToastRef.current({ type: 'info', title: '请先选择一个节点' });
       return;
     }
-    if (spatialMode === '3d') {
-      const node = layoutNodes3D.find((n) => n.id === selectedNodeId);
-      if (!node) {
-        addToastRef.current({ type: 'warning', title: '选中节点当前不可见' });
-        return;
-      }
-      setFlyToTarget({ id: node.id, x: node.x, y: node.y, z: node.z });
-      return;
-    }
-    const svgElement = svgRef.current;
-    const container = containerRef.current;
-    const zoom = zoomRef.current;
-    if (!svgElement || !container || !zoom) return;
-    const node = visibleNodesRef.current.find((n) => n.id === selectedNodeId);
-    if (!node) {
+    const ok = canvasRef.current?.focusNode(selectedNodeId);
+    if (!ok) {
       addToastRef.current({ type: 'warning', title: '选中节点当前不可见' });
-      return;
     }
-    const scale = 1.2;
-    const transform = d3.zoomIdentity
-      .translate(container.clientWidth / 2 - (node.x ?? node.posX) * scale, container.clientHeight / 2 - (node.y ?? node.posY) * scale)
-      .scale(scale);
-    d3.select(svgElement).transition().duration(450).call(zoom.transform, transform);
-  }, [selectedNodeId, spatialMode, layoutNodes3D]);
+  }, [selectedNodeId]);
 
   const handleResetView = useCallback(() => {
-    if (spatialMode === '3d') {
-      reset3D?.();
-      return;
-    }
-    const svgElement = svgRef.current;
-    const zoom = zoomRef.current;
-    if (!svgElement || !zoom) return;
-    // 复位到"适配视图"（整图居中），而非恒等变换——恒等变换会把
-    // 收敛后的图又变回左上角局部
-    const fit = fitTransformRef.current ?? d3.zoomIdentity;
-    d3.select(svgElement).transition().duration(450).call(zoom.transform, fit);
-  }, [spatialMode, reset3D]);
+    canvasRef.current?.resetView();
+  }, []);
 
   const handleExportGraph = useCallback(() => {
-    if (spatialMode === '3d') {
-      exportPng3D?.();
-      return;
-    }
-    const svgElement = svgRef.current;
-    const container = containerRef.current;
-    if (!svgElement || !container) return;
-
-    const width = Math.max(1, container.clientWidth);
-    const height = Math.max(1, container.clientHeight);
-    const serializedSvg = new XMLSerializer().serializeToString(svgElement);
-    const svgBlob = new Blob([serializedSvg], { type: 'image/svg+xml;charset=utf-8' });
-    const objectUrl = URL.createObjectURL(svgBlob);
-    const image = new Image();
-    image.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const context = canvas.getContext('2d');
-      if (!context) {
-        URL.revokeObjectURL(objectUrl);
-        return;
-      }
-      context.fillStyle = '#0a0e1a';
-      context.fillRect(0, 0, width, height);
-      context.drawImage(image, 0, 0, width, height);
-      const link = document.createElement('a');
-      link.download = `knowledge-graph-${Date.now()}.png`;
-      link.href = canvas.toDataURL('image/png');
-      link.click();
-      URL.revokeObjectURL(objectUrl);
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      addToastRef.current({ type: 'error', title: '导出图谱失败' });
-    };
-    image.src = objectUrl;
-  }, [spatialMode, exportPng3D]);
+    canvasRef.current?.exportPng();
+  }, []);
 
   const toggleCategory = useCallback((cat: string) => {
     setFilteredCategories((prev) => {
@@ -650,7 +314,6 @@ export default function KnowledgeGraph() {
     if (!contextMenu) return;
     const close = () => setContextMenu(null);
     const closeOnEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setContextMenu(null); };
-    // Delay to avoid the same right-click event closing immediately
     const timer = setTimeout(() => {
       window.addEventListener('click', close);
       window.addEventListener('contextmenu', close);
@@ -666,7 +329,6 @@ export default function KnowledgeGraph() {
 
   const onlineCount = agents.filter((a) => a.status === 'active').length;
 
-  // Find selected node from renderNodes
   const selectedNodeData = selectedNodeId ? renderNodes.find((n) => n.id === selectedNodeId) : null;
   const connectedEdges = selectedNodeId ? renderEdges.filter((e) => e.source === selectedNodeId || e.target === selectedNodeId) : [];
 
@@ -679,54 +341,53 @@ export default function KnowledgeGraph() {
           background: graphBgImage
             ? `url(${graphBgImage}) center/cover no-repeat`
             : undefined,
-          backgroundColor: 'var(--bg-primary)',
+          backgroundColor: '#1e1e1e',
         }}
       >
         {!graphBgImage && (
-          <div className="absolute inset-0" style={{ background: 'var(--nebula-gradient)' }} />
+          <div className="absolute inset-0" style={{
+            background: 'radial-gradient(ellipse at 50% 42%, #26262a 0%, #1e1e1e 62%, #17171a 100%)',
+          }} />
         )}
-        {/* Scanlines overlay */}
-        <div className="absolute inset-0 pointer-events-none" style={{
-          background: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,229,255,0.015) 2px, rgba(0,229,255,0.015) 4px)',
-        }} />
       </div>
 
       {/* Loading */}
       {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center z-10" style={{ backgroundColor: 'var(--bg-primary)' }}>
+        <div className="absolute inset-0 flex items-center justify-center z-10" style={{ backgroundColor: '#1e1e1e' }}>
           <div className="flex flex-col items-center gap-4">
             <div className="relative w-10 h-10">
-              <div className="animate-rotate w-10 h-10 border-2 border-t-transparent rounded-full" style={{ borderColor: 'var(--accent-cyan)', borderTopColor: 'transparent' }} />
-              <div className="absolute inset-1 rounded-full" style={{ border: '1px solid var(--accent-cyan)', opacity: 0.3 }} />
+              <div className="animate-rotate w-10 h-10 border-2 border-t-transparent rounded-full" style={{ borderColor: '#7aa2f7', borderTopColor: 'transparent' }} />
+              <div className="absolute inset-1 rounded-full" style={{ border: '1px solid #7aa2f7', opacity: 0.3 }} />
             </div>
-            <span className="text-sm tracking-wider" style={{ color: 'var(--text-secondary)' }}>
-              正在加载知识星图<span className="animate-pulse">...</span>
+            <span className="text-sm tracking-wider" style={{ color: '#8a9099' }}>
+              正在加载知识图谱<span className="animate-pulse">...</span>
             </span>
           </div>
         </div>
       )}
 
-      {/* SVG or 3D Canvas */}
-      {spatialMode === '2d' ? (
-        <svg ref={svgRef} className="absolute inset-0 w-full h-full" style={{ zIndex: 1 }} />
-      ) : (
-        <KnowledgeGraph3D
-          nodes={layoutNodes3D}
-          edges={layoutEdges3D}
-          onNodeSelect={setSelectedNodeId}
+      {/* Obsidian 风格 Canvas */}
+      {!isGraphLoading && (
+        <KnowledgeGraphCanvas
+          ref={canvasRef}
+          nodes={canvasNodes}
+          edges={canvasEdges}
           selectedNodeId={selectedNodeId}
-          flyToTarget={flyToTarget}
-          onRegisterExport={(handler) => setExportPng3D(() => handler)}
-          onRegisterReset={(handler) => setReset3D(() => handler)}
-          initialCamera={parseGraphHash().camera}
-          onFallbackTo2D={() => setSpatialMode('2d')}
+          edgeMode={edgeMode === 'source'}
+          viewMode={viewMode}
+          gravityStrength={gravityStrength}
+          nodeSpacing={nodeSpacing}
+          categoryColors={CATEGORY_COLORS}
+          onNodeClick={handleCanvasNodeClick}
+          onNodeContextMenu={handleCanvasContextMenu}
+          onSavePositions={handleSavePositions}
         />
       )}
 
       {/* Top badge */}
       <div className={`absolute top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-xs font-medium border z-10 transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'}`}
-        style={{ backgroundColor: 'var(--bg-glass)', backdropFilter: 'blur(12px)', borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-        {spatialMode === '3d' ? '3D 知识星图' : '2D 力导向图'} · {renderNodes.length} 节点 · {renderEdges.length} 连接
+        style={{ backgroundColor: 'rgba(20,20,22,.55)', backdropFilter: 'blur(12px)', borderColor: 'rgba(255,255,255,0.08)', color: '#8a9099' }}>
+        知识图谱 · {renderNodes.length} 节点 · {renderEdges.length} 连接
       </div>
 
       {/* Control Panel */}
@@ -758,7 +419,7 @@ export default function KnowledgeGraph() {
             </button>
           </div>
           {edgeMode && (
-            <p className="text-[10px] mt-2" style={{ color: 'var(--accent-cyan)' }}>
+            <p className="text-[10px] mt-2" style={{ color: '#7aa2f7' }}>
               点击目标节点完成连线
             </p>
           )}
@@ -766,8 +427,6 @@ export default function KnowledgeGraph() {
         <GraphControlPanel
           viewMode={viewMode}
           onViewModeChange={setViewMode}
-          spatialMode={spatialMode}
-          onSpatialModeChange={setSpatialMode}
           filteredCategories={filteredCategories}
           onToggleCategory={toggleCategory}
           gravityStrength={gravityStrength}
@@ -856,7 +515,7 @@ export default function KnowledgeGraph() {
               <div>
                 <div className="flex justify-between text-xs font-medium mb-1.5" style={{ color: 'var(--text-primary)' }}>
                   <span>重要性</span>
-                  <span style={{ color: 'var(--accent-cyan)' }}>{newNode.importance}/10</span>
+                  <span style={{ color: '#7aa2f7' }}>{newNode.importance}/10</span>
                 </div>
                 <input
                   type="range"
@@ -865,7 +524,7 @@ export default function KnowledgeGraph() {
                   value={newNode.importance}
                   onChange={(e) => setNewNode((p) => ({ ...p, importance: Number(e.target.value) }))}
                   className="w-full h-1 rounded-full appearance-none cursor-pointer"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', accentColor: 'var(--accent-cyan)' }}
+                  style={{ backgroundColor: 'var(--bg-tertiary)', accentColor: '#7aa2f7' }}
                 />
               </div>
               <div>
@@ -903,7 +562,7 @@ export default function KnowledgeGraph() {
             className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
             style={{ color: 'var(--text-secondary)' }}
           >
-            <ExternalLink className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
+            <ExternalLink className="w-3.5 h-3.5" style={{ color: '#7aa2f7' }} />
             查看详情
           </button>
           <button
@@ -911,7 +570,7 @@ export default function KnowledgeGraph() {
             className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
             style={{ color: 'var(--text-secondary)' }}
           >
-            <Edit3 className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
+            <Edit3 className="w-3.5 h-3.5" style={{ color: '#7aa2f7' }} />
             编辑节点
           </button>
           <button
@@ -919,7 +578,7 @@ export default function KnowledgeGraph() {
             className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
             style={{ color: 'var(--text-secondary)' }}
           >
-            <Link2 className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
+            <Link2 className="w-3.5 h-3.5" style={{ color: '#7aa2f7' }} />
             连线
           </button>
           <div style={{ borderTop: '1px solid var(--border-subtle)' }} className="my-1" />
