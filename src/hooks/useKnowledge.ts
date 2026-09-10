@@ -31,6 +31,9 @@ export function useKnowledgeGraph() {
   const deleteEdgeMutation = trpc.knowledge.deleteEdge.useMutation({
     onSuccess: () => utils.knowledge.getGraph.invalidate(),
   });
+  const autoLinkEdgesMutation = trpc.knowledge.autoLinkEdges.useMutation({
+    onSuccess: () => utils.knowledge.getGraph.invalidate(),
+  });
 
   return {
     nodes: graphQuery.data?.nodes ?? [],
@@ -42,5 +45,6 @@ export function useKnowledgeGraph() {
     updatePositions: updatePositionsMutation.mutateAsync,
     createEdge: createEdgeMutation.mutateAsync,
     deleteEdge: deleteEdgeMutation.mutateAsync,
+    autoLinkEdges: autoLinkEdgesMutation.mutateAsync,
   };
 }

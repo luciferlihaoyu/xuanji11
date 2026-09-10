@@ -62,6 +62,7 @@ export default function KnowledgeGraph() {
     deleteNode,
     createEdge,
     updatePositions,
+    autoLinkEdges,
   } = useKnowledgeGraph();
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -72,6 +73,10 @@ export default function KnowledgeGraph() {
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [newNode, setNewNode] = useState({ title: '', content: '', type: 'concept' as const, importance: 5, tags: '' });
+  const [showAutoLinkModal, setShowAutoLinkModal] = useState(false);
+  const [autoLinkThreshold, setAutoLinkThreshold] = useState(62);
+  const [autoLinkPreview, setAutoLinkPreview] = useState<{ totalCandidates: number; isolated: number; candidates: Array<{ sourceTitle: string; targetTitle: string; score: number }> } | null>(null);
+  const [autoLinkBusy, setAutoLinkBusy] = useState(false);
   const [filteredCategories, setFilteredCategories] = useState<Set<string>>(
     new Set(['concept', 'document', 'topic', 'entity', 'note', 'tag'])
   );
@@ -267,6 +272,37 @@ export default function KnowledgeGraph() {
     setSelectedNodeId(nodeId);
   };
 
+  // 一键自动建边：先 dryRun 预览候选，确认后落库
+  const handleAutoLinkPreview = async () => {
+    setAutoLinkBusy(true);
+    try {
+      const res = await autoLinkEdges({ threshold: autoLinkThreshold / 100, maxPerNode: 3, dryRun: true });
+      setAutoLinkPreview({
+        totalCandidates: res.totalCandidates ?? 0,
+        isolated: res.isolated ?? 0,
+        candidates: res.candidates ?? [],
+      });
+    } catch (err) {
+      addToast({ type: 'error', title: '预览失败', description: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setAutoLinkBusy(false);
+    }
+  };
+
+  const handleAutoLinkApply = async () => {
+    setAutoLinkBusy(true);
+    try {
+      const res = await autoLinkEdges({ threshold: autoLinkThreshold / 100, maxPerNode: 3, dryRun: false });
+      setShowAutoLinkModal(false);
+      setAutoLinkPreview(null);
+      addToast({ type: 'success', title: `已自动建边 ${res.created} 条`, description: `候选 ${res.totalCandidates} 条（双边一致才建）` });
+    } catch (err) {
+      addToast({ type: 'error', title: '自动建边失败', description: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setAutoLinkBusy(false);
+    }
+  };
+
   const handleUpdateNode = async (nodeId: string, data: { name: string; category: string; importance: number; tags: string[]; summary: string }) => {
     try {
       const existing = renderNodes.find((n) => n.id === nodeId);
@@ -425,6 +461,14 @@ export default function KnowledgeGraph() {
               点击目标节点完成连线
             </p>
           )}
+          <button
+            onClick={() => { setShowAutoLinkModal(true); setAutoLinkPreview(null); }}
+            className="btn-ghost w-full text-xs py-1.5 mt-2 flex items-center justify-center gap-1"
+            style={{ color: '#7aa2f7' }}
+          >
+            <Link2 className="w-3.5 h-3.5" />
+            一键自动建边
+          </button>
         </div>
         <GraphControlPanel
           viewMode={viewMode}
@@ -543,6 +587,78 @@ export default function KnowledgeGraph() {
             <div className="flex justify-end gap-2 mt-6 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
               <button onClick={() => setShowAddModal(false)} className="btn-ghost text-xs py-2 px-4">取消</button>
               <button onClick={handleAddNode} disabled={!newNode.title.trim()} className="btn-primary text-xs py-2 px-4">创建</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-Link Modal */}
+      {showAutoLinkModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(30,40,60,0.35)' }}>
+          <div className="rounded-lg border p-6 w-[480px] max-h-[80vh] flex flex-col" style={{ backgroundColor: '#ffffff', borderColor: 'rgba(30,40,60,0.12)' }}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold" style={{ color: '#2b3440' }}>一键自动建边</h3>
+              <button onClick={() => setShowAutoLinkModal(false)} className="p-1 rounded hover:bg-black/5">
+                <X className="w-5 h-5" style={{ color: '#8a9099' }} />
+              </button>
+            </div>
+            <p className="text-xs mb-4" style={{ color: '#5a6472' }}>
+              用语义向量（bge-m3）计算全部节点的两两相似度，为语义相近但尚无连接的节点自动建边。
+              阈值越高建边越少越精确；只有互相都排在对方 top3 的节点对才会建边。
+            </p>
+            <div className="mb-4">
+              <div className="flex justify-between text-xs font-medium mb-1.5" style={{ color: '#2b3440' }}>
+                <span>相似度阈值</span>
+                <span style={{ color: '#7aa2f7' }}>{autoLinkThreshold}%</span>
+              </div>
+              <input
+                type="range" min={45} max={85} value={autoLinkThreshold}
+                onChange={(e) => { setAutoLinkThreshold(Number(e.target.value)); setAutoLinkPreview(null); }}
+                className="w-full h-1 rounded-full appearance-none cursor-pointer"
+                style={{ backgroundColor: '#e4e9f0', accentColor: '#7aa2f7' }}
+              />
+              <div className="flex justify-between text-[10px] mt-1" style={{ color: '#8a9099' }}>
+                <span>45% 多而宽</span><span>85% 少而准</span>
+              </div>
+            </div>
+
+            {autoLinkPreview ? (
+              <div className="flex-1 overflow-y-auto mb-4">
+                <p className="text-xs mb-2" style={{ color: '#2b3440' }}>
+                  找到 <b style={{ color: '#7aa2f7' }}>{autoLinkPreview.totalCandidates}</b> 条候选边
+                  {autoLinkPreview.isolated > 0 && <span style={{ color: '#8a9099' }}>（另有 {autoLinkPreview.isolated} 个完全孤立节点）</span>}
+                </p>
+                <div className="space-y-1">
+                  {autoLinkPreview.candidates.slice(0, 20).map((c, i) => (
+                    <div key={i} className="text-[11px] flex items-center gap-1.5 px-2 py-1 rounded" style={{ backgroundColor: '#f2f4f8', color: '#2b3440' }}>
+                      <span className="flex-1 truncate">{c.sourceTitle}</span>
+                      <span style={{ color: '#7aa2f7' }}>↔</span>
+                      <span className="flex-1 truncate">{c.targetTitle}</span>
+                      <span className="font-mono shrink-0" style={{ color: '#8a9099' }}>{(c.score * 100).toFixed(0)}%</span>
+                    </div>
+                  ))}
+                  {autoLinkPreview.totalCandidates > 20 && (
+                    <p className="text-[10px] text-center pt-1" style={{ color: '#8a9099' }}>… 还有 {autoLinkPreview.totalCandidates - 20} 条</p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 flex items-center justify-center mb-4 min-h-[120px]" style={{ color: '#8a9099' }}>
+                <span className="text-xs">{autoLinkBusy ? '正在计算相似度（约 10~30 秒）…' : '点击「预览候选」查看将建哪些边'}</span>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-4" style={{ borderTop: '1px solid rgba(30,40,60,0.10)' }}>
+              <button onClick={() => setShowAutoLinkModal(false)} className="btn-ghost text-xs py-2 px-4">取消</button>
+              {!autoLinkPreview ? (
+                <button onClick={handleAutoLinkPreview} disabled={autoLinkBusy} className="btn-secondary text-xs py-2 px-4">
+                  {autoLinkBusy ? '计算中…' : '预览候选'}
+                </button>
+              ) : (
+                <button onClick={handleAutoLinkApply} disabled={autoLinkBusy || autoLinkPreview.totalCandidates === 0} className="btn-primary text-xs py-2 px-4">
+                  {autoLinkBusy ? '建边中…' : `确认建 ${autoLinkPreview.totalCandidates} 条边`}
+                </button>
+              )}
             </div>
           </div>
         </div>

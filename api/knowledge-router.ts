@@ -181,6 +181,134 @@ export const knowledgeRouter = createRouter({
       return { success: true };
     }),
 
+  /**
+   * 一键自动建边：embed 全部节点的 title+content，全对余弦相似度，
+   * 超过阈值且尚无边的节点对建 similar 边（权重=相似度）。
+   * 用途：把知识库里的孤岛连通块（实测 20 个）按语义连起来。
+   * dryRun=true 只预览不落库，供前端确认。
+   */
+  autoLinkEdges: adminQuery
+    .input(z.object({
+      threshold: z.number().min(0.3).max(0.95).default(0.62),
+      maxPerNode: z.number().int().min(1).max(10).default(3),
+      dryRun: z.boolean().default(true),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      const nodes = await db.select({
+        id: knowledgeNodes.id,
+        title: knowledgeNodes.title,
+        content: knowledgeNodes.content,
+      }).from(knowledgeNodes);
+      if (nodes.length < 2) return { created: 0, candidates: [], considered: 0, isolated: 0 };
+
+      // 1) embed 全部节点（title + 内容前 200 字）
+      const texts = nodes.map((n) => `${n.title}\n${(n.content ?? "").slice(0, 200)}`);
+      const { embedTextsWithFallback } = await import("./lib/vector-service");
+      const vectors = await embedTextsWithFallback(texts);
+      const dims = vectors[0]?.length ?? 0;
+      if (dims === 0) throw new Error("embedding 返回空向量");
+
+      // L2 归一化 → 余弦 = 点积
+      const normed = vectors.map((v) => {
+        let s = 0;
+        for (const x of v) s += x * x;
+        const inv = s > 0 ? 1 / Math.sqrt(s) : 0;
+        return v.map((x) => x * inv);
+      });
+
+      // 2) 已有边集合（双向去重）
+      const existing = await db.select({
+        s: knowledgeEdges.sourceId,
+        t: knowledgeEdges.targetId,
+      }).from(knowledgeEdges);
+      const hasEdge = new Set<string>();
+      for (const e of existing) {
+        hasEdge.add(`${e.s}:${e.t}`);
+        hasEdge.add(`${e.t}:${e.s}`);
+      }
+
+      // 3) 全对相似度，每节点保留 top maxPerNode 候选
+      const perNode: Array<Array<{ j: number; score: number }>> = nodes.map(() => []);
+      let considered = 0;
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const key = `${nodes[i].id}:${nodes[j].id}`;
+          if (hasEdge.has(key)) continue;
+          let dot = 0;
+          const a = normed[i];
+          const b = normed[j];
+          for (let k = 0; k < dims; k++) dot += a[k] * b[k];
+          if (dot < input.threshold) continue;
+          considered++;
+          perNode[i].push({ j, score: dot });
+          perNode[j].push({ j: i, score: dot });
+        }
+      }
+
+      // 4) 每节点取 top maxPerNode，双边一致才建（A 的 top 含 B 且 B 的 top 含 A）
+      const picked = new Map<string, { s: number; t: number; score: number }>();
+      for (let i = 0; i < nodes.length; i++) {
+        const top = perNode[i].sort((x, y) => y.score - x.score).slice(0, input.maxPerNode);
+        for (const { j, score } of top) {
+          const key = i < j ? `${i}:${j}` : `${j}:${i}`;
+          if (picked.has(key)) {
+            // 第二次出现 = 双边一致，确认建边
+            picked.set(key, { s: nodes[Math.min(i, j)].id, t: nodes[Math.max(i, j)].id, score });
+          } else {
+            picked.set(key, { s: -1, t: -1, score }); // 占位：单边
+          }
+        }
+      }
+      const candidates = [...picked.values()]
+        .filter((c) => c.s > 0)
+        .sort((x, y) => y.score - x.score);
+
+      // 5) dryRun 只预览
+      if (input.dryRun) {
+        return {
+          created: 0,
+          considered,
+          isolated: nodes.length - new Set(existing.flatMap((e) => [e.s, e.t])).size,
+          candidates: candidates.slice(0, 50).map((c) => ({
+            sourceId: c.s,
+            targetId: c.t,
+            score: Math.round(c.score * 1000) / 1000,
+            sourceTitle: nodes.find((n) => n.id === c.s)?.title ?? "",
+            targetTitle: nodes.find((n) => n.id === c.t)?.title ?? "",
+          })),
+          totalCandidates: candidates.length,
+        };
+      }
+
+      // 6) 落库（同步事务——drizzle 回调禁止 async）
+      const created = db.transaction((tx) => {
+        let n = 0;
+        for (const c of candidates) {
+          tx.insert(knowledgeEdges).values({
+            sourceId: c.s,
+            targetId: c.t,
+            label: "auto",
+            type: "similar",
+            weight: Math.round(c.score * 100) / 100,
+            createdBy: ctx.user?.id ?? null,
+          }).run();
+          n++;
+        }
+        return n;
+      });
+      await logAudit(ctx, "knowledge_edge", "create", 0, {
+        autoLink: true, threshold: input.threshold, maxPerNode: input.maxPerNode, created,
+      });
+      return {
+        created,
+        considered,
+        isolated: nodes.length - new Set(existing.flatMap((e) => [e.s, e.t])).size,
+        candidates: [],
+        totalCandidates: candidates.length,
+      };
+    }),
+
   getGraph: authedQuery.query(async () => {
     const db = getDb();
     const nodes = await db.select().from(knowledgeNodes);
