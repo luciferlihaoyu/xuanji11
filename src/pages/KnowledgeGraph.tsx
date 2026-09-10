@@ -343,19 +343,19 @@ export default function KnowledgeGraph() {
           backgroundRepeat: 'no-repeat',
           // 100% ≈ 宽度铺满；用户可调 20%~200%
           backgroundSize: graphBgImage ? `${graphBgScale}% auto` : undefined,
-          backgroundColor: '#1e1e1e',
+          backgroundColor: '#f2f4f8',
         }}
       >
         {!graphBgImage && (
           <div className="absolute inset-0" style={{
-            background: 'radial-gradient(ellipse at 50% 42%, #26262a 0%, #1e1e1e 62%, #17171a 100%)',
+            background: 'radial-gradient(ellipse at 50% 42%, #ffffff 0%, #f2f4f8 62%, #e4e9f0 100%)',
           }} />
         )}
       </div>
 
       {/* Loading */}
       {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center z-10" style={{ backgroundColor: '#1e1e1e' }}>
+        <div className="absolute inset-0 flex items-center justify-center z-10" style={{ backgroundColor: '#f2f4f8' }}>
           <div className="flex flex-col items-center gap-4">
             <div className="relative w-10 h-10">
               <div className="animate-rotate w-10 h-10 border-2 border-t-transparent rounded-full" style={{ borderColor: '#7aa2f7', borderTopColor: 'transparent' }} />
@@ -388,7 +388,7 @@ export default function KnowledgeGraph() {
 
       {/* Top badge */}
       <div className={`absolute top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-xs font-medium border z-10 transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'}`}
-        style={{ backgroundColor: 'rgba(20,20,22,.55)', backdropFilter: 'blur(12px)', borderColor: 'rgba(255,255,255,0.08)', color: '#8a9099' }}>
+        style={{ backgroundColor: 'rgba(255,255,255,.72)', backdropFilter: 'blur(12px)', borderColor: 'rgba(30,40,60,0.10)', color: '#5a6472' }}>
         知识图谱 · {renderNodes.length} 节点 · {renderEdges.length} 连接
       </div>
 

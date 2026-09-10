@@ -86,8 +86,8 @@ const PHYS = {
   /** 平移惯性衰减 */
   panInertia: 0.94,
   /** 呼吸回温间隔（帧）：冷却后的微动让图保持"活"感 */
-  breathEvery: 55,
-  breathHeat: 0.32,
+  breathEvery: 45,
+  breathHeat: 0.55,
 } as const;
 
 /** 球形边界半径：随节点数缓慢增长，固定大小、非无限区域 */
@@ -444,14 +444,14 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         cy /= ns.length;
         const R = boundsRadius(ns.length);
         const lw = 1 / scale.current;
-        // 外圆
-        ctx.strokeStyle = 'rgba(140,160,180,0.14)';
+        // 外圆（浅色底用深灰蓝）
+        ctx.strokeStyle = 'rgba(90,110,135,0.22)';
         ctx.lineWidth = lw;
         ctx.beginPath();
         ctx.arc(cx, cy, R, 0, 6.283);
         ctx.stroke();
         // 经线椭圆（竖）
-        ctx.strokeStyle = 'rgba(140,160,180,0.07)';
+        ctx.strokeStyle = 'rgba(90,110,135,0.10)';
         ctx.beginPath();
         ctx.ellipse(cx, cy, R, R * 0.32, 0, 0, 6.283);
         ctx.stroke();
@@ -489,11 +489,11 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         const active = !focusing || (neighborSet.has(e.a) && neighborSet.has(e.b));
         ctx.strokeStyle = !focusing
           ? edgesEmphasis
-            ? 'rgba(158,190,170,0.34)'
-            : 'rgba(158,178,170,0.16)'
+            ? 'rgba(110,125,140,0.55)'
+            : 'rgba(110,125,140,0.38)'
           : active
-            ? 'rgba(158,190,170,0.55)'
-            : 'rgba(120,130,125,0.05)';
+            ? 'rgba(100,115,135,0.75)'
+            : 'rgba(130,140,150,0.10)';
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
@@ -550,9 +550,9 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
           const isPrimary = sel === nd.id || hov === i;
           ctx.globalAlpha = isPrimary ? 0.98 : 0.82;
           ctx.lineWidth = 3 / scale.current;
-          ctx.strokeStyle = 'rgba(10,10,12,0.6)';
+          ctx.strokeStyle = 'rgba(255,255,255,0.75)';
           ctx.strokeText(nd.name, nd.x + 6, nd.y - 1);
-          ctx.fillStyle = '#eef2f7';
+          ctx.fillStyle = '#2b3440';
           ctx.fillText(nd.name, nd.x + 6, nd.y - 1);
         }
         ctx.globalAlpha = 1;
