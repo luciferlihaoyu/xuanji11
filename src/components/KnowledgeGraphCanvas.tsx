@@ -81,7 +81,19 @@ const PHYS = {
   speedCap: 7,
   heatDecay: 0.992,
   coolThreshold: 0.02,
+  /** 球形边界：越界回推强度 */
+  boundaryK: 0.02,
+  /** 平移惯性衰减 */
+  panInertia: 0.94,
+  /** 呼吸回温间隔（帧）：冷却后的微动让图保持"活"感 */
+  breathEvery: 55,
+  breathHeat: 0.32,
 } as const;
+
+/** 球形边界半径：随节点数缓慢增长，固定大小、非无限区域 */
+function boundsRadius(nodeCount: number): number {
+  return 170 + 24 * Math.sqrt(Math.max(nodeCount, 4));
+}
 
 const LABEL_FONT = '11px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
 
@@ -142,6 +154,7 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
     const dragNode = useRef(-1);
     const panning = useRef(false);
     const pointer = useRef({ x: 0, y: 0 });
+    const panVel = useRef({ x: 0, y: 0 });
 
     // 选中态联动（动画循环内读取最新值）
     const selectedRef = useRef<string | null>(selectedNodeId);
@@ -295,12 +308,16 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         if (n.x > maxX) maxX = n.x;
         if (n.y > maxY) maxY = n.y;
       }
-      const bw = Math.max(60, maxX - minX + 120);
-      const bh = Math.max(60, maxY - minY + 120);
+      // 取景以球形边界为准：容器是固定大小，整球进视口 + 一圈留白
+      const ccx = (minX + maxX) / 2;
+      const ccy = (minY + maxY) / 2;
+      const R = boundsRadius(simNodes.current.length) + 40;
+      const bw = Math.max(60, Math.max(maxX - minX + 120, R * 2));
+      const bh = Math.max(60, Math.max(maxY - minY + 120, R * 2));
       const s = Math.min(1.6, Math.min(W / bw, H / bh));
       scale.current = s;
-      tx.current = W / 2 - ((minX + maxX) / 2) * s;
-      ty.current = H / 2 - ((minY + maxY) / 2) * s;
+      tx.current = W / 2 - ccx * s;
+      ty.current = H / 2 - ccy * s;
     }, []);
 
     // ---- 物理步进 ----
@@ -321,6 +338,9 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
       cx /= n;
       cy /= n;
 
+      // 球形边界半径（固定大小容器；质心即球心）
+      const R = boundsRadius(n);
+
       const cutoff2 = PHYS.repulsionCutoff * PHYS.repulsionCutoff;
       for (let i = 0; i < n; i++) {
         const ni = ns[i];
@@ -333,6 +353,17 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         }
         let fx = (cx - ni.x) * PHYS.gravity;
         let fy = (cy - ni.y) * PHYS.gravity;
+        // 球形边界：越界节点被按比例推回球内（软墙）
+        {
+          const bx = ni.x - cx;
+          const by = ni.y - cy;
+          const bd = Math.sqrt(bx * bx + by * by);
+          if (bd > R) {
+            const over = bd - R;
+            fx -= (bx / bd) * over * PHYS.boundaryK;
+            fy -= (by / bd) * over * PHYS.boundaryK;
+          }
+        }
         for (let j = i + 1; j < n; j++) {
           const nj = ns[j];
           let dx = ni.x - nj.x;
@@ -400,6 +431,36 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
 
       const ns = simNodes.current;
       const es = simEdges.current;
+
+      // 球形边界容器（线框球：外圆 + 两道经纬椭圆弧，暗示球体）
+      if (ns.length > 0) {
+        let cx = 0;
+        let cy = 0;
+        for (const nd of ns) {
+          cx += nd.x;
+          cy += nd.y;
+        }
+        cx /= ns.length;
+        cy /= ns.length;
+        const R = boundsRadius(ns.length);
+        const lw = 1 / scale.current;
+        // 外圆
+        ctx.strokeStyle = 'rgba(140,160,180,0.14)';
+        ctx.lineWidth = lw;
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, 0, 6.283);
+        ctx.stroke();
+        // 经线椭圆（竖）
+        ctx.strokeStyle = 'rgba(140,160,180,0.07)';
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, R, R * 0.32, 0, 0, 6.283);
+        ctx.stroke();
+        // 纬线椭圆（横）
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, R * 0.32, R, 0, 0, 6.283);
+        ctx.stroke();
+      }
+
       const sel = selectedRef.current;
       const hov = hover.current;
       const hovId = hov >= 0 ? ns[hov]?.id : undefined;
@@ -500,9 +561,26 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
       ctx.restore();
     }
 
-    // ---- 主循环 ----
+    // ---- 主循环（含平移惯性 + 呼吸回温） ----
     useEffect(() => {
+      let frame = 0;
       const loop = () => {
+        frame++;
+        // 平移惯性：松手后视图继续滑行并衰减
+        if (panVel.current.x !== 0 || panVel.current.y !== 0) {
+          tx.current += panVel.current.x;
+          ty.current += panVel.current.y;
+          panVel.current.x *= PHYS.panInertia;
+          panVel.current.y *= PHYS.panInertia;
+          if (Math.abs(panVel.current.x) < 0.05 && Math.abs(panVel.current.y) < 0.05) {
+            panVel.current = { x: 0, y: 0 };
+          }
+        }
+        // 呼吸：冷却后周期性回温一点，图永远保持轻微生命力（云霄稿的灵活感来源）
+        if (cool.current && frame % PHYS.breathEvery === 0) {
+          heat.current = PHYS.breathHeat;
+          cool.current = false;
+        }
         if (!cool.current) step();
         render();
         rafId.current = requestAnimationFrame(loop);
@@ -583,6 +661,7 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         downX = e.clientX;
         downY = e.clientY;
         moved = false;
+        panVel.current = { x: 0, y: 0 }; // 抓住即停（打断惯性）
         const h = hit(e.clientX, e.clientY);
         if (h >= 0 && e.button === 0) {
           dragNode.current = h;
@@ -607,8 +686,11 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
           nd.fy = wy;
           warm();
         } else if (panning.current) {
-          tx.current += e.clientX - pointer.current.x;
-          ty.current += e.clientY - pointer.current.y;
+          const dx = e.clientX - pointer.current.x;
+          const dy = e.clientY - pointer.current.y;
+          tx.current += dx;
+          ty.current += dy;
+          panVel.current = { x: dx, y: dy }; // 记录瞬时速度，松手后惯性滑行
           pointer.current = { x: e.clientX, y: e.clientY };
         }
         cv.style.cursor = nh >= 0 ? 'pointer' : panning.current || dragNode.current >= 0 ? 'grabbing' : 'grab';
