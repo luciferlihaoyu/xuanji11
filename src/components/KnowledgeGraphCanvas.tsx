@@ -576,10 +576,19 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
             panVel.current = { x: 0, y: 0 };
           }
         }
-        // 呼吸：冷却后周期性回温一点，图永远保持轻微生命力（云霄稿的灵活感来源）
+        // 呼吸：冷却后周期性回温——必须同时注入速度！
+        // heat 只是位移乘数（x += v*heat），冷却阶段阻尼早已把 v 耗到 ≈0，
+        // 只调 heat 是「给没油的车踩油门」，图不会动。
         if (cool.current && frame % PHYS.breathEvery === 0) {
           heat.current = PHYS.breathHeat;
           cool.current = false;
+          for (const nd of simNodes.current) {
+            if (nd.fx !== null) continue;
+            const a = Math.random() * 6.283;
+            const f = 0.6 + Math.random() * 0.8; // 0.6~1.4 px/帧 的可见微动
+            nd.vx += Math.cos(a) * f;
+            nd.vy += Math.sin(a) * f;
+          }
         }
         if (!cool.current) step();
         render();
