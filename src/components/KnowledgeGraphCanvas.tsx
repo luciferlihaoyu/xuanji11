@@ -74,7 +74,7 @@ interface SimEdge {
 const PHYS = {
   repulsion: 1800,
   repulsionCutoff: 90,
-  gravity: 0.0016,
+  gravity: 0.003,
   damping: 0.86,
   springK: 0.012,
   springCap: 1.4,
@@ -86,8 +86,8 @@ const PHYS = {
   /** 平移惯性衰减 */
   panInertia: 0.94,
   /** 呼吸回温间隔（帧）：冷却后的微动让图保持"活"感 */
-  breathEvery: 45,
-  breathHeat: 0.55,
+  breathEvery: 35,
+  breathHeat: 0.7,
 } as const;
 
 /** 球形边界半径：随节点数缓慢增长，固定大小、非无限区域 */
@@ -585,7 +585,7 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
           for (const nd of simNodes.current) {
             if (nd.fx !== null) continue;
             const a = Math.random() * 6.283;
-            const f = 0.6 + Math.random() * 0.8; // 0.6~1.4 px/帧 的可见微动
+            const f = 1.5 + Math.random() * 1.5; // 1.5~3.0 px/帧 的明显游动
             nd.vx += Math.cos(a) * f;
             nd.vy += Math.sin(a) * f;
           }
