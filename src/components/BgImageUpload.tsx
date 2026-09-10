@@ -4,9 +4,10 @@ import { useAppStore } from '@/store/useAppStore';
 import { useSettings, useSettingValue } from '@/hooks/useSettings';
 
 export default function BgImageUpload() {
-  const { graphBgImage, setGraphBgImage, clearGraphBgImage, addToast } = useAppStore();
+  const { graphBgImage, graphBgScale, setGraphBgImage, setGraphBgScale, clearGraphBgImage, addToast } = useAppStore();
   const { setSetting, isSetting } = useSettings();
   const { data: savedBg } = useSettingValue('ui_background_image');
+  const { data: savedScale } = useSettingValue('ui_background_image_scale');
   const inputRef = useRef<HTMLInputElement>(null);
   const restoredRef = useRef(false);
 
@@ -16,6 +17,12 @@ export default function BgImageUpload() {
       restoredRef.current = true;
     }
   }, [savedBg?.value, graphBgImage, setGraphBgImage]);
+
+  useEffect(() => {
+    const v = Number(savedScale?.value);
+    if (v > 0 && v !== graphBgScale) setGraphBgScale(v);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedScale?.value]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -55,31 +62,51 @@ export default function BgImageUpload() {
         脑图背景
       </label>
       {graphBgImage ? (
-        <div className="relative rounded-md overflow-hidden border" style={{ borderColor: 'var(--border-subtle)' }}>
-          <img src={graphBgImage} alt="背景预览" className="w-full h-20 object-cover" />
-          <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 hover:opacity-100 transition-opacity">
+        <div className="space-y-2">
+          <div className="relative rounded-md overflow-hidden border" style={{ borderColor: 'var(--border-subtle)' }}>
+            <img src={graphBgImage} alt="背景预览" className="w-full h-20 object-cover" />
+            {/* 删除按钮常驻显示（不只悬停可见） */}
             <button
               onClick={async () => {
                 clearGraphBgImage();
                 try {
                   await setSetting('ui_background_image', '', 'ui');
-                  addToast({ type: 'info', title: '背景图已清除' });
+                  addToast({ type: 'info', title: '背景图已删除' });
                 } catch (err) {
                   addToast({
                     type: 'error',
-                    title: '背景图清除保存失败',
+                    title: '背景图删除保存失败',
                     description: err instanceof Error ? err.message : String(err),
                   });
                 }
               }}
               disabled={isSetting}
-              className="p-1.5 rounded-full bg-black/60 hover:bg-red-500/80 transition-colors disabled:opacity-50"
+              title="删除背景图"
+              className="absolute top-1.5 right-1.5 p-1.5 rounded-full bg-black/70 hover:bg-red-500/90 transition-colors disabled:opacity-50"
             >
-              <X className="w-4 h-4 text-white" />
+              <X className="w-3.5 h-3.5 text-white" />
             </button>
+            <div className="absolute bottom-1 left-2 text-[10px]" style={{ color: 'rgba(255,255,255,0.8)' }}>
+              已应用自定义背景
+            </div>
           </div>
-          <div className="absolute bottom-1 left-2 text-[10px]" style={{ color: 'rgba(255,255,255,0.8)' }}>
-            已应用自定义背景
+          {/* 缩放比例 */}
+          <div>
+            <div className="flex justify-between text-[10px] mb-1 font-mono" style={{ color: 'var(--text-muted)' }}>
+              <span>背景缩放</span><span>{graphBgScale}%</span>
+            </div>
+            <input
+              type="range"
+              min={20}
+              max={200}
+              step={5}
+              value={graphBgScale}
+              onChange={(e) => setGraphBgScale(Number(e.target.value))}
+              onMouseUp={() => setSetting('ui_background_image_scale', String(graphBgScale), 'ui').catch(() => {})}
+              onTouchEnd={() => setSetting('ui_background_image_scale', String(graphBgScale), 'ui').catch(() => {})}
+              className="w-full h-1 rounded-full appearance-none cursor-pointer"
+              style={{ backgroundColor: 'var(--bg-tertiary)', accentColor: 'var(--accent-cyan)' }}
+            />
           </div>
         </div>
       ) : (

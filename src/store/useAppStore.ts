@@ -124,6 +124,7 @@ interface AppState {
   activeKbFile: string | null;
   theme: ThemeMode;
   graphBgImage: string | null; // data URL or URL
+  graphBgScale: number; // 背景图缩放比例（百分比，默认 100 = cover 铺满）
 
   // UI actions
   toggleSidebar: () => void;
@@ -143,6 +144,7 @@ interface AppState {
   // Graph background
   setGraphBgImage: (url: string | null) => void;
   clearGraphBgImage: () => void;
+  setGraphBgScale: (scale: number) => void;
 
   // KB Tree CRUD
   setActiveKbFile: (id: string | null) => void;
@@ -216,6 +218,7 @@ export const useAppStore = create<AppState>((set) => ({
   activeKbFile: null,
   theme: 'light' as ThemeMode,
   graphBgImage: null,
+  graphBgScale: 100,
 
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   setActiveModal: (modal) => set({ activeModal: modal }),
@@ -263,6 +266,7 @@ export const useAppStore = create<AppState>((set) => ({
   // Graph background image
   setGraphBgImage: (url: string | null) => set({ graphBgImage: url }),
   clearGraphBgImage: () => set({ graphBgImage: null }),
+  setGraphBgScale: (scale: number) => set({ graphBgScale: Math.min(200, Math.max(10, scale)) }),
 
   // KB Tree CRUD
   setActiveKbFile: (id) => set({ activeKbFile: id }),

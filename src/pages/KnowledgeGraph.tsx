@@ -52,7 +52,7 @@ interface RenderEdge {
 export default function KnowledgeGraph() {
   const canvasRef = useRef<KnowledgeGraphCanvasHandle>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { agents, graphBgImage } = useAppStore();
+  const { agents, graphBgImage, graphBgScale } = useAppStore();
   const {
     nodes: backendNodes,
     edges: backendEdges,
@@ -338,9 +338,11 @@ export default function KnowledgeGraph() {
       <div
         className="absolute inset-0 bg-grid"
         style={{
-          background: graphBgImage
-            ? `url(${graphBgImage}) center/cover no-repeat`
-            : undefined,
+          backgroundImage: graphBgImage ? `url(${graphBgImage})` : undefined,
+          backgroundPosition: 'center',
+          backgroundRepeat: 'no-repeat',
+          // 100% ≈ 宽度铺满；用户可调 20%~200%
+          backgroundSize: graphBgImage ? `${graphBgScale}% auto` : undefined,
           backgroundColor: '#1e1e1e',
         }}
       >

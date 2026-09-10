@@ -251,6 +251,30 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
       simNodes.current = nextNodes;
       simEdges.current = nextEdges;
       idIndex.current = nextIndex;
+
+      // 坐标归一化：后端保存的坐标跨度可能上千像素，直接取景会缩得很小、
+      // 节点看不见。把整体布局压缩到 ~800px 世界跨度（Obsidian 稿的尺度），
+      // 仅在跨度过大时触发；归一化后的坐标会在下次拖拽时回存后端
+      if (nextNodes.length > 1) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const n of nextNodes) {
+          if (n.x < minX) minX = n.x;
+          if (n.y < minY) minY = n.y;
+          if (n.x > maxX) maxX = n.x;
+          if (n.y > maxY) maxY = n.y;
+        }
+        const span = Math.max(maxX - minX, maxY - minY);
+        if (span > 900) {
+          const f = 800 / span;
+          const ncx = (minX + maxX) / 2;
+          const ncy = (minY + maxY) / 2;
+          for (const n of nextNodes) {
+            n.x = ncx + (n.x - ncx) * f;
+            n.y = ncy + (n.y - ncy) * f;
+          }
+        }
+      }
+
       warm();
       onStatsChange?.(nextNodes.length, nextEdges.length);
     }, [nodes, edges, onStatsChange]);
@@ -420,7 +444,7 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
       for (let i = 0; i < ns.length; i++) {
         const nd = ns[i];
         const color = colorsRef.current[nd.category] ?? '#7dcfff';
-        const r = 2 + Math.min(2.4, Math.log(1 + nd.deg) * 1.05);
+        const r = 3.2 + Math.min(3.2, Math.log(1 + nd.deg) * 1.25);
         const isSel = sel === nd.id;
         const isHov = hovId === nd.id;
         const dim = focusing && !neighborSet.has(i);
