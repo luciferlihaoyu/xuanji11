@@ -54,7 +54,7 @@ describe("fts-search BM25", () => {
     const { getRawDb } = await import("../queries/connection");
     const raw = getRawDb();
     raw.prepare("INSERT INTO document_chunks(documentId, content, chunkIndex) VALUES (9, '量子纠缠是量子力学的核心现象', 0)").run();
-    const newId = Number(raw.prepare("SELECT last_insert_rowid() id").get().id);
+    const newId = Number((raw.prepare("SELECT last_insert_rowid() id").get() as { id: number }).id);
     const { syncChunkToFts, bm25Search } = await import("./fts-search");
     syncChunkToFts(newId, "量子纠缠是量子力学的核心现象");
     const hits = bm25Search("量子纠缠", 10);

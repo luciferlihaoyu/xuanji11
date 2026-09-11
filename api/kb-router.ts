@@ -144,6 +144,114 @@ export const kbRouter = createRouter({
       return results[0] ?? null;
     }),
 
+  /**
+   * 入库分拣建议：文档创建后调用，LLM 给出 folderId/tags/概念实体建议。
+   * 建议不落库——前端展示后由用户确认，confirmIngestion 才写入。
+   */
+  suggestIngestion: authedQuery
+    .input(z.object({ documentId: z.number() }))
+    .mutation(async ({ input }) => {
+      const db = getDb();
+      const doc = await db.select({
+        title: kbDocuments.title,
+        content: kbDocuments.content,
+      }).from(kbDocuments).where(eq(kbDocuments.id, input.documentId)).limit(1);
+      if (!doc[0]) throw new Error(`Document not found: ${input.documentId}`);
+      const { suggestIngestion } = await import("./lib/ingestion-suggester");
+      return suggestIngestion(doc[0].title, doc[0].content ?? "");
+    }),
+
+  /**
+   * 确认入库建议：把用户确认后的 folderId/tags/concepts 落库。
+   * concepts 建为知识图谱节点（concept/entity），并连 contains 边到文档节点。
+   */
+  confirmIngestion: adminQuery
+    .input(z.object({
+      documentId: z.number(),
+      folderId: z.number().nullable(),
+      newFolderName: z.string().optional(),
+      tags: z.array(z.string()),
+      concepts: z.array(z.object({
+        title: z.string(),
+        type: z.enum(["concept", "entity"]),
+        summary: z.string(),
+      })),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      const { knowledgeNodes, knowledgeEdges } = await import("@db/schema");
+
+      // 1) 文件夹（可能新建）
+      let folderId = input.folderId;
+      if (!folderId && input.newFolderName?.trim()) {
+        const f = await db.insert(kbFolders).values(clean({
+          name: input.newFolderName.trim(),
+          createdBy: ctx.user?.id ?? null,
+        }));
+        folderId = Number(f.lastInsertRowid);
+      }
+
+      // 2) 文档归位 + 打标签
+      await db.update(kbDocuments)
+        .set({ folderId: folderId ?? null, tags: input.tags })
+        .where(eq(kbDocuments.id, input.documentId));
+
+      // 3) 概念/实体节点（查重：同 title 同 type 不重复建）
+      let createdNodes = 0;
+      // 文档对应的 document 节点（metadata.documentId 匹配）用于连 contains 边
+      const { sql } = await import("drizzle-orm");
+      const docNode = await db.select({ id: knowledgeNodes.id }).from(knowledgeNodes)
+        .where(sql`json_extract(${knowledgeNodes.metadata}, '$.documentId') = ${String(input.documentId)}`)
+        .limit(1);
+      const docNodeId = docNode[0]?.id;
+
+      for (const c of input.concepts) {
+        const dup = await db.select({ id: knowledgeNodes.id }).from(knowledgeNodes)
+          .where(sql`${knowledgeNodes.title} = ${c.title} AND ${knowledgeNodes.type} = ${c.type}`)
+          .limit(1);
+        let nodeId: number;
+        if (dup[0]) {
+          nodeId = dup[0].id;
+        } else {
+          const r = await db.insert(knowledgeNodes).values(clean({
+            title: c.title,
+            content: c.summary,
+            type: c.type,
+            metadata: { source: "ingestion", documentId: String(input.documentId) },
+            createdBy: ctx.user?.id ?? null,
+          }));
+          nodeId = Number(r.lastInsertRowid);
+          createdNodes++;
+        }
+        // 概念节点 → 文档节点 contains 边
+        if (docNodeId) {
+          const edgeExists = await db.select({ id: knowledgeEdges.id }).from(knowledgeEdges)
+            .where(sql`${knowledgeEdges.sourceId} = ${nodeId} AND ${knowledgeEdges.targetId} = ${docNodeId}`)
+            .limit(1);
+          if (!edgeExists[0]) {
+            await db.insert(knowledgeEdges).values(clean({
+              sourceId: nodeId,
+              targetId: docNodeId,
+              label: "contains",
+              type: "contains",
+              weight: 1,
+              createdBy: ctx.user?.id ?? null,
+            }));
+          }
+        }
+      }
+
+      await logAction(ctx.user?.id ?? null, "update", {
+        entityType: "kb_document",
+        entityId: input.documentId,
+        ingestionConfirmed: true,
+        folderId,
+        tags: input.tags,
+        conceptsCreated: createdNodes,
+      });
+      return { folderId, createdNodes, docNodeId: docNodeId ?? null };
+    }),
+
   createDocument: adminQuery
     .input(
       z.object({

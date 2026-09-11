@@ -39,3 +39,19 @@ export function useKbTree() {
 export function useDocument(id: number, options?: { enabled?: boolean }) {
   return trpc.kb.getDocument.useQuery({ id }, { enabled: options?.enabled ?? id > 0 });
 }
+
+/** 入库分拣：建议（dryRun）+ 确认落库 */
+export function useIngestion() {
+  const utils = trpc.useUtils();
+  const suggestMutation = trpc.kb.suggestIngestion.useMutation();
+  const confirmMutation = trpc.kb.confirmIngestion.useMutation({
+    onSuccess: () => {
+      utils.kb.getTree.invalidate();
+      utils.knowledge.getGraph.invalidate();
+    },
+  });
+  return {
+    suggest: suggestMutation.mutateAsync,
+    confirm: confirmMutation.mutateAsync,
+  };
+}

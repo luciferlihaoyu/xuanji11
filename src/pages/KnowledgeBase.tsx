@@ -3,9 +3,9 @@ import { useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import { marked, Renderer } from 'marked';
 import type { Token, Tokens } from 'marked';
-import { useKbTree, useDocument } from '@/hooks/useKb';
+import { useKbTree, useDocument, useIngestion } from '@/hooks/useKb';
 import { useAppStore } from '@/store/useAppStore';
-import { Search, Folder, FolderOpen, FileText, ChevronRight, ChevronDown, Plus, Pencil, Trash2, X, Check, FileCode, Image, File, Save, RotateCcw, Tag, MoreHorizontal } from 'lucide-react';
+import { Search, Folder, FolderOpen, FileText, ChevronRight, ChevronDown, Plus, Pencil, Trash2, X, Check, FileCode, Image, File, Save, RotateCcw, Tag, MoreHorizontal, Sparkles } from 'lucide-react';
 import type { KbFolder, KbDocument } from '@db/schema';
 
 const markdownRenderer = new Renderer();
@@ -479,6 +479,53 @@ export default function KnowledgeBase() {
     }
   };
 
+  // 智能分拣：LLM 建议文件夹/标签/概念实体 → 用户确认落库
+  const { suggest: suggestIngestion, confirm: confirmIngestion } = useIngestion();
+  const [showSuggestModal, setShowSuggestModal] = useState(false);
+  const [suggestion, setSuggestion] = useState<Awaited<ReturnType<typeof suggestIngestion>> | null>(null);
+  const [suggestBusy, setSuggestBusy] = useState(false);
+
+  const handleSuggestIngestion = async () => {
+    if (!activeDocId) return;
+    setShowSuggestModal(true);
+    setSuggestBusy(true);
+    setSuggestion(null);
+    try {
+      const res = await suggestIngestion({ documentId: activeDocId });
+      setSuggestion(res);
+      if (res.skipped) addToast({ type: 'warning', title: '智能分拣不可用', description: res.reason ?? 'LLM 未配置' });
+    } catch (err) {
+      addToast({ type: 'error', title: '分拣建议失败', description: err instanceof Error ? err.message : String(err) });
+      setShowSuggestModal(false);
+    } finally {
+      setSuggestBusy(false);
+    }
+  };
+
+  const handleConfirmIngestion = async () => {
+    if (!activeDocId || !suggestion || suggestion.skipped) return;
+    setSuggestBusy(true);
+    try {
+      const res = await confirmIngestion({
+        documentId: activeDocId,
+        folderId: suggestion.folderId,
+        newFolderName: suggestion.newFolderName,
+        tags: suggestion.tags,
+        concepts: suggestion.concepts,
+      });
+      setShowSuggestModal(false);
+      addToast({
+        type: 'success',
+        title: '分拣完成',
+        description: `标签 ${suggestion.tags.length} 个，新建概念/实体节点 ${res.createdNodes} 个`,
+      });
+    } catch (err) {
+      addToast({ type: 'error', title: '分拣落库失败', description: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setSuggestBusy(false);
+    }
+  };
+
   const handleMove = async (docId: string, folderId: number | null) => {
     const did = parseDocId(docId);
     if (!did) return;
@@ -615,6 +662,9 @@ export default function KnowledgeBase() {
               <div className="flex items-center gap-2">
                 <TagEditor tags={activeDoc.tags ?? []} onChange={handleTagsChange} />
                 <MoveButton docId={activeFile} folders={folders} currentFolderId={activeDoc.folderId ?? null} onMove={handleMove} />
+                <button onClick={handleSuggestIngestion} className="btn-ghost text-[10px] py-1 px-2 flex items-center gap-1" title="AI 建议文件夹/标签/概念实体" style={{ color: '#7aa2f7' }}>
+                  <Sparkles className="w-3 h-3" />智能分拣
+                </button>
                 <button onClick={handleReindex} className="btn-ghost text-[10px] py-1 px-2 flex items-center gap-1" title="重建向量索引">
                   <RotateCcw className="w-3 h-3" />重建索引
                 </button>
@@ -702,6 +752,90 @@ export default function KnowledgeBase() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 智能分拣建议弹窗 */}
+      {showSuggestModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.6)' }}>
+          <div className="rounded-lg border p-6 w-[480px] max-h-[80vh] flex flex-col" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+                <Sparkles className="w-4 h-4" style={{ color: '#7aa2f7' }} />
+                智能分拣建议
+              </h3>
+              <button onClick={() => setShowSuggestModal(false)} className="p-1 rounded hover:bg-white/5">
+                <X className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+              </button>
+            </div>
+
+            {suggestBusy && !suggestion ? (
+              <div className="flex-1 flex items-center justify-center py-10 text-xs" style={{ color: 'var(--text-muted)' }}>
+                AI 正在分析文档（约 5~15 秒）…
+              </div>
+            ) : suggestion?.skipped ? (
+              <div className="flex-1 flex items-center justify-center py-10 text-xs" style={{ color: 'var(--text-muted)' }}>
+                {suggestion.reason ?? '智能分拣暂不可用'}
+              </div>
+            ) : suggestion ? (
+              <div className="flex-1 overflow-y-auto space-y-4 text-xs">
+                {/* 文件夹 */}
+                <div>
+                  <div className="font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>归入文件夹</div>
+                  <div className="px-2.5 py-1.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+                    {suggestion.folderId
+                      ? folders.find((f) => f.id === suggestion.folderId)?.name ?? `文件夹 #${suggestion.folderId}`
+                      : suggestion.newFolderName
+                        ? `新建：${suggestion.newFolderName}`
+                        : '不归档（保持根目录）'}
+                  </div>
+                </div>
+                {/* 标签 */}
+                <div>
+                  <div className="font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>标签（{suggestion.tags.length}）</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {suggestion.tags.length === 0 ? (
+                      <span style={{ color: 'var(--text-muted)' }}>无</span>
+                    ) : suggestion.tags.map((t) => (
+                      <span key={t} className="chip chip-violet text-[10px] py-0.5 px-1.5">{t}</span>
+                    ))}
+                  </div>
+                </div>
+                {/* 概念/实体 */}
+                <div>
+                  <div className="font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
+                    抽取概念/实体（{suggestion.concepts.length}）——将建为图谱节点并连到本文档
+                  </div>
+                  <div className="space-y-1.5">
+                    {suggestion.concepts.length === 0 ? (
+                      <span style={{ color: 'var(--text-muted)' }}>无</span>
+                    ) : suggestion.concepts.map((c, i) => (
+                      <div key={i} className="px-2.5 py-1.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-medium" style={{ color: c.type === 'concept' ? '#7aa2f7' : '#f7768e' }}>{c.title}</span>
+                          <span className="text-[9px] px-1 rounded" style={{ backgroundColor: c.type === 'concept' ? '#7aa2f722' : '#f7768e22', color: c.type === 'concept' ? '#7aa2f7' : '#f7768e' }}>
+                            {c.type === 'concept' ? '概念' : '实体'}
+                          </span>
+                        </div>
+                        <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>{c.summary}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="flex justify-end gap-2 pt-4 mt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+              <button onClick={() => setShowSuggestModal(false)} className="btn-ghost text-xs py-2 px-4">取消</button>
+              <button
+                onClick={handleConfirmIngestion}
+                disabled={suggestBusy || !suggestion || suggestion.skipped}
+                className="btn-primary text-xs py-2 px-4"
+              >
+                {suggestBusy ? '落库中…' : '确认分拣'}
+              </button>
+            </div>
           </div>
         </div>
       )}
