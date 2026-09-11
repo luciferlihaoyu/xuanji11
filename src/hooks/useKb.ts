@@ -55,3 +55,9 @@ export function useIngestion() {
     confirm: confirmMutation.mutateAsync,
   };
 }
+
+/** 语义聚类：全文档 KMeans++ 分析（只读） */
+export function useClusterDocuments() {
+  const mutation = trpc.kb.clusterDocuments.useMutation();
+  return { cluster: mutation.mutateAsync, isClustering: mutation.isPending };
+}

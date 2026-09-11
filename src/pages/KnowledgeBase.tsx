@@ -3,9 +3,9 @@ import { useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import { marked, Renderer } from 'marked';
 import type { Token, Tokens } from 'marked';
-import { useKbTree, useDocument, useIngestion } from '@/hooks/useKb';
+import { useKbTree, useDocument, useIngestion, useClusterDocuments } from '@/hooks/useKb';
 import { useAppStore } from '@/store/useAppStore';
-import { Search, Folder, FolderOpen, FileText, ChevronRight, ChevronDown, Plus, Pencil, Trash2, X, Check, FileCode, Image, File, Save, RotateCcw, Tag, MoreHorizontal, Sparkles } from 'lucide-react';
+import { Search, Folder, FolderOpen, FileText, ChevronRight, ChevronDown, Plus, Pencil, Trash2, X, Check, FileCode, Image, File, Save, RotateCcw, Tag, MoreHorizontal, Sparkles, Boxes } from 'lucide-react';
 import type { KbFolder, KbDocument } from '@db/schema';
 
 const markdownRenderer = new Renderer();
@@ -485,6 +485,27 @@ export default function KnowledgeBase() {
   const [suggestion, setSuggestion] = useState<Awaited<ReturnType<typeof suggestIngestion>> | null>(null);
   const [suggestBusy, setSuggestBusy] = useState(false);
 
+  // 语义聚类：全文档 KMeans++ → 主题群视图
+  const { cluster } = useClusterDocuments();
+  const [showClusterModal, setShowClusterModal] = useState(false);
+  const [clusterResult, setClusterResult] = useState<Awaited<ReturnType<typeof cluster>> | null>(null);
+  const [clusterBusy, setClusterBusy] = useState(false);
+
+  const handleCluster = async () => {
+    setShowClusterModal(true);
+    setClusterBusy(true);
+    setClusterResult(null);
+    try {
+      const res = await cluster({});
+      setClusterResult(res);
+    } catch (err) {
+      addToast({ type: 'error', title: '聚类失败', description: err instanceof Error ? err.message : String(err) });
+      setShowClusterModal(false);
+    } finally {
+      setClusterBusy(false);
+    }
+  };
+
   const handleSuggestIngestion = async () => {
     if (!activeDocId) return;
     setShowSuggestModal(true);
@@ -562,6 +583,7 @@ export default function KnowledgeBase() {
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>主知识库</span>
               <div className="flex gap-1">
+                <button onClick={handleCluster} className="p-1 rounded hover:bg-white/5" title="语义聚类：AI 自动发现主题群" style={{ color: '#7aa2f7' }}><Boxes className="w-3.5 h-3.5" /></button>
                 <button onClick={() => handleAddNode(null, 'folder')} className="p-1 rounded hover:bg-white/5" title="新建文件夹" style={{ color: 'var(--text-muted)' }}><FolderOpen className="w-3.5 h-3.5" /></button>
                 <button onClick={() => handleAddNode(null, 'file')} className="p-1 rounded hover:bg-white/5" title="新建文档" style={{ color: 'var(--text-muted)' }}><Plus className="w-3.5 h-3.5" /></button>
               </div>
@@ -752,6 +774,56 @@ export default function KnowledgeBase() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 语义聚类结果弹窗 */}
+      {showClusterModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.6)' }}>
+          <div className="rounded-lg border p-6 w-[560px] max-h-[80vh] flex flex-col" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+                <Boxes className="w-4 h-4" style={{ color: '#7aa2f7' }} />
+                语义聚类 · 自动发现的主题群
+              </h3>
+              <button onClick={() => setShowClusterModal(false)} className="p-1 rounded hover:bg-white/5">
+                <X className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+              </button>
+            </div>
+
+            {clusterBusy ? (
+              <div className="flex-1 flex items-center justify-center py-10 text-xs" style={{ color: 'var(--text-muted)' }}>
+                正在 embed 全部文档并聚类（约 30~60 秒）…
+              </div>
+            ) : clusterResult ? (
+              <>
+                <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+                  {clusterResult.totalDocs} 篇文档聚成 {clusterResult.k} 个主题群
+                  {clusterResult.llmLabeled && <span style={{ color: '#7aa2f7' }}>（AI 命名）</span>}
+                </p>
+                <div className="flex-1 overflow-y-auto space-y-3">
+                  {clusterResult.clusters.map((c, i) => (
+                    <div key={i} className="rounded border p-3" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-xs font-bold" style={{ color: '#7aa2f7' }}>{c.label}</span>
+                        <span className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>{c.size} 篇</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {c.docTitles.slice(0, 6).map((t, j) => (
+                          <span key={j} className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>{t}</span>
+                        ))}
+                        {c.size > 6 && <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>+{c.size - 6}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            <div className="flex justify-end pt-4 mt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+              <button onClick={() => setShowClusterModal(false)} className="btn-ghost text-xs py-2 px-4">关闭</button>
+            </div>
           </div>
         </div>
       )}

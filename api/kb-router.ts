@@ -252,6 +252,17 @@ export const kbRouter = createRouter({
       return { folderId, createdNodes, docNodeId: docNodeId ?? null };
     }),
 
+  /** 语义聚类：全部文档 embedding → KMeans++ → LLM 命名簇（只读分析，不落库） */
+  clusterDocuments: authedQuery
+    .input(z.object({
+      k: z.number().int().min(3).max(24).optional(),
+      labelWithLlm: z.boolean().default(true),
+    }).optional())
+    .mutation(async ({ input }) => {
+      const { clusterDocuments } = await import("./lib/doc-clusterer");
+      return clusterDocuments(input?.k, input?.labelWithLlm ?? true);
+    }),
+
   createDocument: adminQuery
     .input(
       z.object({
