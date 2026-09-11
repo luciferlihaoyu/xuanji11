@@ -23,10 +23,12 @@ export const searchInputSchema = z.object({
   mode: searchModeSchema.default("hybrid"),
   limit: z.number().int().min(1).max(50).default(10),
   filters: filtersSchema,
+  /** LLM 重排：对融合后的 top 结果逐条打相关度分再排序（慢但准） */
+  rerank: z.boolean().default(false),
 });
 
 export type SearchMode = z.infer<typeof searchModeSchema>;
-export type SearchInput = z.infer<typeof searchInputSchema>;
+export type SearchInput = z.input<typeof searchInputSchema>;
 export type { Source, Filters };
 export {
   makeSnippet,
@@ -212,13 +214,54 @@ async function enrichWithKbDocuments(hits: MergedHit[]): Promise<void> {
   }
 }
 
+/**
+ * LLM 重排：对融合后的 top 候选逐条打 0~10 相关度分，按分重排。
+ * 只在用户显式开 rerank=true 时跑（每次搜索多一次 LLM 调用，慢 1~3 秒）。
+ * LLM 不可用/打分失败时静默回退到 RRF 原序。
+ */
+async function rerankWithLlm(query: string, hits: MergedHit[], limit: number): Promise<MergedHit[]> {
+  const { chatCompletion, hasLlmAvailable } = await import("./llm-chat");
+  if (!(await hasLlmAvailable())) return hits;
+
+  // 一次调用评全部（比逐条调用快 N 倍；候选 <= 20 条塞得进 prompt）
+  const candidates = hits.slice(0, Math.min(20, hits.length));
+  const listing = candidates.map((h, i) => `${i + 1}. ${h.title} — ${h.content.slice(0, 80)}`).join("\n");
+  const resp = await chatCompletion(
+    `查询：${query}\n\n对下面候选按与查询的相关度打分（0~10 整数，10 最相关）。只输出 JSON 数组，长度 ${candidates.length}，顺序对应候选编号：\n${listing}\n\n只输出 JSON 数组，例：[8,3,0,...]`,
+    { temperature: 0, maxTokens: 80, timeoutMs: 15000 },
+  );
+  if (!resp) return hits;
+
+  try {
+    const text = resp.content.replace(/```json\s*|\s*```/g, "").trim();
+    const scores: unknown = JSON.parse(text);
+    if (!Array.isArray(scores) || scores.length !== candidates.length) return hits;
+    const scored = candidates.map((h, i) => ({
+      hit: h,
+      llmScore: typeof scores[i] === "number" ? (scores[i] as number) : 0,
+    }));
+    scored.sort((a, b) => b.llmScore - a.llmScore);
+    // 重排后的候选放前面，超出 20 的尾部保持原序接在后面
+    const tail = hits.slice(candidates.length);
+    return [...scored.map((s) => s.hit), ...tail].slice(0, limit * 2);
+  } catch {
+    return hits;
+  }
+}
+
 export async function executeHybridSearch(input: SearchInput): Promise<SearchResponse> {
-  const { query, mode, limit, filters } = input;
+  const { query, mode, limit, filters, rerank } = searchInputSchema.parse(input);
 
   const keywordHits: InternalHit[] = mode !== "vector" ? await fetchKeywordResults(query, limit) : [];
   const vectorHits: InternalHit[] = mode !== "keyword" ? await fetchVectorResults(query, limit) : [];
 
-  const merged = mergeResults(keywordHits, vectorHits);
+  let merged = mergeResults(keywordHits, vectorHits);
+
+  // LLM 重排（可选）：融合后、过滤前——重排影响名次，过滤是硬性条件
+  if (rerank && merged.length > 1) {
+    merged = await rerankWithLlm(query, merged, limit);
+  }
+
   await enrichWithKbDocuments(merged);
 
   const filtered = applyFilters(merged, filters);
