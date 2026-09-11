@@ -111,25 +111,65 @@ async function fetchKeywordResults(query: string, limit: number): Promise<Intern
     rank: index + 1,
   }));
 
-  // 2) 知识库文档（kb_documents）——修复"关键词搜索搜不到文档"缺陷
-  // 薇子实测：search.hybrid 的 keyword 部分只查 knowledge_nodes，文档搜不到。
-  const docRows = (await db
-    .select()
-    .from(kbDocuments)
-    .where(sql`${kbDocuments.title} LIKE ${q} OR ${kbDocuments.content} LIKE ${q}`)
-    .orderBy(desc(kbDocuments.updatedAt))
-    .limit(limit)) as KbDocument[];
+  // 2) 知识库文档：优先 BM25（FTS5 trigram 对 chunk 全文检索，按相关度排序），
+  //    无命中或 FTS 不可用时回退 LIKE（短查询 <3 字符 trigram 无法命中，必须回退）
+  let docHits: InternalHit[] = [];
+  try {
+    const { bm25Search } = await import("./fts-search");
+    const bm25Hits = bm25Search(query, limit * 2);
+    // chunk 级 → 文档级聚合（同文档取最佳名次的 chunk 做代表）
+    const byDoc = new Map<number, { rank: number; content: string }>();
+    for (const h of bm25Hits) {
+      const cur = byDoc.get(h.documentId);
+      if (!cur || h.rank < cur.rank) byDoc.set(h.documentId, { rank: h.rank, content: h.content });
+    }
+    const docIds = [...byDoc.keys()];
+    if (docIds.length > 0) {
+      const docs = (await db
+        .select()
+        .from(kbDocuments)
+        .where(inArray(kbDocuments.id, docIds))) as KbDocument[];
+      const docMap = new Map(docs.map((d) => [d.id, d]));
+      docHits = docIds
+        .sort((a, b) => (byDoc.get(a)?.rank ?? 0) - (byDoc.get(b)?.rank ?? 0))
+        .slice(0, limit)
+        .map((id, index) => {
+          const doc = docMap.get(id);
+          return {
+            id: String(id),
+            title: doc?.title ?? `文档 #${id}`,
+            content: byDoc.get(id)?.content ?? doc?.title ?? "",
+            type: "document",
+            tags: doc?.tags ?? [],
+            folderId: doc?.folderId ?? null,
+            source: "keyword" as Source,
+            rank: nodeHits.length + index + 1,
+          };
+        });
+    }
+  } catch {
+    // FTS 不可用（表损坏等）静默降级
+  }
 
-  const docHits = docRows.map((doc, index) => ({
-    id: String(doc.id),
-    title: doc.title,
-    content: doc.content ?? doc.title ?? "",
-    type: "document",
-    tags: doc.tags ?? [],
-    folderId: doc.folderId ?? null,
-    source: "keyword" as Source,
-    rank: nodeHits.length + index + 1,
-  }));
+  if (docHits.length === 0) {
+    const docRows = (await db
+      .select()
+      .from(kbDocuments)
+      .where(sql`${kbDocuments.title} LIKE ${q} OR ${kbDocuments.content} LIKE ${q}`)
+      .orderBy(desc(kbDocuments.updatedAt))
+      .limit(limit)) as KbDocument[];
+
+    docHits = docRows.map((doc, index) => ({
+      id: String(doc.id),
+      title: doc.title,
+      content: doc.content ?? doc.title ?? "",
+      type: "document",
+      tags: doc.tags ?? [],
+      folderId: doc.folderId ?? null,
+      source: "keyword" as Source,
+      rank: nodeHits.length + index + 1,
+    }));
+  }
 
   return [...nodeHits, ...docHits];
 }

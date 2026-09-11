@@ -69,11 +69,17 @@ export async function indexDocumentById(documentId: number): Promise<IndexDocume
   const vectors = await embedTextsWithFallback(chunkContents.map((c) => c.content));
 
   // 插入 document_chunks（embedding 列无人读取，不写大 JSON，向量只存 vec 表）
-  await db.insert(documentChunks).values(chunkContents.map((c) => ({
+  const insertedChunks = await db.insert(documentChunks).values(chunkContents.map((c) => ({
     documentId,
     content: c.content,
     chunkIndex: c.index,
-  })));
+  }))).returning({ id: documentChunks.id, content: documentChunks.content });
+
+  // 同步进 FTS5（混合检索的 BM25 路；失败不阻塞主流程）
+  try {
+    const { syncChunkToFts } = await import("./fts-search");
+    for (const c of insertedChunks) syncChunkToFts(c.id, c.content);
+  } catch { /* FTS 同步失败等下次 ensureFts 回填 */ }
 
   // 写入 vec 表（vec_chunks + vec_chunk_meta）
   await vectorEngine.insertBatch(

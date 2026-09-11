@@ -51,6 +51,12 @@ export async function deleteDocumentCascade(
   // 2) 先删向量（内部事务；按 rowid 精确清，幂等）
   const deletedVectors = await vectorEngineArg.deleteByDocumentId(id);
 
+  // 2b) 清 FTS5 记录（混合检索 BM25 路；ftsReady=false 时跳过等回填）
+  try {
+    const { deleteDocumentFromFts } = await import("./fts-search");
+    deleteDocumentFromFts(id);
+  } catch { /* FTS 清理失败不阻塞删除主流程 */ }
+
   // 3) SQL 事务：chunks → 图谱边 → 图谱节点 → 文档行
   // 注意：drizzle-orm/better-sqlite3 的 db.transaction 把回调直接传给
   // better-sqlite3 的 client.transaction()，后者要求回调【同步执行】——
