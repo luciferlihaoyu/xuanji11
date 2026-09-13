@@ -118,9 +118,14 @@ describe("落库型执行器（mock DB）", () => {
     expect(db.insert).toHaveBeenCalled();
   });
 
-  it("save-result 无 targetFolderId 时 skipped；有配置时写入文档", async () => {
-    const missing = await executeNode("save-result", { content: "x" }, CTX);
-    expect(typeof missing.skipped).toBe("string");
+  it("save-result 无 targetFolderId 时落根目录；有配置时写入指定文件夹", async () => {
+    // 行为变更：targetFolderId 缺省/0 = 根目录（folderId=null），不再 skipped——
+    // 种子工作流依赖根目录落盘
+    const db0 = fakeDbForInsert(88);
+    vi.mocked(getDb).mockReturnValue(db0 as never);
+    const rootOut = await executeNode("save-result", { content: "x" }, CTX);
+    expect(rootOut.saved).toBe(true);
+    expect(rootOut.documentId).toBe(88);
 
     const db = fakeDbForInsert(77);
     vi.mocked(getDb).mockReturnValue(db as never);

@@ -408,23 +408,19 @@ export async function executeWorkflow(
   const runId = Number(runResult.lastInsertRowid);
 
   const nodeResultRows = new Map<number, number>();
-  // N+1 优化：一次 values 批量插入所有节点运行记录，drizzle 返回值为有序数组
-  if (sorted.length > 0) {
-    const bulkInsertResult = await db.insert(workflowRunNodes).values(
-      sorted.map((node) => ({
-        runId,
-        nodeId: node.id,
-        status: "pending" as const,
-        input: {} as Record<string, unknown>,
-        output: {} as Record<string, unknown>,
-        error: null as string | null,
-      })),
-    );
-    // MySQL 批量 insert 自增 id 在 result.lastInsertRowid 中按入参顺序连续分配（drizzle/mysql2 行为）
-    const baseInsertId = Number(bulkInsertResult.lastInsertRowid);
-    sorted.forEach((node, index) => {
-      nodeResultRows.set(node.id, baseInsertId + index);
+  // 逐行插入拿准确 id——better-sqlite3 批量 insert 的 lastInsertRowid 是【末行】 id，
+  // 与 MySQL（首行）相反。MySQL→SQLite 迁移后这里错位：节点状态/输出写错行，
+  // 前面的节点永远停在 pending。逐行插换正确性（节点数通常 <50，N 次插入无压力）。
+  for (const node of sorted) {
+    const r = await db.insert(workflowRunNodes).values({
+      runId,
+      nodeId: node.id,
+      status: "pending" as const,
+      input: {} as Record<string, unknown>,
+      output: {} as Record<string, unknown>,
+      error: null as string | null,
     });
+    nodeResultRows.set(node.id, Number(r.lastInsertRowid));
   }
 
   const outputs: Record<string, Record<string, unknown>> = {};

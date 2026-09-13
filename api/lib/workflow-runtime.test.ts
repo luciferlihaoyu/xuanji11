@@ -92,8 +92,10 @@ describe("executeWorkflow N+1 批量化", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.unstubAllGlobals());
 
-  it("N 个节点的 workflowRunNodes 走单次 batch insert（不是 N 次）", async () => {
-    // 构造一个 3 节点的工作流：delay → delay → delay（无依赖循环，topological 顺序稳定）
+  it("N 个节点的 workflowRunNodes 逐行插入拿准确自增 id（better-sqlite3 批量 lastInsertRowid 是末行）", async () => {
+    // 行为变更：MySQL 批量 insert lastInsertRowid=首行 id，SQLite 是末行——
+    // 批量插会导致节点状态/输出写错行（前面节点永远 pending）。
+    // 改逐行插换正确性，此测试锁定逐行语义：insert 次数 = 1(workflowRuns) + N(nodes)
     const nodes = [
       { id: 1, workflowId: 10, type: "delay", label: "A", config: { ms: 0 }, position: 0, dependsOn: null, createdAt: new Date(), updatedAt: new Date() },
       { id: 2, workflowId: 10, type: "delay", label: "B", config: { ms: 0 }, position: 1, dependsOn: null, createdAt: new Date(), updatedAt: new Date() },
@@ -102,7 +104,6 @@ describe("executeWorkflow N+1 批量化", () => {
     const workflow = { id: 10, name: "test", description: "", enabled: true, createdBy: null, createdAt: new Date(), updatedAt: new Date() };
 
     let insertCalls = 0;
-    let lastInsertRows: unknown[] = [];
     let selectCall = 0;
     const fakeDb = {
       select: vi.fn(() => ({
@@ -115,14 +116,9 @@ describe("executeWorkflow N+1 批量化", () => {
         })),
       })),
       insert: vi.fn((_table: unknown) => ({
-        values: vi.fn((rows: unknown) => {
+        values: vi.fn((_rows: unknown) => {
           insertCalls++;
-          if (Array.isArray(rows)) {
-            lastInsertRows = rows;
-            return Promise.resolve([{ insertId: 1000 }]);
-          }
-          lastInsertRows = [rows];
-          return Promise.resolve([{ insertId: 1000 + insertCalls }]);
+          return Promise.resolve({ lastInsertRowid: 1000 + insertCalls });
         }),
       })),
       update: vi.fn(() => ({
@@ -135,10 +131,7 @@ describe("executeWorkflow N+1 批量化", () => {
 
     await executeWorkflow(10, {});
 
-    // 第一次 insert：workflowRuns（单条），第二次：workflowRunNodes batch
-    expect(insertCalls).toBe(2);
-    // 第二次的 rows 是数组且长度 = 节点数（=3）
-    expect(Array.isArray(lastInsertRows)).toBe(true);
-    expect((lastInsertRows as unknown[]).length).toBe(3);
+    // 1 次 workflowRuns + 3 次 workflowRunNodes（逐行）
+    expect(insertCalls).toBe(4);
   });
 });
