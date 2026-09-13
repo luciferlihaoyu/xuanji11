@@ -293,6 +293,10 @@ export const kbRouter = createRouter({
       });
       // 自动索引：有内容即入向量库；索引失败不影响文档创建
       const indexed = input.content ? await tryIndexDocumentById(id) : { chunks: 0, skipped: true };
+      // 事件触发：新文档 → 触发订阅 document-created 的工作流（fire-and-forget）
+      import("./lib/workflow-events").then(({ fireDocumentCreated }) =>
+        fireDocumentCreated(id, input.title)
+      ).catch((err) => console.error("[WorkflowEvent] fire 失败:", err));
       return { id, chunks: indexed.chunks };
     }),
 
