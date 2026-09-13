@@ -447,6 +447,13 @@ if (env.isProduction) {
   const stopScheduler = startWorkflowScheduler();
   const stopBackupScheduler = startBackupScheduler();
 
+  // 启动时种子默认工作流（幂等按名查重；失败不阻塞启动）
+  import("./lib/workflow-seed").then(({ seedDefaultWorkflows }) =>
+    seedDefaultWorkflows().then((n) => {
+      if (n > 0) console.log(`[WorkflowSeed] 新建 ${n} 条默认工作流`);
+    })
+  ).catch((err) => console.error("[WorkflowSeed] 种子失败:", err));
+
   // 优雅关闭
   const shutdown = (signal: string) => {
     console.log(`\n收到 ${signal}，正在优雅关闭...`);

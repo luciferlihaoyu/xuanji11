@@ -1,0 +1,105 @@
+/**
+ * 默认工作流种子：boot 时自动建 4 条开箱工作流（幂等按名查重）。
+ *
+ * 与 scripts/seed-workflows.mjs 同一套定义——.mjs 是手动 exec 版，
+ * 本文件是 boot 自动版（service exec 不可用时兜住）。
+ */
+import { eq } from "drizzle-orm";
+import { getDb } from "../queries/connection";
+import { workflows, workflowNodes } from "@db/schema";
+
+interface SeedNode {
+  type: string;
+  label: string;
+  config: Record<string, unknown>;
+  connections: Array<{ targetIndex: number }>;
+}
+
+interface SeedWorkflow {
+  name: string;
+  description: string;
+  triggers: Array<Record<string, unknown>>;
+  nodes: SeedNode[];
+}
+
+const DEFAULT_WORKFLOWS: SeedWorkflow[] = [
+  {
+    name: "每日自动建边",
+    description: "每天凌晨用语义相似度连接知识孤岛，把新入库文档自动连进知识网络",
+    triggers: [{ type: "cron", schedule: "0 3 * * *", enabled: true }],
+    nodes: [
+      { type: "auto-link", label: "自动建边", config: { threshold: 0.62, maxPerNode: 3, dryRun: false }, connections: [{ targetIndex: 1 }] },
+      { type: "save-result", label: "存档建边报告", config: { targetFolderId: 0, title: "每日自动建边报告" }, connections: [] },
+    ],
+  },
+  {
+    name: "每周聚类报告",
+    description: "每周一对全部文档做语义聚类，生成主题群报告，观察知识版图演变",
+    triggers: [{ type: "cron", schedule: "0 4 * * 1", enabled: true }],
+    nodes: [
+      { type: "cluster", label: "语义聚类", config: { labelWithLlm: true }, connections: [{ targetIndex: 1 }] },
+      { type: "save-result", label: "存档聚类报告", config: { targetFolderId: 0, title: "每周语义聚类报告" }, connections: [] },
+    ],
+  },
+  {
+    name: "新文档自动分拣",
+    description: "新文档入库后自动 LLM 分拣：建议文件夹/标签/抽取概念实体并直接落库",
+    triggers: [{ type: "document-created", enabled: true }],
+    nodes: [
+      { type: "ingest-triage", label: "入库分拣", config: {}, connections: [] },
+    ],
+  },
+  {
+    name: "新文档自动摘要",
+    description: "新文档入库后自动生成 3 句摘要并写到文档头部",
+    triggers: [{ type: "document-created", enabled: true }],
+    nodes: [
+      { type: "summarize", label: "生成摘要", config: {}, connections: [{ targetIndex: 1 }] },
+      { type: "update-document", label: "写回文档头部", config: { mode: "prepend" }, connections: [] },
+    ],
+  },
+];
+
+/** 幂等种子：按 name 查重，返回新建条数 */
+export async function seedDefaultWorkflows(): Promise<number> {
+  const db = getDb();
+  let created = 0;
+  for (const wf of DEFAULT_WORKFLOWS) {
+    const existing = await db.select({ id: workflows.id }).from(workflows)
+      .where(eq(workflows.name, wf.name)).limit(1);
+    if (existing.length > 0) continue;
+
+    // drizzle/better-sqlite3 同步事务
+    db.transaction((tx) => {
+      const r = tx.insert(workflows).values({
+        name: wf.name,
+        description: wf.description,
+        status: "active",
+        triggers: wf.triggers,
+      }).run();
+      const workflowId = Number(r.lastInsertRowid);
+
+      // 先插节点拿真实 id，再回填 connections
+      const nodeIds = wf.nodes.map((n, i) => {
+        const nr = tx.insert(workflowNodes).values({
+          workflowId,
+          type: n.type,
+          label: n.label,
+          positionX: 100 + i * 200,
+          positionY: 100,
+          config: n.config,
+          connections: [],
+          sortOrder: i,
+        }).run();
+        return Number(nr.lastInsertRowid);
+      });
+      wf.nodes.forEach((n, i) => {
+        const conns = (n.connections ?? []).map((c) => ({ targetId: nodeIds[c.targetIndex] }));
+        tx.update(workflowNodes).set({ connections: conns })
+          .where(eq(workflowNodes.id, nodeIds[i])).run();
+      });
+    });
+    created++;
+  }
+  return created;
+}
