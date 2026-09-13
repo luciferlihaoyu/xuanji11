@@ -41,6 +41,7 @@ const NODE_CATEGORIES: Record<string, { label: string; color: string; bg: string
   agent: { label: 'Agent', color: '#ffb347', bg: 'rgba(255,179,71,0.1)' },
   output: { label: '输出', color: '#ff6b81', bg: 'rgba(255,107,129,0.1)' },
   logic: { label: '逻辑', color: '#60a5fa', bg: 'rgba(96,165,250,0.1)' },
+  ingest: { label: '入库加工', color: '#f472b6', bg: 'rgba(244,114,182,0.1)' },
 };
 
 const COMPONENT_LIBRARY = [
@@ -575,7 +576,7 @@ export default function WorkflowBuilder() {
         </div>
         <div className="flex-1 overflow-y-auto">
           {COMPONENT_LIBRARY.map((group) => {
-            const catInfo = NODE_CATEGORIES[group.category];
+            const catInfo = NODE_CATEGORIES[group.category] ?? NODE_CATEGORIES.processing;
             const expanded = expandedCategories.has(group.category);
             return (
               <div key={group.category}>
@@ -705,7 +706,7 @@ export default function WorkflowBuilder() {
           {/* Node Layer */}
           <div className="absolute inset-0" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
             {nodes.map((node) => {
-              const catInfo = NODE_CATEGORIES[node.category];
+              const catInfo = NODE_CATEGORIES[node.category] ?? NODE_CATEGORIES.processing;
               const isSelected = selectedNode === node.id;
               const isConnecting = connectingFrom === node.id;
               return (
@@ -747,7 +748,7 @@ export default function WorkflowBuilder() {
         <div className="w-[300px] shrink-0 border-l overflow-y-auto" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
           <div className="p-4">
             <div className="flex items-center gap-2 mb-4">
-              <span style={{ color: NODE_CATEGORIES[selectedNodeData.category].color, fontSize: '14px' }}>◆</span>
+              <span style={{ color: (NODE_CATEGORIES[selectedNodeData.category] ?? NODE_CATEGORIES.processing).color, fontSize: '14px' }}>◆</span>
               <h3 className="text-sm font-bold flex-1" style={{ color: 'var(--text-primary)' }}>{selectedNodeData.label}</h3>
               <div className="flex gap-1">
                 <button onClick={() => duplicateNode(selectedNodeData)} className="p-1.5 rounded hover:bg-white/5" title="复制" style={{ color: 'var(--text-muted)' }}><Copy className="w-3.5 h-3.5" /></button>
