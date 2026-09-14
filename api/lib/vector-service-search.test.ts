@@ -23,7 +23,24 @@ const fakeAddDocuments = vi.fn();
 const fakeHealthCheck = vi.fn();
 const fakeSizeGetter = vi.fn(() => 0);
 const fakeExec = vi.fn();
-const fakeGetRawDb = vi.fn(() => ({ exec: fakeExec }));
+// 表内向量维度：null = 表不存在/无行（新装或刚清完）；数字 = vec_length 实测维度
+let mockTableVectorDim: number | null = null;
+const fakeGetRawDb = vi.fn(() => ({
+  exec: fakeExec,
+  prepare: (sql: string) => ({
+    get: () => {
+      if (/sqlite_master/.test(sql)) {
+        return mockTableVectorDim === null ? undefined : { name: "vec_chunks" };
+      }
+      if (/vec_length/.test(sql)) {
+        return mockTableVectorDim === null ? undefined : { len: mockTableVectorDim };
+      }
+      return undefined;
+    },
+    all: () => [],
+    run: () => ({ changes: 0 }),
+  }),
+}));
 
 const fakeEngine = {
   insert: fakeInsert,
@@ -127,6 +144,7 @@ describe("ensureCorrectDimension (R3 维度不匹配 bug 修复)", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.resetModules(); // 重置 module 单例：让 ensureCorrectDimension 的 dimensionInitialized 在每个测试重新计算
+    mockTableVectorDim = null;
     fakeSearch.mockResolvedValue([{ id: "doc-1", score: 0.9, metadata: { documentId: "1", content: "x", title: "T" } }]);
     fakeSearchByText.mockResolvedValue([]);
     fakeExec.mockReset();
@@ -138,6 +156,7 @@ describe("ensureCorrectDimension (R3 维度不匹配 bug 修复)", () => {
   it("维度匹配时不应 drop 任何表", async () => {
     mockDimension = 1536;
     mockEmbeddingDimensionSetting = "1536";
+    mockTableVectorDim = 1536; // 表内向量也是 1536
 
     const { ensureCorrectDimension } = await import("./vector-service");
     await ensureCorrectDimension();
@@ -149,9 +168,10 @@ describe("ensureCorrectDimension (R3 维度不匹配 bug 修复)", () => {
     expect(droppedTables).toHaveLength(0);
   });
 
-  it("维度不匹配时应 drop 旧 vec 表（vec0 维表不可改）", async () => {
-    mockDimension = 1536; // 当前 engine 维数（错的）
+  it("表内向量维度与设置不匹配时才 drop 旧 vec 表（vec0 维表不可改）", async () => {
+    mockDimension = 1536;
     mockEmbeddingDimensionSetting = "1024"; // 真实 model 输出维数
+    mockTableVectorDim = 1536; // 表内现存向量是 1536 维——真不匹配
 
     const { ensureCorrectDimension } = await import("./vector-service");
     await ensureCorrectDimension();
@@ -163,6 +183,22 @@ describe("ensureCorrectDimension (R3 维度不匹配 bug 修复)", () => {
     expect(droppedTables.length).toBeGreaterThanOrEqual(2);
     expect(droppedTables.some((s) => s.includes("vec_chunks"))).toBe(true);
     expect(droppedTables.some((s) => s.includes("vec_chunk_meta"))).toBe(true);
+  });
+
+  it("回归：重启后内存单例维度与设置不符但表已是对齐维度——不得 drop（2026-09-13 线上清库 bug）", async () => {
+    // 线上事故场景：重启后 engine 按 env.zvecDimension=1536 构造，
+    // settings=1024，表内向量本来就是 1024——旧逻辑误判 mismatch 全表 DROP。
+    mockDimension = 1536; // 内存单例（错的老默认值）
+    mockEmbeddingDimensionSetting = "1024";
+    mockTableVectorDim = 1024; // 表内其实已对齐
+
+    const { ensureCorrectDimension } = await import("./vector-service");
+    await ensureCorrectDimension();
+
+    const droppedTables = fakeExec.mock.calls
+      .map((c) => String(c[0] ?? ""))
+      .filter((sql) => /DROP\s+TABLE/i.test(sql));
+    expect(droppedTables).toHaveLength(0);
   });
 
   it("幂等：连续调用只执行一次校准", async () => {

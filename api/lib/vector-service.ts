@@ -541,20 +541,37 @@ export async function ensureCorrectDimension(): Promise<void> {
           realDim = env.zvecDimension;
         }
       }
-      const currentDim = vectorEngineInstance.dimension ?? (vectorEngineInstance as unknown as { dim?: number }).dim;
-      if (realDim === currentDim) {
+      // 当前维度必须以【数据库里已建表的真实维度】为准，不能用内存单例的
+      // 构造维度——重启后单例按 env.zvecDimension（默认 1536）新建，
+      // 若 settings 是 1024 会误判"不匹配"而把全库向量 DROP 掉
+      // （2026-09-13 实证：每次 redeploy 向量表被清空）。
+      // 表存在且有行时，用 vec_length(任意一行) 当 currentDim；表不存在/空 → 无需 drop。
+      const raw0 = getRawDb();
+      let currentDim: number | null = null;
+      try {
+        const tableExists = raw0.prepare(
+          "SELECT name FROM sqlite_master WHERE type IN ('table','shadow') AND name = 'vec_chunks'"
+        ).get() as { name: string } | undefined;
+        if (tableExists) {
+          const row = raw0.prepare("SELECT vec_length(vector) AS len FROM vec_chunks LIMIT 1").get() as { len: number } | undefined;
+          currentDim = row?.len ?? null;
+        }
+      } catch {
+        // vec0 未加载/表结构异常 → 视为无现存表，走创建路径
+        currentDim = null;
+      }
+      if (currentDim !== null && realDim === currentDim) {
         dimensionInitialized = true;
         return;
       }
-      console.warn(`[VectorEngine] 维度不匹配: 当前 ${currentDim}, 真实 ${realDim}. 重建向量表...`);
-      // drop 旧 vec0 虚拟表 + 元数据表（不同 dim 不能共存）
-      const raw = getRawDb();
-      raw.exec("DROP TABLE IF EXISTS vec_chunks");
-      raw.exec("DROP TABLE IF EXISTS vec_chunk_meta");
-      // 用真实 dim 重新初始化 engine（重置模块级单例，强制重建 schema）
+      if (currentDim !== null) {
+        console.warn(`[VectorEngine] 维度不匹配: 表内 ${currentDim}, 真实 ${realDim}. 重建向量表...`);
+        raw0.exec("DROP TABLE IF EXISTS vec_chunks");
+        raw0.exec("DROP TABLE IF EXISTS vec_chunk_meta");
+      }
+      // 表不存在或刚被 drop：用真实 dim 初始化 engine（幂等，schema 已建则跳过）
       vectorEngineInstance = recreateVectorEngine(realDim);
       dimensionInitialized = true;
-      console.log(`[VectorEngine] 已用 dim=${realDim} 重建向量表`);
     } catch (err) {
       console.error("[VectorEngine] ensureCorrectDimension 失败:", err instanceof Error ? err.message : String(err));
       // 失败时仍标记初始化完成，避免无限重试
