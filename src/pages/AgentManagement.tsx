@@ -86,6 +86,8 @@ export default function AgentManagement() {
   const { data: vectorTemplates = [], isLoading: vectorTemplatesLoading } = useVectorModelTemplates();
   const tianshuModelsQuery = trpc.tianshu.listModels.useQuery(undefined, { retry: 1, staleTime: 60_000 });
   const tianshuModels = tianshuModelsQuery.data?.ok ? tianshuModelsQuery.data.models : [];
+  const tianshuStatusQuery = trpc.tianshu.status.useQuery(undefined, { retry: 1, staleTime: 60_000 });
+  const tianshuApiUrl = tianshuStatusQuery.data?.apiUrl ?? '';
   const { data: selectedLlmTemplate } = useVectorModelTemplate(llmConfig.llm_template_id);
 
   // API Key management state
@@ -215,6 +217,19 @@ export default function AgentManagement() {
           llm_model: template.model,
         }
         : {}),
+    }));
+  };
+
+  // 从提供商（天枢网关）模型列表直接选：自动填 URL + 模型名，密钥仍需手填
+  const handleSelectProviderModel = (model: string) => {
+    if (!model) return;
+    setTestLlmStatus('idle');
+    setTestLlmMessage('');
+    setLlmConfig((current) => ({
+      ...current,
+      llm_template_id: '', // 直选模型时脱离模板
+      llm_model: model,
+      ...(tianshuApiUrl ? { llm_api_url: tianshuApiUrl } : {}),
     }));
   };
 
@@ -781,12 +796,24 @@ export default function AgentManagement() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>模型</label>
+                    {tianshuModels.length > 0 && (
+                      <select
+                        value=""
+                        onChange={(e) => handleSelectProviderModel(e.target.value)}
+                        className="input-base text-xs w-full mb-1.5"
+                      >
+                        <option value="">从天枢 {tianshuModels.length} 个模型中选择…</option>
+                        {tianshuModels.map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
+                      </select>
+                    )}
                     <input
                       type="text"
                       list="tianshu-model-options"
                       value={llmConfig.llm_model}
                       onChange={(e) => setLlmConfig({ ...llmConfig, llm_model: e.target.value })}
-                      placeholder={tianshuModels.length > 0 ? "输入或从天枢模型列表选择" : "gpt-3.5-turbo"}
+                      placeholder={tianshuModels.length > 0 ? "或手动输入模型名" : "gpt-3.5-turbo"}
                       className="input-base text-xs w-full"
                     />
                     <datalist id="tianshu-model-options">
@@ -796,7 +823,7 @@ export default function AgentManagement() {
                     </datalist>
                     {tianshuModelsQuery.data?.ok && (
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
-                        已接入天枢 {tianshuModels.length} 个模型，输入时可下拉选择；使用天枢模型请把 API URL 填为天枢网关地址、API Key 填天枢密钥。
+                        下拉选择会自动填好网关 URL；API Key 填天枢密钥即可。
                       </p>
                     )}
                   </div>

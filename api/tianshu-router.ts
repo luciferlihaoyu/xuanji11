@@ -64,6 +64,8 @@ export const tianshuRouter = createRouter({
     return {
       configured: tianshuEnabled(),
       baseUrlHost: safeHost(),
+      // 完整网关地址（非密：设置页已展示 host；Agent 表单自动填充用）
+      apiUrl: tianshuEnabled() ? tianshuApiUrl() : undefined,
       chatModel,
       embeddingModel,
       embeddingTemplateActive: Boolean(activeTemplate),
