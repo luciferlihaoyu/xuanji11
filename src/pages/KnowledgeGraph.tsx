@@ -43,6 +43,7 @@ interface RenderNode {
 }
 
 interface RenderEdge {
+  id: string;
   source: string;
   target: string;
   strength: number;
@@ -61,6 +62,7 @@ export default function KnowledgeGraph() {
     updateNode,
     deleteNode,
     createEdge,
+    deleteEdge,
     updatePositions,
     autoLinkEdges,
   } = useKnowledgeGraph();
@@ -109,6 +111,7 @@ export default function KnowledgeGraph() {
   })), [backendNodes]);
 
   const renderEdges = useMemo<RenderEdge[]>(() => backendEdges.map((e: any) => ({
+    id: String(e.id),
     source: String(e.sourceId),
     target: String(e.targetId),
     strength: e.weight ?? 1,
@@ -255,6 +258,11 @@ export default function KnowledgeGraph() {
     } catch (err) {
       addToast({ type: 'error', title: '创建节点失败', description: err instanceof Error ? err.message : String(err) });
     }
+  };
+
+  const handleDeleteEdge = async (edgeId: string) => {
+    if (!window.confirm('删除这条关联？（点错的/不相关的边删掉后，自动建边不会再犯同样的错）')) return;
+    await deleteEdge({ id: Number(edgeId) });
   };
 
   const handleDeleteNode = async (nodeId: string) => {
@@ -502,6 +510,7 @@ export default function KnowledgeGraph() {
             categoryColors={CATEGORY_COLORS}
             onClose={() => setSelectedNodeId(null)}
             onDelete={handleDeleteNode}
+            onDeleteEdge={handleDeleteEdge}
             onConnect={handleConnectStart}
             onUpdate={handleUpdateNode}
             startInEdit={editTriggerId === selectedNodeData.id}

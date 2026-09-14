@@ -10,6 +10,7 @@ interface NodeDetailPanelProps {
   categoryLabels?: Record<string, string>;
   onClose: () => void;
   onDelete?: (nodeId: string) => void;
+  onDeleteEdge?: (edgeId: string) => void;
   onConnect?: (nodeId: string) => void;
   onUpdate?: (nodeId: string, data: { name: string; category: string; importance: number; tags: string[]; summary: string }) => void;
   startInEdit?: boolean;
@@ -24,6 +25,7 @@ export default function NodeDetailPanel({
   categoryLabels,
   onClose,
   onDelete,
+  onDeleteEdge,
   onConnect,
   onUpdate,
   startInEdit,
@@ -76,7 +78,8 @@ export default function NodeDetailPanel({
   const connectedNodes = connectedEdges
     .map((edge) => {
       const otherId = edge.source === node.id ? edge.target : edge.source;
-      return allNodes.find((n) => n.id === otherId);
+      const target = allNodes.find((n) => n.id === otherId);
+      return target ? { ...target, edgeId: edge.id, edgeLabel: edge.label } : null;
     })
     .filter(Boolean);
 
@@ -240,16 +243,27 @@ export default function NodeDetailPanel({
                 关联知识 ({connectedNodes.length})
               </h4>
               <div className="space-y-1.5 max-h-[160px] overflow-y-auto">
-                {connectedNodes.slice(0, 5).map((n) => (
-                  <div key={n.id} className="flex items-center gap-2 py-1">
+                {connectedNodes.slice(0, 8).map((n) => (
+                  <div key={n.edgeId ?? n.id} className="flex items-center gap-2 py-1 group">
                     <span
                       className="w-1.5 h-1.5 rounded-full shrink-0"
                       style={{ backgroundColor: categoryColors[n.category] }}
                     />
-                    <span className="text-xs truncate flex-1" style={{ color: 'var(--text-secondary)' }}>
+                    <span className="text-xs truncate flex-1" style={{ color: 'var(--text-secondary)' }}
+                      title={n.edgeLabel ? `边类型: ${n.edgeLabel}` : undefined}>
                       {n.name}
                     </span>
                     <div className="w-10 h-[2px] rounded-full gradient-bar opacity-60" />
+                    {onDeleteEdge && n.edgeId && (
+                      <button
+                        onClick={() => onDeleteEdge(n.edgeId)}
+                        className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/15 transition-all shrink-0"
+                        style={{ color: 'var(--text-muted)' }}
+                        title="删除这条关联（反馈：这条边连错了）"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

@@ -46,7 +46,7 @@ const NODE_CATEGORIES: Record<string, { label: string; color: string; bg: string
 
 const COMPONENT_LIBRARY = [
   { category: 'trigger', items: [
-    { type: 'file-upload', label: '文件上传触发', desc: '新文件上传时触发' },
+    { type: 'file-upload', label: '文件上传触发', desc: '新文件上传时触发（未实现）', disabled: true },
     { type: 'cron', label: '定时触发', desc: '按计划时间触发' },
     { type: 'webhook', label: 'Webhook 触发', desc: '接收 HTTP 请求触发' },
   ]},
@@ -68,11 +68,11 @@ const COMPONENT_LIBRARY = [
   ]},
   { category: 'agent', items: [
     { type: 'call-agent', label: '调用 Agent', desc: '调用指定 Agent 或外部 MCP 工具（如 Dify 工作流）' },
-    { type: 'notify-agent', label: '通知 Agent', desc: '发送通知给 Agent' },
+    { type: 'notify-agent', label: '通知 Agent', desc: '发送通知给 Agent（未实现）', disabled: true },
   ]},
   { category: 'output', items: [
     { type: 'save-result', label: '保存结果', desc: '保存到知识库' },
-    { type: 'send-notification', label: '发送通知', desc: '推送通知' },
+    { type: 'send-notification', label: '发送通知', desc: '推送通知（未实现）', disabled: true },
   ]},
   { category: 'logic', items: [
     { type: 'condition', label: '条件分支', desc: 'IF/ELSE 分支' },
@@ -588,8 +588,14 @@ export default function WorkflowBuilder() {
                 {expanded && (
                   <div className="pb-1">
                     {group.items.map((item) => (
-                      <div key={item.type} draggable onDragStart={() => setDragType(item.type)} onDragEnd={() => setDragType(null)} onClick={() => addNode(item.type)}
-                        className="flex items-center gap-2 px-3 py-1.5 mx-2 rounded cursor-pointer text-xs transition-colors hover:bg-white/5" style={{ color: 'var(--text-secondary)' }}>
+                      <div key={item.type}
+                        draggable={!item.disabled}
+                        onDragStart={item.disabled ? undefined : () => setDragType(item.type)}
+                        onDragEnd={item.disabled ? undefined : () => setDragType(null)}
+                        onClick={item.disabled ? undefined : () => addNode(item.type)}
+                        title={item.disabled ? '该节点尚未实现（执行会 skipped），暂不可添加' : undefined}
+                        className={`flex items-center gap-2 px-3 py-1.5 mx-2 rounded text-xs transition-colors ${item.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-white/5'}`}
+                        style={{ color: 'var(--text-secondary)' }}>
                         <Plus className="w-3 h-3 shrink-0" style={{ color: catInfo.color }} />
                         <div><div className="font-medium" style={{ color: 'var(--text-primary)' }}>{item.label}</div><div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{item.desc}</div></div>
                       </div>
