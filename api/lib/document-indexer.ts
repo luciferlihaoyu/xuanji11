@@ -48,6 +48,11 @@ export async function indexDocumentById(documentId: number): Promise<IndexDocume
   if (!doc) throw new Error(`文档不存在: ${documentId}`);
 
   await db.delete(documentChunks).where(eq(documentChunks.documentId, documentId));
+  // 同步清 FTS——旧 chunk id 的 FTS 行不清会成孤儿（重建索引换 id）
+  try {
+    const { deleteDocumentFromFts } = await import("./fts-search");
+    deleteDocumentFromFts(documentId);
+  } catch { /* FTS 清理失败等下次 ensureFts 回填修正 */ }
 
   const content = doc.content?.trim() ?? "";
   if (content.length === 0) {
