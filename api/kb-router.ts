@@ -11,6 +11,11 @@ import { collectDescendantFolderIds } from "./lib/kb-tree";
 
 async function deleteDocumentVectors(documentId: number): Promise<void> {
   const db = getDb();
+  // 先清 FTS（依赖 document_chunks 的 id 子查询，必须赶在删 chunks 之前）
+  try {
+    const { deleteDocumentFromFts } = await import("./lib/fts-search");
+    deleteDocumentFromFts(documentId);
+  } catch { /* FTS 清理失败不阻塞删除 */ }
   await db.delete(documentChunks).where(eq(documentChunks.documentId, documentId));
   await vectorEngine.deleteByDocumentId(documentId);
 }

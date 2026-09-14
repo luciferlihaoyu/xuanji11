@@ -47,12 +47,12 @@ export async function indexDocumentById(documentId: number): Promise<IndexDocume
   const [doc] = await db.select().from(kbDocuments).where(eq(kbDocuments.id, documentId));
   if (!doc) throw new Error(`文档不存在: ${documentId}`);
 
-  await db.delete(documentChunks).where(eq(documentChunks.documentId, documentId));
-  // 同步清 FTS——旧 chunk id 的 FTS 行不清会成孤儿（重建索引换 id）
+  // 先清 FTS（deleteDocumentFromFts 依赖 document_chunks 的 id 子查询，必须赶在删 chunks 之前）
   try {
     const { deleteDocumentFromFts } = await import("./fts-search");
     deleteDocumentFromFts(documentId);
   } catch { /* FTS 清理失败等下次 ensureFts 回填修正 */ }
+  await db.delete(documentChunks).where(eq(documentChunks.documentId, documentId));
 
   const content = doc.content?.trim() ?? "";
   if (content.length === 0) {

@@ -4,9 +4,19 @@
  * 与 scripts/seed-workflows.mjs 同一套定义——.mjs 是手动 exec 版，
  * 本文件是 boot 自动版（service exec 不可用时兜住）。
  */
-import { eq } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { getDb } from "../queries/connection";
-import { workflows, workflowNodes } from "@db/schema";
+import { workflows, workflowNodes, kbFolders } from "@db/schema";
+
+/** 确保「工作流报告」根目录文件夹存在，返回 id（报告统一收这里，不落根目录） */
+function ensureReportFolderId(): number {
+  const db = getDb();
+  const existing = db.select({ id: kbFolders.id }).from(kbFolders)
+    .where(and(eq(kbFolders.name, "工作流报告"), isNull(kbFolders.parentId))).limit(1).all();
+  if (existing.length > 0) return existing[0].id;
+  const r = db.insert(kbFolders).values({ name: "工作流报告", parentId: null, sortOrder: 99 }).run();
+  return Number(r.lastInsertRowid);
+}
 
 interface SeedNode {
   type: string;
@@ -63,11 +73,19 @@ const DEFAULT_WORKFLOWS: SeedWorkflow[] = [
 /** 幂等种子：按 name 查重，返回新建条数 */
 export async function seedDefaultWorkflows(): Promise<number> {
   const db = getDb();
+  const reportFolderId = ensureReportFolderId();
   let created = 0;
   for (const wf of DEFAULT_WORKFLOWS) {
     const existing = await db.select({ id: workflows.id }).from(workflows)
       .where(eq(workflows.name, wf.name)).limit(1);
     if (existing.length > 0) continue;
+
+    // save-result 节点落「工作流报告」文件夹（targetFolderId 0 = 根目录的占位替换为真实 id）
+    const nodes = wf.nodes.map((n) =>
+      n.type === "save-result" && Number(n.config.targetFolderId ?? 0) === 0
+        ? { ...n, config: { ...n.config, targetFolderId: reportFolderId } }
+        : n
+    );
 
     // drizzle/better-sqlite3 同步事务
     db.transaction((tx) => {
@@ -80,7 +98,7 @@ export async function seedDefaultWorkflows(): Promise<number> {
       const workflowId = Number(r.lastInsertRowid);
 
       // 先插节点拿真实 id，再回填 connections
-      const nodeIds = wf.nodes.map((n, i) => {
+      const nodeIds = nodes.map((n, i) => {
         const nr = tx.insert(workflowNodes).values({
           workflowId,
           type: n.type,
@@ -93,7 +111,7 @@ export async function seedDefaultWorkflows(): Promise<number> {
         }).run();
         return Number(nr.lastInsertRowid);
       });
-      wf.nodes.forEach((n, i) => {
+      nodes.forEach((n, i) => {
         const conns = (n.connections ?? []).map((c) => ({ targetId: nodeIds[c.targetIndex] }));
         tx.update(workflowNodes).set({ connections: conns })
           .where(eq(workflowNodes.id, nodeIds[i])).run();
