@@ -92,6 +92,9 @@ function sampleDoc(): KbDocument {
     createdBy: 1,
     createdAt: new Date("2024-01-01T00:00:00Z"),
     updatedAt: new Date("2024-01-01T00:00:00Z"),
+    deletedAt: null,
+    deletedReason: null,
+    mergedIntoId: null,
   };
 }
 

@@ -8,6 +8,27 @@
       "when": 1787802559641,
       "tag": "0000_even_darkhawk",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789488455838,
+      "tag": "0001_huge_the_stranger",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789488697170,
+      "tag": "0002_crazy_impossible_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1789488823273,
+      "tag": "0003_busy_nextwave",
+      "breakpoints": true
     }
   ]
 }

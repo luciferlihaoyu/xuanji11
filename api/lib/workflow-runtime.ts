@@ -331,6 +331,12 @@ const nodeExecutors: Record<string, NodeExecutor> = {
       .where(eq(kbDocs.id, documentId)).limit(1);
     if (!doc[0]) return skipped(`文档不存在: ${documentId}`);
 
+    // 写入前快照旧版本（workflow 自动改文档也可回溯）
+    try {
+      const { snapshotDocumentVersion } = await import("./doc-versioning");
+      await snapshotDocumentVersion(documentId, "workflow", "update-document");
+    } catch { /* 快照失败不阻塞 */ }
+
     // mode: prepend（头部插入，如摘要）| replace | append
     const mode = String(config.mode ?? 'prepend');
     const newContent = String(config.content ?? ctx.input.summary ?? '');

@@ -320,6 +320,15 @@ export const kbRouter = createRouter({
     .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const { id, ...data } = input;
+      // 内容/标题变更前快照旧版本（安全网：可回溯；失败不阻塞更新）
+      if (input.content !== undefined || input.title !== undefined) {
+        try {
+          const { snapshotDocumentVersion } = await import("./lib/doc-versioning");
+          await snapshotDocumentVersion(id, "manual", "update", ctx.user?.id ?? null);
+        } catch (err) {
+          console.error("[DocVersion] 快照失败（不阻塞更新）:", err);
+        }
+      }
       await db.update(kbDocuments).set(clean(data as Record<string, unknown>)).where(eq(kbDocuments.id, id));
       await logAudit(ctx, "kb_document", "update", id, input as Record<string, unknown>);
       // 内容变更时自动重建索引；索引失败不影响文档更新

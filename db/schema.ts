@@ -194,9 +194,14 @@ export const kbDocuments = sqliteTable("kb_documents", {
   updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
     .default(nowMs)
     .notNull(),
+  // 软删除：非 null 表示已删除（保留版本/审计，可恢复；查询默认过滤）
+  deletedAt: integer("deletedAt", { mode: "timestamp_ms" }),
+  deletedReason: text("deletedReason"), // manual / dedup / merge / ...
+  mergedIntoId: integer("mergedIntoId", { mode: "number" }), // 合并目标文档 id
 }, (table) => [
   index("kbDocuments_createdBy_idx").on(table.createdBy),
   index("kbDocuments_folderId_idx").on(table.folderId),
+  index("kbDocuments_deletedAt_idx").on(table.deletedAt),
   foreignKey({
     columns: [table.folderId],
     foreignColumns: [kbFolders.id],
@@ -211,6 +216,55 @@ export const kbDocuments = sqliteTable("kb_documents", {
 
 export type KbDocument = typeof kbDocuments.$inferSelect;
 export type InsertKbDocument = typeof kbDocuments.$inferInsert;
+
+// ========== 阶段1：文档版本表（数据安全底座） ==========
+// 每次内容/标题变更前快照旧版本，支持回溯与撤销
+export const kbDocumentVersions = sqliteTable("kb_document_versions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  documentId: integer("documentId", { mode: "number" }).notNull(),
+  versionNumber: integer("versionNumber").notNull(),
+  title: text("title").notNull(),
+  content: text("content"),
+  format: text("format").default("markdown").notNull(),
+  tags: text("tags", { mode: "json" }).$type<string[]>(),
+  contentHash: text("contentHash").notNull(), // sha256，幂等/去重用
+  source: text("source"), // manual / workflow / api / sync
+  changedBy: integer("changedBy", { mode: "number" }),
+  changeReason: text("changeReason"), // update / workflow-prepend / restore / ...
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+}, (table) => [
+  index("kb_doc_versions_documentId_idx").on(table.documentId),
+  index("kb_doc_versions_hash_idx").on(table.contentHash),
+  foreignKey({
+    columns: [table.documentId],
+    foreignColumns: [kbDocuments.id],
+    name: "kb_doc_versions_document_fk",
+  }),
+]);
+
+export type KbDocumentVersion = typeof kbDocumentVersions.$inferSelect;
+
+// ========== 阶段1：入库幂等键 ==========
+// source + externalId + contentHash 唯一 → 重复上传/同步/工作流重触发不产生重复文档
+export const kbIngestionKeys = sqliteTable("kb_ingestion_keys", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  idempotencyKey: text("idempotencyKey").notNull().unique(), // sha256(source|externalId|contentHash)
+  documentId: integer("documentId", { mode: "number" }).notNull(),
+  source: text("source").notNull(), // manual / upload / sync / workflow / api
+  externalId: text("externalId"), // 外部系统 id（feishu message_id 等）
+  contentHash: text("contentHash").notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+}, (table) => [
+  index("kb_ingestion_keys_documentId_idx").on(table.documentId),
+  index("kb_ingestion_keys_hash_idx").on(table.contentHash),
+  foreignKey({
+    columns: [table.documentId],
+    foreignColumns: [kbDocuments.id],
+    name: "kb_ingestion_keys_document_fk",
+  }),
+]);
+
+export type KbIngestionKey = typeof kbIngestionKeys.$inferSelect;
 
 // ========== 工作流表 ==========
 export const workflows = sqliteTable("workflows", {
