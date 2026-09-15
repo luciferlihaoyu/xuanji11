@@ -43,8 +43,8 @@ export default function SearchResults() {
     data: searchData,
     isLoading: knowledgeLoading,
     error: knowledgeError,
-  } = trpc.knowledge.semanticSearch.useQuery(
-    { query: trimmed, topK: 20 },
+  } = trpc.kb.hybridSearch.useQuery(
+    { query: trimmed, limit: 20 },
     { enabled, retry: 1 }
   );
 
@@ -80,8 +80,8 @@ export default function SearchResults() {
   const docs = docsData ?? [];
   const agents = agentsData ?? [];
 
-  const mode = searchData?.mode ?? 'fallback';
-  const engine = searchData?.engine ?? 'mysql-like';
+  const keywordCount = searchData?.metadata.keywordResults ?? 0;
+  const vectorCount = searchData?.metadata.vectorResults ?? 0;
 
   const isLoading = knowledgeLoading || filesLoading || docsLoading || agentsLoading;
   const hasError = knowledgeError || filesError || docsError || agentsError;
@@ -124,11 +124,11 @@ export default function SearchResults() {
               <span
                 className="chip text-[10px] py-0 px-1.5"
                 style={{
-                  backgroundColor: mode === 'semantic' ? 'rgba(52,211,153,0.15)' : 'rgba(251,191,36,0.15)',
-                  color: mode === 'semantic' ? '#34D399' : '#FBBF24',
+                  backgroundColor: 'rgba(52,211,153,0.15)',
+                  color: '#34D399',
                 }}
               >
-                {mode === 'semantic' ? `语义搜索 · ${engine}` : `关键词回退 · ${engine}`}
+                混合搜索 · 关键词 {keywordCount} + 语义 {vectorCount}
               </span>
             )}
           </div>
@@ -182,7 +182,28 @@ export default function SearchResults() {
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="chip text-[10px] py-0 px-1.5">{item.type ?? 'note'}</span>
                 <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>匹配度: {item.score ?? '-'}</span>
+                {(item.reasons ?? []).map((r) => (
+                  <span key={r} className="text-[10px] px-1.5 py-0.5 rounded"
+                    style={{ backgroundColor: 'rgba(34,211,238,0.1)', color: 'var(--accent-cyan)' }}>{r}</span>
+                ))}
               </div>
+              {(item.evidence ?? []).length > 1 && (
+                <details className="mt-2 text-xs" onClick={(e) => e.preventDefault()}>
+                  <summary className="cursor-pointer" style={{ color: 'var(--text-muted)' }}>
+                    {item.evidence.length} 个命中片段
+                  </summary>
+                  <div className="mt-1 space-y-1 pl-3 border-l-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                    {item.evidence.map((ev, i) => (
+                      <p key={i} className="line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
+                        <span className="text-[10px] mr-1" style={{ color: 'var(--text-muted)' }}>
+                          [{ev.source === 'vector' ? '语义' : '关键词'}]
+                        </span>
+                        {highlightText(ev.snippet.slice(0, 120), query)}
+                      </p>
+                    ))}
+                  </div>
+                </details>
+              )}
             </Link>
           ))}
         </div>

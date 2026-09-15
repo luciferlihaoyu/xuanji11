@@ -141,6 +141,19 @@ export const kbRouter = createRouter({
         .offset(input.offset);
     }),
 
+  /** 混合搜索（BM25+向量+RRF+可选重排）：带命中原因和证据片段 */
+  hybridSearch: authedQuery
+    .input(z.object({
+      query: z.string().min(1).max(500),
+      mode: z.enum(["keyword", "vector", "hybrid"]).default("hybrid"),
+      limit: z.number().int().min(1).max(50).default(10),
+      rerank: z.boolean().default(false),
+    }))
+    .query(async ({ input }) => {
+      const { executeHybridSearch } = await import("./lib/hybrid-search");
+      return executeHybridSearch(input);
+    }),
+
   getDocument: authedQuery
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {

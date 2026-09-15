@@ -1,10 +1,11 @@
 import { z } from "zod";
-import { desc, inArray, sql } from "drizzle-orm";
+import { desc, inArray, isNull, sql } from "drizzle-orm";
 import { getDb } from "../queries/connection";
 import { kbDocuments, knowledgeNodes } from "@db/schema";
 import type { KbDocument, KnowledgeNode } from "@db/schema";
 import * as vectorService from "./vector-service";
 import {
+  type EvidenceChunk,
   type Filters,
   type InternalHit,
   type MergedHit,
@@ -47,6 +48,10 @@ export interface SearchResult {
   readonly sources: readonly Source[];
   readonly tags: readonly string[];
   readonly folderId: number | null;
+  /** 命中原因（可解释性：用户能看懂为什么这条排上来） */
+  readonly reasons: readonly string[];
+  /** 证据片段（同文档的多个命中 chunk，展开查看用） */
+  readonly evidence: readonly EvidenceChunk[];
 }
 
 export interface Facets {
@@ -78,6 +83,21 @@ function documentIdFromMetadata(metadata: unknown): string | undefined {
 
 function toSearchResult(hit: MergedHit, query: string): SearchResult {
   const sources = [...new Set(hit.sources)] as Source[];
+  const reasons: string[] = [];
+  if (query && hit.title.toLowerCase().includes(query.toLowerCase())) reasons.push("标题命中");
+  if (sources.includes("keyword")) reasons.push("关键词命中（BM25）");
+  if (sources.includes("vector")) reasons.push("语义命中");
+  if (sources.length > 1) reasons.push("多路一致（关键词+语义）");
+  // evidence 去重（同 snippet）+ 最多 5 条
+  const seen = new Set<string>();
+  const evidence = (hit.evidence ?? [])
+    .filter((e) => {
+      const key = e.snippet.slice(0, 60);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 5);
   return {
     id: hit.id,
     title: hit.title,
@@ -87,6 +107,8 @@ function toSearchResult(hit: MergedHit, query: string): SearchResult {
     sources,
     tags: hit.tags,
     folderId: hit.folderId,
+    reasons,
+    evidence,
   };
 }
 
@@ -119,18 +141,27 @@ async function fetchKeywordResults(query: string, limit: number): Promise<Intern
   try {
     const { bm25Search } = await import("./fts-search");
     const bm25Hits = bm25Search(query, limit * 2);
-    // chunk 级 → 文档级聚合（同文档取最佳名次的 chunk 做代表）
-    const byDoc = new Map<number, { rank: number; content: string }>();
+    // chunk 级 → 文档级聚合（同文档取最佳名次的 chunk 做代表 + 收集 top-3 证据片段）
+    const byDoc = new Map<number, { rank: number; content: string; evidence: EvidenceChunk[] }>();
     for (const h of bm25Hits) {
       const cur = byDoc.get(h.documentId);
-      if (!cur || h.rank < cur.rank) byDoc.set(h.documentId, { rank: h.rank, content: h.content });
+      if (!cur) {
+        byDoc.set(h.documentId, {
+          rank: h.rank,
+          content: h.content,
+          evidence: [{ snippet: h.content, source: "keyword", rank: h.rank }],
+        });
+      } else {
+        if (h.rank < cur.rank) { cur.rank = h.rank; cur.content = h.content; }
+        if (cur.evidence.length < 3) cur.evidence.push({ snippet: h.content, source: "keyword", rank: h.rank });
+      }
     }
     const docIds = [...byDoc.keys()];
     if (docIds.length > 0) {
       const docs = (await db
         .select()
         .from(kbDocuments)
-        .where(inArray(kbDocuments.id, docIds))) as KbDocument[];
+        .where(sql`${inArray(kbDocuments.id, docIds)} AND ${isNull(kbDocuments.deletedAt)}`)) as KbDocument[];
       const docMap = new Map(docs.map((d) => [d.id, d]));
       docHits = docIds
         .sort((a, b) => (byDoc.get(a)?.rank ?? 0) - (byDoc.get(b)?.rank ?? 0))
@@ -146,6 +177,7 @@ async function fetchKeywordResults(query: string, limit: number): Promise<Intern
             folderId: doc?.folderId ?? null,
             source: "keyword" as Source,
             rank: nodeHits.length + index + 1,
+            evidence: byDoc.get(id)?.evidence ?? [],
           };
         });
     }
@@ -157,7 +189,7 @@ async function fetchKeywordResults(query: string, limit: number): Promise<Intern
     const docRows = (await db
       .select()
       .from(kbDocuments)
-      .where(sql`${kbDocuments.title} LIKE ${q} OR ${kbDocuments.content} LIKE ${q}`)
+      .where(sql`(${kbDocuments.title} LIKE ${q} OR ${kbDocuments.content} LIKE ${q}) AND ${isNull(kbDocuments.deletedAt)}`)
       .orderBy(desc(kbDocuments.updatedAt))
       .limit(limit)) as KbDocument[];
 
@@ -177,41 +209,59 @@ async function fetchKeywordResults(query: string, limit: number): Promise<Intern
 }
 
 async function fetchVectorResults(query: string, limit: number): Promise<InternalHit[]> {
-  const results = await vectorService.searchVectors(query, limit);
-  return results.map((result, index) => {
+  // 多取一些 chunk 级结果用于按文档聚合证据（同文档多个 chunk 命中合并成一条文档结果）
+  const results = await vectorService.searchVectors(query, limit * 3);
+  const byDoc = new Map<string, InternalHit & { evidence: EvidenceChunk[] }>();
+  for (const [index, result] of results.entries()) {
     const metadata = result.metadata;
     const content = typeof metadata.content === "string" ? metadata.content : "";
     const title = typeof metadata.title === "string" ? metadata.title : result.id;
     const type = typeof metadata.type === "string" ? metadata.type : "document";
-    return {
-      id: documentIdFromMetadata(metadata) ?? result.id,
-      title,
-      content,
-      type,
-      tags: [],
-      folderId: null,
-      source: "vector" as Source,
-      rank: index + 1,
-    };
-  });
+    const docId = documentIdFromMetadata(metadata) ?? result.id;
+    const rank = index + 1;
+    const existing = byDoc.get(docId);
+    if (!existing) {
+      byDoc.set(docId, {
+        id: docId,
+        title,
+        content,
+        type,
+        tags: [],
+        folderId: null,
+        source: "vector" as Source,
+        rank,
+        evidence: content ? [{ snippet: content, source: "vector", rank }] : [],
+      });
+    } else if (content && existing.evidence.length < 3) {
+      existing.evidence.push({ snippet: content, source: "vector", rank });
+    }
+  }
+  return [...byDoc.values()].slice(0, limit);
 }
 
-async function enrichWithKbDocuments(hits: MergedHit[]): Promise<void> {
+async function enrichWithKbDocuments(hits: MergedHit[]): Promise<MergedHit[]> {
   const docIds = [
     ...new Set(hits.map((hit) => hit.id).filter((id) => /^\d+$/.test(id)).map(Number)),
   ];
-  if (docIds.length === 0) return;
+  if (docIds.length === 0) return hits;
 
   const db = getDb();
-  const docs = (await db.select().from(kbDocuments).where(inArray(kbDocuments.id, docIds))) as KbDocument[];
+  // 软删文档不进搜索结果（deletedAt 非 null 直接排除）
+  const docs = (await db.select().from(kbDocuments)
+    .where(sql`${inArray(kbDocuments.id, docIds)} AND ${isNull(kbDocuments.deletedAt)}`)) as KbDocument[];
   const map = new Map(docs.map((doc) => [String(doc.id), doc]));
 
+  const kept: MergedHit[] = [];
   for (const hit of hits) {
-    const doc = map.get(hit.id);
-    if (!doc) continue;
-    if (hit.tags.length === 0) hit.tags = doc.tags ?? [];
-    if (hit.folderId === null) hit.folderId = doc.folderId ?? null;
+    if (/^\d+$/.test(hit.id)) {
+      const doc = map.get(hit.id);
+      if (!doc) continue; // 文档不存在或已软删 → 从结果剔除
+      if (hit.tags.length === 0) hit.tags = doc.tags ?? [];
+      if (hit.folderId === null) hit.folderId = doc.folderId ?? null;
+    }
+    kept.push(hit);
   }
+  return kept;
 }
 
 /**
@@ -262,7 +312,7 @@ export async function executeHybridSearch(input: SearchInput): Promise<SearchRes
     merged = await rerankWithLlm(query, merged, limit);
   }
 
-  await enrichWithKbDocuments(merged);
+  merged = await enrichWithKbDocuments(merged);
 
   const filtered = applyFilters(merged, filters);
   const limited = filtered.slice(0, limit);

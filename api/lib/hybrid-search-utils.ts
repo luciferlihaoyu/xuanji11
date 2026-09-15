@@ -2,6 +2,12 @@ import { z } from "zod";
 
 export type Source = "keyword" | "vector";
 
+export interface EvidenceChunk {
+  readonly snippet: string;
+  readonly source: Source;
+  readonly rank: number;
+}
+
 export interface InternalHit {
   id: string;
   title: string;
@@ -11,6 +17,7 @@ export interface InternalHit {
   folderId: number | null;
   source: Source;
   rank: number;
+  evidence?: EvidenceChunk[];
 }
 
 export interface MergedHit {
@@ -23,6 +30,7 @@ export interface MergedHit {
   sources: Source[];
   ranks: Partial<Record<Source, number>>;
   score: number;
+  evidence?: EvidenceChunk[];
 }
 
 export const RRF_K = 60;
@@ -74,10 +82,12 @@ export function mergeResults(keywordHits: readonly InternalHit[], vectorHits: re
         sources: [hit.source],
         ranks: { keyword: hit.rank },
         score: rrfScore(hit.rank),
+        evidence: hit.evidence ? [...hit.evidence] : [],
       });
     } else {
       existing.sources.push(hit.source);
       existing.score += rrfScore(hit.rank);
+      if (hit.evidence) (existing.evidence ??= []).push(...hit.evidence);
     }
   }
 
@@ -89,8 +99,10 @@ export function mergeResults(keywordHits: readonly InternalHit[], vectorHits: re
         sources: [hit.source],
         ranks: { vector: hit.rank },
         score: rrfScore(hit.rank),
+        evidence: hit.evidence ? [...hit.evidence] : [],
       });
     } else {
+      if (hit.evidence) (existing.evidence ??= []).push(...hit.evidence);
       existing.sources.push(hit.source);
       existing.score += rrfScore(hit.rank);
       if (hit.content) {
