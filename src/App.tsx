@@ -15,6 +15,7 @@ const KnowledgeBase = lazy(() => import('@/pages/KnowledgeBase'));
 const WorkflowBuilder = lazy(() => import('@/pages/WorkflowBuilder'));
 const BackupPage = lazy(() => import('@/pages/BackupPage'));
 const IngestionPage = lazy(() => import('@/pages/IngestionPage'));
+const ReviewInbox = lazy(() => import('@/pages/ReviewInbox'));
 const AgentManagement = lazy(() => import('@/pages/AgentManagement'));
 const APICenter = lazy(() => import('@/pages/APICenter'));
 const DataSources = lazy(() => import('@/pages/DataSources'));
@@ -52,6 +53,7 @@ function App() {
           <Route path="/workflows/:id" element={<WorkflowBuilder />} />
           <Route path="/backups" element={<BackupPage />} />
           <Route path="/ingestion" element={<IngestionPage />} />
+          <Route path="/inbox" element={<ReviewInbox />} />
           <Route path="/agents" element={<AgentManagement />} />
           <Route path="/api" element={<APICenter />} />
           <Route path="/sources" element={<DataSources />} />

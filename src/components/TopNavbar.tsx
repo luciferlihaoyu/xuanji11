@@ -11,6 +11,7 @@ const navItems = [
   { label: '工作流', path: '/workflows' },
   { label: '备份', path: '/backups' },
   { label: '入库', path: '/ingestion' },
+  { label: '收件箱', path: '/inbox' },
   { label: 'Agent 管理', path: '/agents' },
   { label: 'API 中心', path: '/api' },
   { label: '数据源', path: '/sources' },
