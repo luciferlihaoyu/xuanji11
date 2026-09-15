@@ -32,6 +32,8 @@ export default function ReviewInbox() {
     limit: 100,
   });
   const countsQuery = trpc.review.counts.useQuery();
+  const feedbackQuery = trpc.review.feedbackReport.useQuery(undefined, { staleTime: 60_000 });
+  const [showFeedback, setShowFeedback] = useState(false);
   const utils = trpc.useUtils();
 
   const resolveMutation = trpc.review.resolve.useMutation({
@@ -74,12 +76,60 @@ export default function ReviewInbox() {
             style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
             {Object.entries(STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
+          <button onClick={() => setShowFeedback(!showFeedback)}
+            className="text-xs px-2.5 py-1.5 rounded transition-colors"
+            style={{ backgroundColor: showFeedback ? 'rgba(167,139,250,0.15)' : 'var(--bg-tertiary)', color: showFeedback ? '#a78bfa' : 'var(--text-muted)' }}>
+            反馈报告
+          </button>
           <button onClick={() => listQuery.refetch()}
             className="p-2 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }} title="刷新">
             <RefreshCw className="w-4 h-4" />
           </button>
         </div>
       </div>
+
+      {/* 反馈评估报告 */}
+      {showFeedback && feedbackQuery.data && (
+        <div className="mx-4 mt-3 rounded-lg border p-4 shrink-0"
+          style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'rgba(167,139,250,0.3)' }}>
+          <div className="text-xs font-semibold mb-3" style={{ color: '#a78bfa' }}>反馈评估报告</div>
+          <div className="grid grid-cols-3 gap-4 text-xs">
+            <div>
+              <div className="mb-1" style={{ color: 'var(--text-muted)' }}>自动边删除率</div>
+              <div className="text-lg font-semibold" style={{ color: feedbackQuery.data.edgeFeedback.deletionRate > 0.2 ? '#ef4444' : '#22c55e' }}>
+                {(feedbackQuery.data.edgeFeedback.deletionRate * 100).toFixed(1)}%
+              </div>
+              <div style={{ color: 'var(--text-muted)' }}>
+                已删 {feedbackQuery.data.edgeFeedback.deletedEdges} / 现存 {feedbackQuery.data.edgeFeedback.totalAutoEdges}
+                {feedbackQuery.data.edgeFeedback.recentDeletions > 0 && ` · 近7天 ${feedbackQuery.data.edgeFeedback.recentDeletions}`}
+              </div>
+            </div>
+            <div>
+              <div className="mb-1" style={{ color: 'var(--text-muted)' }}>收件箱通过率</div>
+              <div className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
+                {(feedbackQuery.data.reviewStats.approvalRate * 100).toFixed(1)}%
+              </div>
+              <div style={{ color: 'var(--text-muted)' }}>
+                通过 {feedbackQuery.data.reviewStats.approved} / 驳回 {feedbackQuery.data.reviewStats.rejected} / 忽略 {feedbackQuery.data.reviewStats.ignored}
+              </div>
+            </div>
+            <div>
+              <div className="mb-1" style={{ color: 'var(--text-muted)' }}>分拣建议准确率</div>
+              <div className="text-lg font-semibold" style={{ color: feedbackQuery.data.triageAccuracy.accuracy > 0.7 ? '#22c55e' : '#fbbf24' }}>
+                {feedbackQuery.data.triageAccuracy.total > 0 ? `${(feedbackQuery.data.triageAccuracy.accuracy * 100).toFixed(1)}%` : '—'}
+              </div>
+              <div style={{ color: 'var(--text-muted)' }}>
+                {feedbackQuery.data.triageAccuracy.total > 0
+                  ? `${feedbackQuery.data.triageAccuracy.approved}/${feedbackQuery.data.triageAccuracy.total} 被采纳`
+                  : '暂无分拣审核记录'}
+              </div>
+            </div>
+          </div>
+          <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+            删除率 &gt;20% 说明自动建边阈值偏低；分拣准确率 &lt;70% 说明置信度阈值需调高。
+          </div>
+        </div>
+      )}
 
       {/* 列表 */}
       <div className="flex-1 overflow-y-auto p-4 space-y-2">

@@ -46,6 +46,12 @@ export const reviewRouter = createRouter({
     return rows;
   }),
 
+  /** 反馈评估报告：删边率/审批率/分拣准确率（调参依据） */
+  feedbackReport: authedQuery.query(async () => {
+    const { generateFeedbackReport } = await import("./lib/feedback-report");
+    return generateFeedbackReport();
+  }),
+
   /** 审批/驳回/忽略 */
   resolve: adminQuery
     .input(z.object({
