@@ -377,6 +377,14 @@ async function embeddingCandidates(): Promise<EmbeddingConfig[]> {
 /** 火山方舟等 embedding API 单次 input 上限（实测 doubao-embedding-vision max 10）。 */
 const EMBED_BATCH_MAX = 10;
 
+/** 最近一次成功 embed 所用的模型身份（写入向量 metadata，供模型版本巡检） */
+let lastEmbeddingIdentity: { model: string; dimension: number; templateName?: string } | null = null;
+
+/** 返回最近一次 embed 的模型身份；未 embed 过返回 null */
+export function getLastEmbeddingIdentity(): { model: string; dimension: number; templateName?: string } | null {
+  return lastEmbeddingIdentity;
+}
+
 async function embedWithFallback(texts: string[]): Promise<number[][]> {
   const candidates = await embeddingCandidates();
   if (texts.length === 0) return [];
@@ -389,6 +397,11 @@ async function embedWithFallback(texts: string[]): Promise<number[][]> {
         const slice = texts.slice(i, i + EMBED_BATCH_MAX);
         results.push(...(await fetchEmbeddingsWithConfig(slice, cfg)));
       }
+      lastEmbeddingIdentity = {
+        model: cfg.model,
+        dimension: cfg.dimension,
+        ...(cfg.templateName ? { templateName: cfg.templateName } : {}),
+      };
       return results;
     } catch (err) {
       const label = cfg.templateName ?? cfg.model;

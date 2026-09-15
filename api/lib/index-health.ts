@@ -81,6 +81,28 @@ export function checkIndexHealth(): IndexHealthReport {
   `);
   if (graphOrphans > 0) issues.push({ kind: "graph_orphans", count: graphOrphans, detail: "图谱节点指向已删文档" });
 
+  // 7. 模型版本漂移：向量 metadata 里的 embeddingModel 与当前激活模型不一致
+  const modelDist = db.prepare(`
+    SELECT json_extract(metadataJson, '$.embeddingModel') AS model, COUNT(*) AS c
+    FROM vec_chunk_meta
+    WHERE json_extract(metadataJson, '$.embeddingModel') IS NOT NULL
+    GROUP BY 1 ORDER BY c DESC
+  `).all() as Array<{ model: string; c: number }>;
+  if (modelDist.length > 1) {
+    issues.push({
+      kind: "mixed_embedding_models",
+      count: modelDist.length,
+      detail: `向量由多个模型生成（语义搜索会混合不可比分数）: ${modelDist.map((m) => `${m.model}×${m.c}`).join(", ")}`,
+    });
+  }
+  const noModelTag = count(`
+    SELECT COUNT(*) c FROM vec_chunk_meta
+    WHERE json_extract(metadataJson, '$.embeddingModel') IS NULL
+  `);
+  if (noModelTag > 0 && vectorRows > 0) {
+    issues.push({ kind: "vectors_without_model_tag", count: noModelTag, detail: "旧向量未记录模型身份（下次重建后会补齐）" });
+  }
+
   return {
     checkedAt: new Date().toISOString(),
     documents,

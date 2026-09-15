@@ -87,6 +87,9 @@ export async function indexDocumentById(documentId: number): Promise<IndexDocume
   } catch { /* FTS 同步失败等下次 ensureFts 回填 */ }
 
   // 写入 vec 表（vec_chunks + vec_chunk_meta）
+  // 记录 embedding 模型身份——模型版本巡检靠它发现「切换模型后未重建的旧向量」
+  const { getLastEmbeddingIdentity } = await import("./vector-service");
+  const identity = getLastEmbeddingIdentity();
   await vectorEngine.insertBatch(
     chunkContents.map((c, index) => ({
       id: `chunk-${documentId}-${c.index}`,
@@ -97,6 +100,9 @@ export async function indexDocumentById(documentId: number): Promise<IndexDocume
         content: c.content,
         title: doc.title,
         format: doc.format,
+        ...(identity
+          ? { embeddingModel: identity.model, embeddingDim: identity.dimension }
+          : {}),
       },
     })),
   );
