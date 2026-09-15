@@ -154,6 +154,14 @@ export const kbRouter = createRouter({
       return executeHybridSearch(input);
     }),
 
+  /** 引用式问答：检索→LLM→带引用的回答；证据不足明确拒答 */
+  ask: authedQuery
+    .input(z.object({ query: z.string().min(2).max(500) }))
+    .mutation(async ({ input }) => {
+      const { askKnowledgeBase } = await import("./lib/ask-rag");
+      return askKnowledgeBase(input.query);
+    }),
+
   getDocument: authedQuery
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {

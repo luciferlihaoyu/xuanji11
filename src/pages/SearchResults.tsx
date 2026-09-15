@@ -76,6 +76,15 @@ export default function SearchResults() {
   );
 
   const knowledgeResults = searchData?.results ?? [];
+
+  // 引用式问答
+  const [askTriggered, setAskTriggered] = useState(false);
+  const askMutation = trpc.kb.ask.useMutation();
+  const handleAsk = () => {
+    if (trimmed.length < 2) return;
+    setAskTriggered(true);
+    askMutation.mutate({ query: trimmed });
+  };
   const files = filesData ?? [];
   const docs = docsData ?? [];
   const agents = agentsData ?? [];
@@ -113,6 +122,16 @@ export default function SearchResults() {
             className="flex-1 bg-transparent text-base outline-none"
             style={{ color: 'var(--text-primary)' }}
           />
+          <button
+            type="button"
+            onClick={handleAsk}
+            disabled={trimmed.length < 2 || askMutation.isPending}
+            className="ml-2 px-3 py-1 rounded text-xs font-medium transition-colors disabled:opacity-40"
+            style={{ backgroundColor: 'rgba(167,139,250,0.15)', color: '#a78bfa' }}
+            title="基于知识库生成带引用的回答"
+          >
+            {askMutation.isPending ? '思考中…' : '问一问'}
+          </button>
         </form>
 
         <div className="flex items-center justify-between flex-wrap gap-3">
@@ -139,6 +158,40 @@ export default function SearchResults() {
         <div className="flex items-center justify-center py-16" style={{ color: 'var(--text-muted)' }}>
           <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
           搜索中...
+        </div>
+      )}
+
+      {/* 引用式问答答案卡片 */}
+      {askTriggered && askMutation.data && (
+        <div className="mb-6 rounded-lg border p-4 max-w-2xl mx-auto"
+          style={{ backgroundColor: 'var(--bg-secondary)', borderColor: askMutation.data.insufficient ? 'rgba(251,191,36,0.3)' : 'rgba(167,139,250,0.3)' }}>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs font-semibold" style={{ color: '#a78bfa' }}>知识库回答</span>
+            {askMutation.data.insufficient && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>
+                证据不足
+              </span>
+            )}
+            <span className="text-[10px] ml-auto" style={{ color: 'var(--text-muted)' }}>
+              {askMutation.data.evidenceCount} 条证据{askMutation.data.model ? ` · ${askMutation.data.model}` : ''}
+            </span>
+          </div>
+          <div className="text-sm whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--text-primary)' }}>
+            {askMutation.data.answer}
+          </div>
+          {askMutation.data.citations.length > 0 && (
+            <div className="mt-3 pt-3 border-t space-y-1" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="text-[10px] font-medium mb-1" style={{ color: 'var(--text-muted)' }}>引用来源：</div>
+              {askMutation.data.citations.map((c) => (
+                <div key={c.n} className="text-xs flex items-start gap-2">
+                  <span className="shrink-0 font-mono" style={{ color: '#a78bfa' }}>[{c.n}]</span>
+                  <Link to={`/doc/${c.documentId}`} className="hover:underline truncate" style={{ color: 'var(--accent-cyan)' }}>
+                    {c.title}
+                  </Link>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
