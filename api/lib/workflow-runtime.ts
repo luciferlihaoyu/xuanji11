@@ -248,6 +248,12 @@ const nodeExecutors: Record<string, NodeExecutor> = {
     };
   },
 
+  /** 索引一致性巡检：对账 docs/chunks/FTS/vector/图谱，输出健康报告 */
+  'index-health': async () => {
+    const { checkIndexHealth } = await import("./index-health");
+    return checkIndexHealth() as unknown as Record<string, unknown>;
+  },
+
   /** 语义聚类：全文档 KMeans++ → 主题群（只读分析，报告交给下游 save-result） */
   cluster: async (config) => {
     const k = config.k !== undefined ? Math.min(Math.max(Number(config.k), 3), 24) : undefined;
