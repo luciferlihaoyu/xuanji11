@@ -41,8 +41,8 @@ export function generateFeedbackReport(): FeedbackReport {
   const count = (sql: string, ...params: unknown[]): number =>
     (db.prepare(sql).get(...params) as { c: number }).c;
 
-  // 删边反馈
-  const totalAutoEdges = count("SELECT COUNT(*) c FROM knowledge_edges WHERE type = 'auto'");
+  // 删边反馈（auto-link 建的边 type='similar'）
+  const totalAutoEdges = count("SELECT COUNT(*) c FROM knowledge_edges WHERE type = 'similar'");
   const deletedEdges = count(
     "SELECT COUNT(*) c FROM audit_logs WHERE entityType = 'knowledge_edge' AND action = 'delete'"
   );
