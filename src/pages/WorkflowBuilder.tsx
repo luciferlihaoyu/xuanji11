@@ -66,6 +66,7 @@ const COMPONENT_LIBRARY = [
     { type: 'ingest-triage', label: '入库分拣', desc: 'LLM 建议文件夹/标签/概念并落库' },
     { type: 'update-document', label: '更新文档', desc: '把产出（摘要等）写回文档' },
     { type: 'index-health', label: '索引巡检', desc: '对账文档/chunks/FTS/向量/图谱一致性' },
+    { type: 'dedup-scan', label: '去重扫描', desc: '发现疑似重复文档进收件箱（不自动删）' },
   ]},
   { category: 'agent', items: [
     { type: 'call-agent', label: '调用 Agent', desc: '调用指定 Agent 或外部 MCP 工具（如 Dify 工作流）' },

@@ -254,6 +254,13 @@ const nodeExecutors: Record<string, NodeExecutor> = {
     return checkIndexHealth() as unknown as Record<string, unknown>;
   },
 
+  /** 去重扫描：发现疑似重复组写入收件箱（只建议不删除） */
+  'dedup-scan': async () => {
+    const { scanDuplicatesToInbox } = await import("./dedup-detector");
+    const result = await scanDuplicatesToInbox();
+    return { groups: result.groups, created: result.created };
+  },
+
   /** 语义聚类：全文档 KMeans++ → 主题群（只读分析，报告交给下游 save-result） */
   cluster: async (config) => {
     const k = config.k !== undefined ? Math.min(Math.max(Number(config.k), 3), 24) : undefined;
@@ -284,7 +291,37 @@ const nodeExecutors: Record<string, NodeExecutor> = {
     const suggestion = await suggestIngestion(doc[0].title, doc[0].content ?? "");
     if (suggestion.skipped) return skipped(`分拣不可用: ${suggestion.reason ?? 'LLM 未配置'}`);
 
-    // 直接落库（工作流 = 无人值守，跳过人工确认环节）
+    // 启发式置信度（suggester 不返回置信度时的代理指标）：
+    // 命中既有文件夹 +0.5 / 仅建议新建文件夹 +0.35 / 无文件夹建议 +0.2
+    // 标签 2-5 个 +0.25，0-1 个 +0.1；有概念 +0.1
+    let confidence = 0.2;
+    if (suggestion.folderId) confidence += 0.5;
+    else if (suggestion.newFolderName?.trim()) confidence += 0.35;
+    confidence += suggestion.tags.length >= 2 ? 0.25 : suggestion.tags.length >= 1 ? 0.1 : 0;
+    if (suggestion.concepts.length > 0) confidence += 0.1;
+    confidence = Math.min(1, confidence);
+
+    const autoThreshold = Math.min(Math.max(Number(config.autoApplyThreshold ?? 0.85), 0), 1);
+
+    // 置信度分流：低于阈值不自动落库，进收件箱等人工确认
+    if (confidence < autoThreshold) {
+      const { kbReviewItems: reviewItems } = await import("@db/schema");
+      await db.insert(reviewItems).values({
+        kind: "triage",
+        documentId,
+        title: `分拣待确认（置信度 ${confidence.toFixed(2)}）：${doc[0].title.slice(0, 40)}`,
+        payload: {
+          suggestedFolderId: suggestion.folderId,
+          suggestedNewFolderName: suggestion.newFolderName ?? null,
+          suggestedTags: suggestion.tags,
+          concepts: suggestion.concepts,
+        },
+        confidence,
+      });
+      return { documentId, routedToInbox: true, confidence };
+    }
+
+    // 高置信度：直接落库
     const { knowledgeNodes: kNodes, knowledgeEdges: kEdges, kbFolders: kbF } = await import("@db/schema");
     let folderId = suggestion.folderId;
     if (!folderId && suggestion.newFolderName?.trim()) {
@@ -322,7 +359,7 @@ const nodeExecutors: Record<string, NodeExecutor> = {
         }
       }
     }
-    return { documentId, folderId, tags: suggestion.tags, conceptsCreated: createdNodes };
+    return { documentId, folderId, tags: suggestion.tags, conceptsCreated: createdNodes, confidence, autoApplied: true };
   },
 
   /** 更新文档：把工作流产出（如摘要）写回文档 */

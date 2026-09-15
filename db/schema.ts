@@ -266,6 +266,28 @@ export const kbIngestionKeys = sqliteTable("kb_ingestion_keys", {
 
 export type KbIngestionKey = typeof kbIngestionKeys.$inferSelect;
 
+// ========== 阶段2：审核收件箱 ==========
+// 所有需要人工确认的事项统一进这里：分拣建议/疑似重复/质量异常/索引失败/自动动作
+export const kbReviewItems = sqliteTable("kb_review_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  kind: text("kind", { enum: ["triage", "dedup", "quality", "index_failure", "auto_action"] }).notNull(),
+  documentId: integer("documentId", { mode: "number" }), // 主文档
+  relatedDocumentId: integer("relatedDocumentId", { mode: "number" }), // dedup 时的另一篇
+  title: text("title").notNull(), // 人类可读摘要，如「疑似重复：A vs B」
+  payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>(), // 建议内容/证据/diff
+  confidence: real("confidence"), // 0-1，分拣置信度
+  status: text("status", { enum: ["pending", "approved", "rejected", "ignored"] }).default("pending").notNull(),
+  resolverNote: text("resolverNote"),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  resolvedAt: integer("resolvedAt", { mode: "timestamp_ms" }),
+}, (table) => [
+  index("kb_review_items_status_idx").on(table.status),
+  index("kb_review_items_kind_idx").on(table.kind),
+  index("kb_review_items_documentId_idx").on(table.documentId),
+]);
+
+export type KbReviewItem = typeof kbReviewItems.$inferSelect;
+
 // ========== 工作流表 ==========
 export const workflows = sqliteTable("workflows", {
   id: integer("id").primaryKey({ autoIncrement: true }),
