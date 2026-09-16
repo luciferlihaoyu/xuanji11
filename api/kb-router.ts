@@ -2,7 +2,7 @@ import { z } from "zod";
 import { eq, desc, like, isNull, inArray } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { kbFolders, kbDocuments, documentChunks } from "@db/schema";
+import { kbFolders, kbDocuments, kbDocumentVersions, documentChunks } from "@db/schema";
 import { clean } from "./lib/clean";
 import { logAudit, logAction } from "./lib/audit";
 import { vectorEngine } from "./lib/vector";
@@ -378,14 +378,107 @@ export const kbRouter = createRouter({
       return { success: true };
     }),
 
+  /** 删除 = 软删进回收站（可从 listDeleted 恢复；彻底删除用 purgeDocument） */
   deleteDocument: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
       await deleteDocumentVectors(input.id);
       const db = getDb();
-      await db.delete(kbDocuments).where(eq(kbDocuments.id, input.id));
+      await db.update(kbDocuments)
+        .set({ deletedAt: new Date(), deletedReason: "user" })
+        .where(eq(kbDocuments.id, input.id));
       await logAudit(ctx, "kb_document", "delete", input.id, input as Record<string, unknown>);
       return { success: true };
+    }),
+
+  /** 回收站列表 */
+  listDeleted: authedQuery.query(async () => {
+    const { isNotNull } = await import("drizzle-orm");
+    const db = getDb();
+    return db.select().from(kbDocuments)
+      .where(isNotNull(kbDocuments.deletedAt))
+      .orderBy(desc(kbDocuments.deletedAt));
+  }),
+
+  /** 从回收站恢复（重新索引） */
+  restoreDocument: adminQuery
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      await db.update(kbDocuments)
+        .set({ deletedAt: null, deletedReason: null, mergedIntoId: null })
+        .where(eq(kbDocuments.id, input.id));
+      await logAudit(ctx, "kb_document", "update", input.id, { action: "restore" });
+      await tryIndexDocumentById(input.id);
+      return { success: true };
+    }),
+
+  /** 彻底删除（不可恢复） */
+  purgeDocument: adminQuery
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ input, ctx }) => {
+      await deleteDocumentVectors(input.id);
+      const db = getDb();
+      await db.delete(kbDocuments).where(eq(kbDocuments.id, input.id));
+      await logAudit(ctx, "kb_document", "delete", input.id, { action: "purge" });
+      return { success: true };
+    }),
+
+  /** 版本历史列表（不含正文，省流量） */
+  listVersions: authedQuery
+    .input(z.object({ documentId: z.number() }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const rows = await db.select({
+        id: kbDocumentVersions.id,
+        versionNumber: kbDocumentVersions.versionNumber,
+        title: kbDocumentVersions.title,
+        contentHash: kbDocumentVersions.contentHash,
+        source: kbDocumentVersions.source,
+        changeReason: kbDocumentVersions.changeReason,
+        createdAt: kbDocumentVersions.createdAt,
+      }).from(kbDocumentVersions)
+        .where(eq(kbDocumentVersions.documentId, input.documentId))
+        .orderBy(desc(kbDocumentVersions.versionNumber));
+      return rows;
+    }),
+
+  /** 读取单个版本的正文（预览用） */
+  getVersion: authedQuery
+    .input(z.object({ versionId: z.number() }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const rows = await db.select().from(kbDocumentVersions)
+        .where(eq(kbDocumentVersions.id, input.versionId));
+      return rows[0] ?? null;
+    }),
+
+  /** 回滚到指定版本：当前内容先快照，再应用旧版本并重建索引 */
+  rollbackVersion: adminQuery
+    .input(z.object({ versionId: z.number() }))
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      const rows = await db.select().from(kbDocumentVersions)
+        .where(eq(kbDocumentVersions.id, input.versionId));
+      const version = rows[0];
+      if (!version) throw new Error("版本不存在");
+
+      // 回滚前把当前内容快照成一个新版本（回滚本身也可再回滚）
+      const { snapshotDocumentVersion } = await import("./lib/doc-versioning");
+      await snapshotDocumentVersion(version.documentId, "manual", "回滚前自动快照");
+
+      await db.update(kbDocuments)
+        .set({
+          title: version.title,
+          content: version.content ?? "",
+          tags: version.tags ?? [],
+        })
+        .where(eq(kbDocuments.id, version.documentId));
+      await logAudit(ctx, "kb_document", "update", version.documentId, {
+        action: "rollback", toVersion: version.versionNumber,
+      });
+      await tryIndexDocumentById(version.documentId);
+      return { success: true, restoredVersion: version.versionNumber };
     }),
 
   moveDocument: adminQuery

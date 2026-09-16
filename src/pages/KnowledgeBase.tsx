@@ -5,7 +5,7 @@ import { marked, Renderer } from 'marked';
 import type { Token, Tokens } from 'marked';
 import { useKbTree, useDocument, useIngestion, useClusterDocuments } from '@/hooks/useKb';
 import { useAppStore } from '@/store/useAppStore';
-import { Search, Folder, FolderOpen, FileText, ChevronRight, ChevronDown, Plus, Pencil, Trash2, X, Check, FileCode, Image, File, Save, RotateCcw, Tag, MoreHorizontal, Sparkles, Boxes } from 'lucide-react';
+import { Search, Folder, FolderOpen, FileText, ChevronRight, ChevronDown, Plus, Pencil, Trash2, X, Check, FileCode, Image, File, Save, RotateCcw, Tag, MoreHorizontal, Sparkles, Boxes, History } from 'lucide-react';
 import type { KbFolder, KbDocument } from '@db/schema';
 
 const markdownRenderer = new Renderer();
@@ -334,6 +334,8 @@ export default function KnowledgeBase() {
   const [editMode, setEditMode] = useState<'edit' | 'preview' | 'split'>('preview');
   const [rightPanel, setRightPanel] = useState<'outline' | 'links' | 'tags'>('outline');
   const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [showRecycleBin, setShowRecycleBin] = useState(false);
+  const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
   const [localContent, setLocalContent] = useState('');
   const [addingTo, setAddingTo] = useState<string | null>(null);
@@ -638,6 +640,16 @@ export default function KnowledgeBase() {
                 ))}
               </div>
 
+              <div className="px-3 py-2 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+                <button
+                  onClick={() => setShowRecycleBin(true)}
+                  className="w-full flex items-center gap-1.5 text-[11px] py-1 hover:text-[var(--accent-cyan)] transition-colors"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  <Trash2 className="w-3 h-3" />
+                  回收站
+                </button>
+              </div>
               <div className="p-3 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div className="text-[10px] font-semibold mb-1.5" style={{ color: 'var(--text-muted)' }}>最近编辑</div>
                 <div className="space-y-1">
@@ -692,6 +704,9 @@ export default function KnowledgeBase() {
                 </button>
                 <button onClick={handleReindex} className="btn-ghost text-[10px] py-1 px-2 flex items-center gap-1" title="重建向量索引">
                   <RotateCcw className="w-3 h-3" />重建索引
+                </button>
+                <button onClick={() => setShowVersionHistory(true)} className="btn-ghost text-[10px] py-1 px-2 flex items-center gap-1" title="查看历史版本并回滚">
+                  <History className="w-3 h-3" />历史
                 </button>
                 <button onClick={handleSaveContent} className="btn-primary text-[10px] py-1 px-2 flex items-center gap-1">
                   <Save className="w-3 h-3" />保存
@@ -782,6 +797,24 @@ export default function KnowledgeBase() {
           </div>
         </div>
         </>
+      )}
+
+
+      {/* 回收站弹窗 */}
+      {showRecycleBin && (
+        <RecycleBinModal
+          onClose={() => setShowRecycleBin(false)}
+          onRestored={() => { setShowRecycleBin(false); window.location.reload(); }}
+        />
+      )}
+
+      {/* 版本历史弹窗 */}
+      {showVersionHistory && activeDocId && (
+        <VersionHistoryModal
+          documentId={activeDocId}
+          onClose={() => setShowVersionHistory(false)}
+          onRolledBack={() => { setShowVersionHistory(false); window.location.reload(); }}
+        />
       )}
 
       {/* 语义聚类结果弹窗 */}
@@ -986,6 +1019,209 @@ function MoveButton({ docId, folders, currentFolderId, onMove }: { docId: string
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** 回收站弹窗：软删文档列表 + 恢复/彻底删除 */
+function RecycleBinModal({ onClose, onRestored }: { onClose: () => void; onRestored: () => void }) {
+  const [items, setItems] = useState<Array<{ id: number; title: string; deletedAt: string | Date | null; deletedReason: string | null }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<number | null>(null);
+  const addToast = useAppStore((s) => s.addToast);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/trpc/kb.listDeleted', { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      const json = await res.json();
+      setItems(json.result?.data?.json ?? []);
+    } catch {
+      addToast({ type: 'error', title: '回收站加载失败' });
+    } finally {
+      setLoading(false);
+    }
+  }, [addToast]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const act = async (id: number, endpoint: string, label: string) => {
+    setBusy(id);
+    try {
+      const res = await fetch(`/api/trpc/kb.${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        body: JSON.stringify({ id }),
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error.message);
+      addToast({ type: 'success', title: label });
+      if (endpoint === 'restoreDocument') {
+        onRestored();
+        return;
+      }
+      await load();
+    } catch (err) {
+      addToast({ type: 'error', title: `${label}失败`, description: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const REASON_LABELS: Record<string, string> = { user: '手动删除', dedup: '去重合并', system: '系统' };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(10,14,26,0.6)' }} onClick={onClose}>
+      <div className="rounded-lg border p-4 sm:p-6 w-[560px] max-w-[calc(100vw-2rem)] max-h-[80vh] flex flex-col"
+        style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}
+        onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base font-bold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            <Trash2 className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+            回收站
+            <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>{items.length} 篇</span>
+          </h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto space-y-1.5 min-h-[100px]">
+          {loading ? (
+            <div className="text-xs py-8 text-center" style={{ color: 'var(--text-muted)' }}>加载中…</div>
+          ) : items.length === 0 ? (
+            <div className="text-xs py-8 text-center" style={{ color: 'var(--text-muted)' }}>回收站是空的</div>
+          ) : items.map((doc) => (
+            <div key={doc.id} className="flex items-center gap-2 px-3 py-2 rounded border" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>{doc.title}</div>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                  {doc.deletedAt ? new Date(doc.deletedAt).toLocaleString() : ''} · {REASON_LABELS[doc.deletedReason ?? ''] ?? doc.deletedReason ?? '手动删除'}
+                </div>
+              </div>
+              <button
+                onClick={() => void act(doc.id, 'restoreDocument', '已恢复')}
+                disabled={busy === doc.id}
+                className="text-[10px] px-2 py-1 rounded shrink-0 disabled:opacity-40"
+                style={{ backgroundColor: 'rgba(34,197,94,0.15)', color: '#22c55e' }}
+              >恢复</button>
+              <button
+                onClick={() => { if (window.confirm(`彻底删除「${doc.title}」？不可恢复！`)) void act(doc.id, 'purgeDocument', '已彻底删除'); }}
+                disabled={busy === doc.id}
+                className="text-[10px] px-2 py-1 rounded shrink-0 disabled:opacity-40"
+                style={{ backgroundColor: 'rgba(239,68,68,0.15)', color: '#ef4444' }}
+              >彻底删除</button>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 pt-3 border-t text-[10px]" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
+          恢复会重新建立索引；彻底删除不可恢复。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 版本历史弹窗：列表 + 预览 + 回滚 */
+function VersionHistoryModal({ documentId, onClose, onRolledBack }: { documentId: number; onClose: () => void; onRolledBack: () => void }) {
+  const [versions, setVersions] = useState<Array<{ id: number; versionNumber: number; title: string; source: string | null; changeReason: string | null; createdAt: string | Date | null }>>([]);
+  const [preview, setPreview] = useState<{ versionNumber: number; content: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<number | null>(null);
+  const addToast = useAppStore((s) => s.addToast);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch(`/api/trpc/kb.listVersions?input=${encodeURIComponent(JSON.stringify({ json: { documentId } }))}`, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+        const json = await res.json();
+        setVersions(json.result?.data?.json ?? []);
+      } catch {
+        addToast({ type: 'error', title: '版本历史加载失败' });
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [documentId, addToast]);
+
+  const loadPreview = async (versionId: number, versionNumber: number) => {
+    try {
+      const res = await fetch(`/api/trpc/kb.getVersion?input=${encodeURIComponent(JSON.stringify({ json: { versionId } }))}`, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      const json = await res.json();
+      const v = json.result?.data?.json;
+      setPreview({ versionNumber, content: (v?.content ?? '').slice(0, 2000) });
+    } catch {
+      addToast({ type: 'error', title: '预览失败' });
+    }
+  };
+
+  const rollback = async (versionId: number, versionNumber: number) => {
+    if (!window.confirm(`回滚到 v${versionNumber}？当前内容会先自动快照，可再次回滚。`)) return;
+    setBusy(versionId);
+    try {
+      const res = await fetch('/api/trpc/kb.rollbackVersion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        body: JSON.stringify({ versionId }),
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error.message);
+      addToast({ type: 'success', title: `已回滚到 v${versionNumber}` });
+      onRolledBack();
+    } catch (err) {
+      addToast({ type: 'error', title: '回滚失败', description: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(10,14,26,0.6)' }} onClick={onClose}>
+      <div className="rounded-lg border p-4 sm:p-6 w-[640px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col"
+        style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}
+        onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base font-bold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            <History className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+            版本历史
+            <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>{versions.length} 个版本</span>
+          </h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto space-y-1.5 min-h-[100px]">
+          {loading ? (
+            <div className="text-xs py-8 text-center" style={{ color: 'var(--text-muted)' }}>加载中…</div>
+          ) : versions.length === 0 ? (
+            <div className="text-xs py-8 text-center" style={{ color: 'var(--text-muted)' }}>还没有历史版本（文档首次修改后自动产生）</div>
+          ) : versions.map((v) => (
+            <div key={v.id}>
+              <div className="flex items-center gap-2 px-3 py-2 rounded border" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0" style={{ backgroundColor: 'rgba(34,211,238,0.1)', color: 'var(--accent-cyan)' }}>v{v.versionNumber}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>{v.title}</div>
+                  <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    {v.createdAt ? new Date(v.createdAt).toLocaleString() : ''} · {v.source ?? 'manual'}{v.changeReason ? ` · ${v.changeReason}` : ''}
+                  </div>
+                </div>
+                <button
+                  onClick={() => preview?.versionNumber === v.versionNumber ? setPreview(null) : void loadPreview(v.id, v.versionNumber)}
+                  className="text-[10px] px-2 py-1 rounded shrink-0"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                >{preview?.versionNumber === v.versionNumber ? '收起' : '预览'}</button>
+                <button
+                  onClick={() => void rollback(v.id, v.versionNumber)}
+                  disabled={busy === v.id}
+                  className="text-[10px] px-2 py-1 rounded shrink-0 disabled:opacity-40"
+                  style={{ backgroundColor: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}
+                >回滚</button>
+              </div>
+              {preview?.versionNumber === v.versionNumber && (
+                <pre className="mt-1 ml-3 p-2 rounded text-[11px] whitespace-pre-wrap max-h-40 overflow-y-auto border-l-2"
+                  style={{ borderColor: 'var(--accent-cyan)', backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+                  {preview.content}{preview.content.length >= 2000 ? '\n…（仅预览前 2000 字）' : ''}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

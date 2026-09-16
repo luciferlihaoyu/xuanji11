@@ -68,6 +68,24 @@ const DEFAULT_WORKFLOWS: SeedWorkflow[] = [
       { type: "update-document", label: "写回文档头部", config: { mode: "prepend" }, connections: [] },
     ],
   },
+  {
+    name: "每日索引巡检",
+    description: "每天凌晨做索引一致性体检（FTS/向量/分块对账），异常自动进收件箱",
+    triggers: [{ type: "cron", schedule: "30 3 * * *", enabled: true }],
+    nodes: [
+      { type: "index-health", label: "索引巡检", config: {}, connections: [{ targetIndex: 1 }] },
+      { type: "save-result", label: "存档巡检报告", config: { targetFolderId: 0, title: "每日索引巡检报告" }, connections: [] },
+    ],
+  },
+  {
+    name: "每周去重扫描",
+    description: "每周一扫描疑似重复文档（内容哈希+标题归一），候选进收件箱人工裁决，绝不自动删除",
+    triggers: [{ type: "cron", schedule: "30 4 * * 1", enabled: true }],
+    nodes: [
+      { type: "dedup-scan", label: "去重扫描", config: {}, connections: [{ targetIndex: 1 }] },
+      { type: "save-result", label: "存档去重报告", config: { targetFolderId: 0, title: "每周去重扫描报告" }, connections: [] },
+    ],
+  },
 ];
 
 /** 幂等种子：按 name 查重，返回新建条数 */
