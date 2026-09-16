@@ -372,17 +372,27 @@ export default function Settings() {
       const hubUrl = agentForm.hubUrl.trim().replace(/\/+$/, '');
       if (!hubUrl) {
         setTestResult('fail');
-        setTestError('请先填写天宫 Hub URL');
+        setTestError('请先填写天宫 MCP 端点 URL');
         return;
       }
-      // 直接探测所填 Hub 地址（5s 超时），测的就是表单里的配置
-      const res = await fetch(`${hubUrl}/health`, { signal: AbortSignal.timeout(5000) });
-      if (res.ok) {
-        setTestResult('success');
-      } else {
-        setTestResult('fail');
-        setTestError(`HTTP ${res.status}，请检查 Hub 地址与网络`);
+      // 天宫是 MCP 服务：走 MCP initialize 握手（不是 HTTP /health）
+      const info = await trpcClient.mcpClient.testConnection.mutate({
+        url: hubUrl,
+        ...(agentForm.token.trim() ? { authToken: agentForm.token.trim() } : {}),
+      });
+      // 握手成功再列远程工具，展示可用能力数
+      try {
+        const tools = await trpcClient.mcpClient.listRemoteTools.query({
+          url: hubUrl,
+          ...(agentForm.token.trim() ? { authToken: agentForm.token.trim() } : {}),
+        });
+        setTestError(`已连接 ${info.name ?? '天宫'} v${info.version ?? '?'} · ${tools.length} 个工具可用`);
+      } catch {
+        setTestError(`已连接 ${info.name ?? '天宫'} v${info.version ?? '?'}（工具列表获取失败）`);
       }
+      setTestResult('success');
+      setTestLoading(false);
+      return;
     } catch (err: unknown) {
       setTestResult('fail');
       setTestError(err && typeof err === 'object' && 'message' in err ? String(err.message) : '连接失败，请检查配置');
@@ -542,6 +552,28 @@ export default function Settings() {
       { key: 'heartbeat_interval', value: agentForm.heartbeat, category: 'agent' },
       { key: 'auto_reconnect', value: String(agentForm.autoReconnect), category: 'agent' },
     ]);
+    // 同步注册/更新为 MCP 服务器「天宫」——工作流 call-agent 节点和 API 中心可用
+    const hubUrl = agentForm.hubUrl.trim().replace(/\/+$/, '');
+    if (hubUrl) {
+      try {
+        const servers = await trpcClient.mcpClient.list.query();
+        const existing = servers.find((s) => s.name === '天宫');
+        const payload = {
+          name: '天宫',
+          url: hubUrl,
+          ...(agentForm.token.trim() ? { authToken: agentForm.token.trim() } : {}),
+          enabled: true,
+        };
+        if (existing) {
+          await trpcClient.mcpClient.update.mutate({ id: existing.id, ...payload });
+        } else {
+          await trpcClient.mcpClient.create.mutate(payload);
+        }
+      } catch (err) {
+        addToast({ type: 'info', title: '设置已保存', description: `MCP 服务器注册失败：${err instanceof Error ? err.message : String(err)}` });
+        return;
+      }
+    }
   };
 
   const savePersonalSettings = async () => {
@@ -663,7 +695,7 @@ export default function Settings() {
             <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Agent 配置</h3>
             <div className="space-y-4 max-w-lg">
               <div>
-                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>天宫 Hub URL</label>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>天宫 MCP 端点 URL</label>
                 <input
                   type="text"
                   value={agentForm.hubUrl}
@@ -672,7 +704,7 @@ export default function Settings() {
                 />
               </div>
               <div>
-                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>Agent Token</label>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>MCP 访问 Token</label>
                 <div className="flex gap-2">
                   <div className="relative flex-1">
                     <input
