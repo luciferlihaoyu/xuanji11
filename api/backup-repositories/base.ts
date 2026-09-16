@@ -16,6 +16,8 @@ export interface BackupRepository {
   ensureBasePath(config: Record<string, unknown>): Promise<void>;
   /** 上传文件到 basePath 下的相对路径 */
   uploadFile(config: Record<string, unknown>, remoteRelPath: string, content: Buffer): Promise<void>;
+  /** 大文件磁盘直传（可选）：避免整文件读入内存；缺省时调用方自行读入再走 uploadFile */
+  uploadBigFile?(config: Record<string, unknown>, remoteRelPath: string, localPath: string): Promise<void>;
   /** 读取文件，不存在时返回 null */
   readFile(config: Record<string, unknown>, remoteRelPath: string): Promise<Buffer | null>;
   /** 删除文件（不存在时视为成功） */

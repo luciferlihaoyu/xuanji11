@@ -16,6 +16,28 @@ function deriveKey(envKey: string): Buffer {
   return createHash("sha256").update(envKey).digest();
 }
 
+/** 流式加密文件到磁盘（大文件防 OOM）：格式与 encryptBuffer 完全一致（iv+tag+ciphertext） */
+export async function encryptFileToFile(srcPath: string, destPath: string, envKey: string): Promise<void> {
+  const { createReadStream, createWriteStream } = await import("node:fs");
+  const { pipeline } = await import("node:stream/promises");
+  const key = deriveKey(envKey);
+  const iv = randomBytes(IV_LENGTH);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  // 先写 iv（12B），tag 留洞（16B 零），流式写密文，结束回填 tag
+  const out = createWriteStream(destPath);
+  out.write(iv);
+  out.write(Buffer.alloc(TAG_LENGTH));
+  await pipeline(createReadStream(srcPath), cipher, out, { end: true });
+  const tag = cipher.getAuthTag();
+  const { open } = await import("node:fs/promises");
+  const fh = await open(destPath, "r+");
+  try {
+    await fh.write(tag, 0, TAG_LENGTH, IV_LENGTH);
+  } finally {
+    await fh.close();
+  }
+}
+
 export function encryptBuffer(buffer: Buffer, envKey: string): Buffer {
   const key = deriveKey(envKey);
   const iv = randomBytes(IV_LENGTH);

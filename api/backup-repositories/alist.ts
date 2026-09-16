@@ -269,6 +269,48 @@ export const alistRepository: BackupRepository = {
     await putOne(cfg, token, safePath, content);
   },
 
+  async uploadBigFile(config: Record<string, unknown>, remoteRelPath: string, localPath: string): Promise<void> {
+    const cfg = requireConfig(config);
+    const safePath = sanitizeRelativePath(remoteRelPath);
+    const token = await login(cfg);
+    const { open } = await import("node:fs/promises");
+    const fh = await open(localPath, "r");
+    try {
+      const stat = await fh.stat();
+      if (stat.size <= CHUNK_THRESHOLD) {
+        const buf = await fh.readFile();
+        await putOne(cfg, token, safePath, buf);
+        return;
+      }
+      const parts = Math.ceil(stat.size / CHUNK_SIZE);
+      const sliceBuf = Buffer.allocUnsafe(CHUNK_SIZE);
+      for (let i = 0; i < parts; i++) {
+        const offset = i * CHUNK_SIZE;
+        const { bytesRead } = await fh.read(sliceBuf, 0, CHUNK_SIZE, offset);
+        const part = sliceBuf.subarray(0, bytesRead);
+        const partPath = `${safePath}.part${String(i + 1).padStart(3, "0")}`;
+        let lastErr: unknown;
+        for (let attempt = 1; attempt <= PART_MAX_ATTEMPTS; attempt++) {
+          try {
+            await putOne(cfg, token, partPath, part as Buffer);
+            lastErr = undefined;
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (attempt < PART_MAX_ATTEMPTS) {
+              await new Promise((r) => setTimeout(r, 2000 * attempt));
+            }
+          }
+        }
+        if (lastErr) throw lastErr;
+      }
+      const manifest = Buffer.from(JSON.stringify({ parts, size: stat.size }));
+      await putOne(cfg, token, `${safePath}${PARTS_MANIFEST_SUFFIX}`, manifest);
+    } finally {
+      await fh.close();
+    }
+  },
+
   async readFile(config: Record<string, unknown>, remoteRelPath: string): Promise<Buffer | null> {
     const cfg = requireConfig(config);
     const safePath = sanitizeRelativePath(remoteRelPath);

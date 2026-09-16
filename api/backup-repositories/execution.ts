@@ -15,7 +15,7 @@ import { promises as fsp } from "fs";
 import { env } from "../lib/env";
 import { hasPathTraversal, sanitizeRelativePath } from "../lib/backup-path";
 import { getBackupRepository, type BackupRepository } from "./base";
-import { encryptBuffer } from "./crypto";
+import { encryptBuffer, encryptFileToFile } from "./crypto";
 import { buildBackupBundle, type BackupManifest } from "./bundle";
 import { sha256, walkDir } from "./shared";
 import { executeBackupLegacyConnector } from "./legacy-connector";
@@ -51,6 +51,20 @@ interface RepositoryUploadContext {
   readonly encrypt: boolean;
 }
 
+/** 流式 sha256（大文件防整读） */
+async function sha256File(filePath: string): Promise<string> {
+  const { createReadStream } = await import("node:fs");
+  const { createHash } = await import("node:crypto");
+  const hash = createHash("sha256");
+  await new Promise<void>((resolve, reject) => {
+    const rs = createReadStream(filePath);
+    rs.on("data", (chunk) => hash.update(chunk));
+    rs.on("end", () => resolve());
+    rs.on("error", reject);
+  });
+  return hash.digest("hex");
+}
+
 async function uploadFilesToRepository(
   db: Db,
   job: BackupJob,
@@ -60,9 +74,47 @@ async function uploadFilesToRepository(
   let done = 0;
   let failed = 0;
 
+  // 大文件阈值：超过则走磁盘流式路径（防加密三份拷贝 OOM，实测 224MB 峰值 1.35GB 触发容器重启）
+  const BIG_FILE_BYTES = 50 * 1048576;
+  const tmpDir = path.join(env.backupTempDir, `tmp-enc-${job.id}`);
+
   for (const file of ctx.files) {
     try {
       const safeRelativePath = sanitizeRelativePath(file.relPath);
+      if (file.size > BIG_FILE_BYTES) {
+        // 大文件：流式算 hash + （如需）流式加密到临时文件 + 磁盘直传
+        const checksum = await sha256File(file.fullPath);
+        let uploadSrc = file.fullPath;
+        if (ctx.encrypt) {
+          await fsp.mkdir(tmpDir, { recursive: true });
+          uploadSrc = path.join(tmpDir, `${dbRows.length}.bin`);
+          await encryptFileToFile(file.fullPath, uploadSrc, env.backupEncryptionKey);
+        }
+        if (ctx.repo.uploadBigFile) {
+          await ctx.repo.uploadBigFile(ctx.config, safeRelativePath, uploadSrc);
+        } else {
+          const buf = await fsp.readFile(uploadSrc);
+          await ctx.repo.uploadFile(ctx.config, safeRelativePath, buf);
+        }
+        await db.insert(backupJobFiles).values({
+          jobId: job.id,
+          relativePath: safeRelativePath,
+          size: file.size,
+          checksum,
+          status: "uploaded",
+        });
+        dbRows.push({ path: safeRelativePath, size: file.size, checksum, status: "uploaded" });
+        done++;
+        await db
+          .update(backupJobs)
+          .set({
+            filesDone: done,
+            filesFailed: failed,
+            progress: ctx.files.length > 0 ? Math.round(((done + failed) / ctx.files.length) * 100) : 100,
+          })
+          .where(eq(backupJobs.id, job.id));
+        continue;
+      }
       const content = await fsp.readFile(file.fullPath);
       const checksum = sha256(content);
       const uploadContent = ctx.encrypt ? encryptBuffer(content, env.backupEncryptionKey) : content;
@@ -97,6 +149,7 @@ async function uploadFilesToRepository(
       })
       .where(eq(backupJobs.id, job.id));
   }
+  await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
   return dbRows;
 }
 
