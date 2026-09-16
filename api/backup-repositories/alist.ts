@@ -19,9 +19,11 @@ import type { BackupRepository } from "./base";
 
 const TIMEOUT_MS = 30_000;
 
-/** Cloudflare 免费版请求体上限 100MB；保守取 80MB 分片 */
+/** Cloudflare 免费版请求体上限 100MB + 100s 响应超时（524）；保守取 30MB 分片（慢链路 0.5MB/s 也能 60s 内传完） */
 const CHUNK_THRESHOLD = 80 * 1048576;
-const CHUNK_SIZE = 80 * 1048576;
+const CHUNK_SIZE = 30 * 1048576;
+/** 单片失败重试次数 */
+const PART_MAX_ATTEMPTS = 3;
 /** 分片清单后缀：file.xjmanifest 记录 {parts, size}；分片名 file.partNNN */
 const PARTS_MANIFEST_SUFFIX = ".xjmanifest";
 
@@ -242,7 +244,22 @@ export const alistRepository: BackupRepository = {
       const parts = Math.ceil(content.length / CHUNK_SIZE);
       for (let i = 0; i < parts; i++) {
         const part = content.subarray(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-        await putOne(cfg, token, `${safePath}.part${String(i + 1).padStart(3, "0")}`, part);
+        const partPath = `${safePath}.part${String(i + 1).padStart(3, "0")}`;
+        // 单片重试：CF 偶发 524/网络抖动不拖垮整个备份
+        let lastErr: unknown;
+        for (let attempt = 1; attempt <= PART_MAX_ATTEMPTS; attempt++) {
+          try {
+            await putOne(cfg, token, partPath, part);
+            lastErr = undefined;
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (attempt < PART_MAX_ATTEMPTS) {
+              await new Promise((r) => setTimeout(r, 2000 * attempt));
+            }
+          }
+        }
+        if (lastErr) throw lastErr;
       }
       const manifest = Buffer.from(JSON.stringify({ parts, size: content.length }));
       await putOne(cfg, token, `${safePath}${PARTS_MANIFEST_SUFFIX}`, manifest);
