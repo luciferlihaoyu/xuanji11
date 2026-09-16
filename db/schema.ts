@@ -285,6 +285,17 @@ export const kbReviewItems = sqliteTable("kb_review_items", {
   index("kb_review_items_kind_idx").on(table.kind),
   index("kb_review_items_documentId_idx").on(table.documentId),
 ]);
+export const kbSearchEvents = sqliteTable("kb_search_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  query: text("query").notNull(),
+  documentId: integer("documentId", { mode: "number" }),
+  event: text("event", { enum: ["click", "ask"] }).notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+}, (table) => [
+  index("kbSearchEvents_query_idx").on(table.query),
+  index("kbSearchEvents_doc_idx").on(table.documentId),
+]);
+
 
 export type KbReviewItem = typeof kbReviewItems.$inferSelect;
 

@@ -125,6 +125,17 @@ export default function ReviewInbox() {
               </div>
             </div>
           </div>
+          {feedbackQuery.data.searchStats && (
+            <div className="mt-3 pt-3 border-t text-xs" style={{ borderColor: 'var(--border-subtle)' }}>
+              <span style={{ color: 'var(--text-muted)' }}>近 30 天搜索行为：</span>
+              <span style={{ color: 'var(--text-primary)' }}> 点击 {feedbackQuery.data.searchStats.clicks} · 问答 {feedbackQuery.data.searchStats.asks}</span>
+              {feedbackQuery.data.searchStats.topQueries.length > 0 && (
+                <span className="ml-2" style={{ color: 'var(--text-muted)' }}>
+                  热词：{feedbackQuery.data.searchStats.topQueries.slice(0, 3).map((q) => `${q.query}(${q.count})`).join('、')}
+                </span>
+              )}
+            </div>
+          )}
           <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
             删除率 &gt;20% 说明自动建边阈值偏低；分拣准确率 &lt;70% 说明置信度阈值需调高。
           </div>

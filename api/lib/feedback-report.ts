@@ -34,6 +34,13 @@ export interface FeedbackReport {
     approved: number;
     accuracy: number; // approved/total，高说明启发式置信度校准合理
   };
+  /** 搜索行为：点击/问答事件（近 30 天） */
+  searchStats: {
+    clicks: number;
+    asks: number;
+    topQueries: Array<{ query: string; count: number }>;
+    topDocs: Array<{ documentId: number; count: number }>;
+  };
 }
 
 export function generateFeedbackReport(): FeedbackReport {
@@ -78,6 +85,20 @@ export function generateFeedbackReport(): FeedbackReport {
   const triageTotal = count("SELECT COUNT(*) c FROM kb_review_items WHERE kind = 'triage' AND status != 'pending'");
   const triageApproved = count("SELECT COUNT(*) c FROM kb_review_items WHERE kind = 'triage' AND status = 'approved'");
 
+  // 搜索行为（近 30 天）
+  const monthAgo = Date.now() - 30 * 24 * 3600 * 1000;
+  const clicks = count("SELECT COUNT(*) c FROM kb_search_events WHERE event = 'click' AND createdAt > ?", monthAgo);
+  const asks = count("SELECT COUNT(*) c FROM kb_search_events WHERE event = 'ask' AND createdAt > ?", monthAgo);
+  const topQueries = db.prepare(`
+    SELECT query, COUNT(*) count FROM kb_search_events
+    WHERE createdAt > ? GROUP BY query ORDER BY count DESC LIMIT 5
+  `).all(monthAgo) as Array<{ query: string; count: number }>;
+  const topDocs = db.prepare(`
+    SELECT documentId, COUNT(*) count FROM kb_search_events
+    WHERE event = 'click' AND documentId IS NOT NULL AND createdAt > ?
+    GROUP BY documentId ORDER BY count DESC LIMIT 5
+  `).all(monthAgo) as Array<{ documentId: number; count: number }>;
+
   return {
     generatedAt: new Date().toISOString(),
     edgeFeedback: {
@@ -99,5 +120,6 @@ export function generateFeedbackReport(): FeedbackReport {
       approved: triageApproved,
       accuracy: triageTotal > 0 ? Math.round((triageApproved / triageTotal) * 1000) / 1000 : 0,
     },
+    searchStats: { clicks, asks, topQueries, topDocs },
   };
 }

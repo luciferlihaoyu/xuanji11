@@ -2,7 +2,7 @@ import { z } from "zod";
 import { eq, desc, like, isNull, inArray } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { kbFolders, kbDocuments, kbDocumentVersions, documentChunks } from "@db/schema";
+import { kbFolders, kbDocuments, kbDocumentVersions, kbSearchEvents, documentChunks } from "@db/schema";
 import { clean } from "./lib/clean";
 import { logAudit, logAction } from "./lib/audit";
 import { vectorEngine } from "./lib/vector";
@@ -160,17 +160,39 @@ export const kbRouter = createRouter({
         .offset(input.offset);
     }),
 
-  /** 混合搜索（BM25+向量+RRF+可选重排）：带命中原因和证据片段 */
+  /** 混合搜索（BM25+向量+RRF+可选重排）：带命中原因和证据片段，支持 folder/tags/type 过滤 */
   hybridSearch: authedQuery
     .input(z.object({
       query: z.string().min(1).max(500),
       mode: z.enum(["keyword", "vector", "hybrid"]).default("hybrid"),
       limit: z.number().int().min(1).max(50).default(10),
       rerank: z.boolean().default(false),
+      filters: z.object({
+        type: z.string().optional(),
+        folder: z.number().int().optional(),
+        tags: z.array(z.string()).optional(),
+      }).optional(),
     }))
     .query(async ({ input }) => {
       const { executeHybridSearch } = await import("./lib/hybrid-search");
       return executeHybridSearch(input);
+    }),
+
+  /** 搜索行为埋点：结果点击 / 问答触发（供反馈评估调权重） */
+  logSearchEvent: authedQuery
+    .input(z.object({
+      query: z.string().min(1).max(500),
+      documentId: z.number().int().optional(),
+      event: z.enum(["click", "ask"]),
+    }))
+    .mutation(async ({ input }) => {
+      const db = getDb();
+      await db.insert(kbSearchEvents).values({
+        query: input.query,
+        documentId: input.documentId ?? null,
+        event: input.event,
+      });
+      return { success: true };
     }),
 
   /** 引用式问答：检索→LLM→带引用的回答；证据不足明确拒答 */

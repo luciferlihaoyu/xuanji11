@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Search, FileText, AlertCircle, FolderOpen, Bot, Paperclip } from 'lucide-react';
-import { trpc } from '@/providers/trpc';
+import { trpc, trpcClient } from '@/providers/trpc';
 
 function highlightText(text: string, query: string) {
   if (!query.trim()) return <span>{text}</span>;
@@ -39,12 +39,21 @@ export default function SearchResults() {
   const trimmed = query.trim();
   const enabled = trimmed.length > 0;
 
+  // 过滤器 + 重排
+  const [filterFolder, setFilterFolder] = useState<number | ''>('');
+  const [filterTag, setFilterTag] = useState('');
+  const [rerank, setRerank] = useState(false);
+  const { data: folders } = trpc.kb.listFolders.useQuery();
+  const filters = (filterFolder !== '' || filterTag.trim())
+    ? { ...(filterFolder !== '' ? { folder: filterFolder } : {}), ...(filterTag.trim() ? { tags: [filterTag.trim()] } : {}) }
+    : undefined;
+
   const {
     data: searchData,
     isLoading: knowledgeLoading,
     error: knowledgeError,
   } = trpc.kb.hybridSearch.useQuery(
-    { query: trimmed, limit: 20 },
+    { query: trimmed, limit: 20, rerank, ...(filters ? { filters } : {}) },
     { enabled, retry: 1 }
   );
 
@@ -77,12 +86,19 @@ export default function SearchResults() {
 
   const knowledgeResults = searchData?.results ?? [];
 
+  // 点击埋点（不阻塞跳转，失败静默）
+  const logClick = (documentId: number) => {
+    if (!trimmed) return;
+    void trpcClient.kb.logSearchEvent.mutate({ query: trimmed, documentId, event: 'click' }).catch(() => {});
+  };
+
   // 引用式问答
   const [askTriggered, setAskTriggered] = useState(false);
   const askMutation = trpc.kb.ask.useMutation();
   const handleAsk = () => {
     if (trimmed.length < 2) return;
     setAskTriggered(true);
+    void trpcClient.kb.logSearchEvent.mutate({ query: trimmed, event: 'ask' }).catch(() => {});
     askMutation.mutate({ query: trimmed });
   };
   const files = filesData ?? [];
@@ -133,6 +149,40 @@ export default function SearchResults() {
             {askMutation.isPending ? '思考中…' : '问一问'}
           </button>
         </form>
+
+        {/* 过滤器栏 */}
+        <div className="flex items-center gap-2 flex-wrap max-w-2xl mx-auto mb-3">
+          <select
+            value={filterFolder}
+            onChange={(e) => setFilterFolder(e.target.value === '' ? '' : Number(e.target.value))}
+            className="text-xs px-2 py-1.5 rounded border"
+            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-primary)' }}
+          >
+            <option value=''>全部文件夹</option>
+            {(folders ?? []).map((f) => (
+              <option key={f.id} value={f.id}>{f.name}</option>
+            ))}
+          </select>
+          <input
+            type="text"
+            value={filterTag}
+            onChange={(e) => setFilterTag(e.target.value)}
+            placeholder="按标签过滤…"
+            className="text-xs px-2 py-1.5 rounded border w-28 outline-none"
+            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-primary)' }}
+          />
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--text-secondary)' }} title="用 LLM 对候选结果精排（更准但更慢）">
+            <input type="checkbox" checked={rerank} onChange={(e) => setRerank(e.target.checked)} className="accent-cyan-400" />
+            AI 重排
+          </label>
+          {(filterFolder !== '' || filterTag.trim() || rerank) && (
+            <button
+              onClick={() => { setFilterFolder(''); setFilterTag(''); setRerank(false); }}
+              className="text-[10px] px-2 py-1 rounded"
+              style={{ color: 'var(--text-muted)' }}
+            >清除</button>
+          )}
+        </div>
 
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-2">
@@ -224,6 +274,7 @@ export default function SearchResults() {
             <Link
               key={item.id}
               to={`/kb/${item.id}`}
+              onClick={() => { const n = Number(item.id); if (Number.isFinite(n)) logClick(n); }}
               className="block card-base p-4 hover:border-[var(--accent-cyan)] transition-colors"
             >
               <h4 className="text-base font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
