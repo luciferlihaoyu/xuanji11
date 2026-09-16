@@ -163,6 +163,8 @@ app.route("/api/zvec", zvecRouter);
 
 // Hybrid search REST API
 app.route("/api/search", searchRouter);
+import { askStreamRouter } from "./ask-stream-router";
+app.route("/api/ask", askStreamRouter);
 
 // Knowledge base backup REST API
 app.route("/api/kb", kbBackupRouter);

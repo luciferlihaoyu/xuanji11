@@ -92,14 +92,48 @@ export default function SearchResults() {
     void trpcClient.kb.logSearchEvent.mutate({ query: trimmed, documentId, event: 'click' }).catch(() => {});
   };
 
-  // 引用式问答
+  // 引用式问答（多轮 + SSE 流式）
   const [askTriggered, setAskTriggered] = useState(false);
-  const askMutation = trpc.kb.ask.useMutation();
+  const [chatHistory, setChatHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+  const [streaming, setStreaming] = useState('');
+  const [asking, setAsking] = useState(false);
+  const [askMeta, setAskMeta] = useState<{ insufficient: boolean; evidenceCount: number; model?: string; citations: Array<{ n: number; documentId: string; title: string }> } | null>(null);
   const handleAsk = () => {
-    if (trimmed.length < 2) return;
+    if (trimmed.length < 2 || asking) return;
     setAskTriggered(true);
+    setAsking(true);
+    setStreaming('');
+    setAskMeta(null);
     void trpcClient.kb.logSearchEvent.mutate({ query: trimmed, event: 'ask' }).catch(() => {});
-    askMutation.mutate({ query: trimmed });
+    const historyParam = encodeURIComponent(JSON.stringify(chatHistory));
+    const es = new EventSource(`/api/ask/stream?query=${encodeURIComponent(trimmed)}&history=${historyParam}`);
+    let full = '';
+    es.addEventListener('token', (e) => {
+      try {
+        const { token } = JSON.parse((e as MessageEvent).data);
+        full += token;
+        setStreaming(full);
+      } catch { /* ignore */ }
+    });
+    es.addEventListener('result', (e) => {
+      try {
+        const r = JSON.parse((e as MessageEvent).data);
+        const answer = r.answer || full;
+        setAskMeta({ insufficient: r.insufficient, evidenceCount: r.evidenceCount, model: r.model, citations: r.citations ?? [] });
+        setChatHistory((h) => [...h, { role: 'user', content: trimmed }, { role: 'assistant', content: answer }]);
+        setStreaming('');
+      } catch { /* ignore */ }
+      setAsking(false);
+      es.close();
+    });
+    es.addEventListener('error', () => {
+      setAsking(false);
+      if (full) {
+        setChatHistory((h) => [...h, { role: 'user', content: trimmed }, { role: 'assistant', content: full }]);
+        setStreaming('');
+      }
+      es.close();
+    });
   };
   const files = filesData ?? [];
   const docs = docsData ?? [];
@@ -141,12 +175,12 @@ export default function SearchResults() {
           <button
             type="button"
             onClick={handleAsk}
-            disabled={trimmed.length < 2 || askMutation.isPending}
+            disabled={trimmed.length < 2 || asking}
             className="ml-2 px-3 py-1 rounded text-xs font-medium transition-colors disabled:opacity-40"
             style={{ backgroundColor: 'rgba(167,139,250,0.15)', color: '#a78bfa' }}
             title="基于知识库生成带引用的回答"
           >
-            {askMutation.isPending ? '思考中…' : '问一问'}
+            {asking ? '思考中…' : chatHistory.length > 0 ? '追问' : '问一问'}
           </button>
         </form>
 
@@ -212,27 +246,55 @@ export default function SearchResults() {
       )}
 
       {/* 引用式问答答案卡片 */}
-      {askTriggered && askMutation.data && (
+      {askTriggered && (chatHistory.length > 0 || streaming || asking) && (
         <div className="mb-6 rounded-lg border p-4 max-w-2xl mx-auto"
-          style={{ backgroundColor: 'var(--bg-secondary)', borderColor: askMutation.data.insufficient ? 'rgba(251,191,36,0.3)' : 'rgba(167,139,250,0.3)' }}>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-xs font-semibold" style={{ color: '#a78bfa' }}>知识库回答</span>
-            {askMutation.data.insufficient && (
+          style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'rgba(167,139,250,0.3)' }}>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-xs font-semibold" style={{ color: '#a78bfa' }}>知识库问答</span>
+            {askMeta?.insufficient && (
               <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>
                 证据不足
               </span>
             )}
             <span className="text-[10px] ml-auto" style={{ color: 'var(--text-muted)' }}>
-              {askMutation.data.evidenceCount} 条证据{askMutation.data.model ? ` · ${askMutation.data.model}` : ''}
+              {askMeta ? `${askMeta.evidenceCount} 条证据${askMeta.model ? ` · ${askMeta.model}` : ''}` : asking ? '检索+生成中…' : ''}
             </span>
+            <button
+              onClick={() => { setChatHistory([]); setAskMeta(null); setAskTriggered(false); }}
+              className="text-[10px] px-1.5 py-0.5 rounded hover:bg-white/5"
+              style={{ color: 'var(--text-muted)' }}
+              title="清空对话"
+            >清空</button>
           </div>
-          <div className="text-sm whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--text-primary)' }}>
-            {askMutation.data.answer}
+          <div className="space-y-3 max-h-[400px] overflow-y-auto">
+            {chatHistory.map((msg, i) => (
+              <div key={i} className={msg.role === 'user' ? 'text-right' : ''}>
+                <div className={`inline-block text-sm whitespace-pre-wrap leading-relaxed rounded-lg px-3 py-2 max-w-[90%] text-left ${msg.role === 'user' ? '' : 'w-full'}`}
+                  style={{
+                    backgroundColor: msg.role === 'user' ? 'rgba(34,211,238,0.12)' : 'var(--bg-tertiary)',
+                    color: 'var(--text-primary)',
+                  }}>
+                  {msg.content}
+                </div>
+              </div>
+            ))}
+            {streaming && (
+              <div className="text-sm whitespace-pre-wrap leading-relaxed rounded-lg px-3 py-2"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+                {streaming}<span className="animate-pulse" style={{ color: '#a78bfa' }}>▍</span>
+              </div>
+            )}
+            {asking && !streaming && (
+              <div className="text-xs flex items-center gap-2" style={{ color: 'var(--text-muted)' }}>
+                <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                检索证据并生成回答…
+              </div>
+            )}
           </div>
-          {askMutation.data.citations.length > 0 && (
+          {askMeta && askMeta.citations.length > 0 && (
             <div className="mt-3 pt-3 border-t space-y-1" style={{ borderColor: 'var(--border-subtle)' }}>
               <div className="text-[10px] font-medium mb-1" style={{ color: 'var(--text-muted)' }}>引用来源：</div>
-              {askMutation.data.citations.map((c) => (
+              {askMeta.citations.map((c) => (
                 <div key={c.n} className="text-xs flex items-start gap-2">
                   <span className="shrink-0 font-mono" style={{ color: '#a78bfa' }}>[{c.n}]</span>
                   <Link to={`/doc/${c.documentId}`} className="hover:underline truncate" style={{ color: 'var(--accent-cyan)' }}>

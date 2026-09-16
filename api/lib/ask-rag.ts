@@ -7,7 +7,7 @@
  * - 答案区分「知识库原文」「模型归纳」
  */
 import { executeHybridSearch } from "./hybrid-search";
-import { chatCompletion, hasLlmAvailable } from "./llm-chat";
+import { chatCompletionStream, hasLlmAvailable, type ChatMessage } from "./llm-chat";
 
 export interface AskCitation {
   readonly n: number;
@@ -29,7 +29,16 @@ export interface AskResult {
 const MIN_EVIDENCE = 2; // 至少 2 条证据才回答
 const MAX_EVIDENCE = 8; // 最多给 LLM 8 条（prompt 长度控制）
 
-export async function askKnowledgeBase(query: string): Promise<AskResult> {
+export interface AskHistoryItem {
+  readonly role: "user" | "assistant";
+  readonly content: string;
+}
+
+export async function askKnowledgeBase(
+  query: string,
+  history: readonly AskHistoryItem[] = [],
+  onToken?: (token: string) => void,
+): Promise<AskResult> {
   // 1. 混合检索取证
   const search = await executeHybridSearch({ query, mode: "hybrid", limit: MAX_EVIDENCE, rerank: false });
   const docs = search.results.filter((r) => r.type === "document" && r.snippet.trim().length > 0);
@@ -65,23 +74,33 @@ export async function askKnowledgeBase(query: string): Promise<AskResult> {
     .join("\n\n---\n\n");
 
   // 3. LLM 生成（强制引用格式）
-  const prompt = `你是知识库问答助手。基于下面的证据回答用户问题。
+  const systemPrompt = `你是知识库问答助手。基于下面给出的证据回答用户问题。
 
 规则（必须遵守）：
-1. 只能使用下面证据中的信息，不要用你自己的知识
+1. 只能使用证据中的信息，不要用你自己的知识
 2. 每个结论后面标注引用编号，如 [1] 或 [1][3]
 3. 如果证据不足以回答，直接说"根据现有证据无法确定"，不要编造
 4. 回答控制在 300 字以内
-5. 用中文回答
+5. 用中文回答`;
 
-证据：
+  const evidencePrompt = `证据：
 ${evidenceText}
 
 用户问题：${query}
 
 回答（带引用编号）：`;
 
-  const resp = await chatCompletion(prompt, { temperature: 0.2, maxTokens: 600, timeoutMs: 30000 });
+  const messages: ChatMessage[] = [
+    { role: "system", content: systemPrompt },
+    ...history.slice(-6).map((h) => ({ role: h.role, content: h.content })),
+    { role: "user", content: evidencePrompt },
+  ];
+
+  const resp = await chatCompletionStream(
+    messages,
+    onToken ?? (() => {}),
+    { temperature: 0.2, maxTokens: 600, timeoutMs: 60000 },
+  );
   if (!resp) {
     return {
       answer: "LLM 调用失败，请稍后重试。",

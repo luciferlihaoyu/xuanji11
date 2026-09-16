@@ -13,7 +13,7 @@ declare module "hono" {
   }
 }
 
-const searchAuthMiddleware: MiddlewareHandler = async (c, next) => {
+export const searchAuthMiddleware: MiddlewareHandler = async (c, next) => {
   const apiKeyIdentity = await authenticateApiKey(c.req.raw.headers);
   if (apiKeyIdentity) {
     c.set("user", apiKeyIdentity.user);

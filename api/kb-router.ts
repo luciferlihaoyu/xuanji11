@@ -195,12 +195,18 @@ export const kbRouter = createRouter({
       return { success: true };
     }),
 
-  /** 引用式问答：检索→LLM→带引用的回答；证据不足明确拒答 */
+  /** 引用式问答：检索→LLM→带引用的回答；证据不足明确拒答；支持多轮历史 */
   ask: authedQuery
-    .input(z.object({ query: z.string().min(2).max(500) }))
+    .input(z.object({
+      query: z.string().min(2).max(500),
+      history: z.array(z.object({
+        role: z.enum(["user", "assistant"]),
+        content: z.string().max(4000),
+      })).max(12).optional(),
+    }))
     .mutation(async ({ input }) => {
       const { askKnowledgeBase } = await import("./lib/ask-rag");
-      return askKnowledgeBase(input.query);
+      return askKnowledgeBase(input.query, input.history ?? []);
     }),
 
   getDocument: authedQuery
