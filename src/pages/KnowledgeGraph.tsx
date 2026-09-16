@@ -52,6 +52,7 @@ interface RenderEdge {
 
 export default function KnowledgeGraph() {
   const canvasRef = useRef<KnowledgeGraphCanvasHandle>(null);
+  const [controlPanelOpen, setControlPanelOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const { agents, graphBgImage, graphBgScale } = useAppStore();
   const {
@@ -430,15 +431,38 @@ export default function KnowledgeGraph() {
         />
       )}
 
+      {/* 缩放按钮（移动端友好） */}
+      <div className="absolute right-3 bottom-16 z-10 flex flex-col gap-1.5">
+        <button
+          onClick={() => canvasRef.current?.zoomBy(1.3)}
+          className="w-9 h-9 rounded-full border text-lg font-bold flex items-center justify-center active:scale-95 transition-transform"
+          style={{ backgroundColor: 'rgba(255,255,255,0.85)', borderColor: 'rgba(30,40,60,0.15)', color: '#5a6472' }}
+          title="放大"
+        >+</button>
+        <button
+          onClick={() => canvasRef.current?.zoomBy(1 / 1.3)}
+          className="w-9 h-9 rounded-full border text-lg font-bold flex items-center justify-center active:scale-95 transition-transform"
+          style={{ backgroundColor: 'rgba(255,255,255,0.85)', borderColor: 'rgba(30,40,60,0.15)', color: '#5a6472' }}
+          title="缩小"
+        >−</button>
+      </div>
+
       {/* Top badge */}
       <div className={`absolute top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-xs font-medium border z-10 transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'}`}
         style={{ backgroundColor: 'rgba(255,255,255,.72)', backdropFilter: 'blur(12px)', borderColor: 'rgba(30,40,60,0.10)', color: '#5a6472' }}>
         知识图谱 · {renderNodes.length} 节点 · {renderEdges.length} 连接
       </div>
 
-      {/* Control Panel */}
-      <div className={`absolute left-4 top-16 z-10 transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-5'}`}>
-        <div className="panel-floating p-2 mb-3 w-[200px]">
+      {/* Control Panel（移动端可折叠） */}
+      <div className={`absolute left-2 sm:left-4 top-16 z-10 transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-5'}`}>
+        <button
+          onClick={() => setControlPanelOpen(!controlPanelOpen)}
+          className="md:hidden mb-2 px-2.5 py-1.5 rounded-lg border text-[11px] flex items-center gap-1"
+          style={{ backgroundColor: 'rgba(255,255,255,0.85)', borderColor: 'rgba(30,40,60,0.15)', color: '#5a6472' }}
+        >
+          {controlPanelOpen ? '收起面板 ▴' : '控制面板 ▾'}
+        </button>
+        <div className={`panel-floating p-2 mb-3 w-[200px] max-w-[calc(100vw-2rem)] ${controlPanelOpen ? '' : 'hidden md:block'}`}>
           <div className="flex gap-2">
             <button
               onClick={() => setShowAddModal(true)}
@@ -501,7 +525,7 @@ export default function KnowledgeGraph() {
       </div>
 
       {/* Detail Panel */}
-      <div className={`absolute right-4 top-16 z-10 transition-all duration-500 ${selectedNodeData ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-full pointer-events-none'}`}>
+      <div className={`absolute right-2 sm:right-4 top-16 bottom-16 sm:bottom-auto z-10 max-w-[calc(100vw-1rem)] transition-all duration-500 ${selectedNodeData ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-full pointer-events-none'}`}>
         {selectedNodeData && (
           <NodeDetailPanel
             node={selectedNodeData}

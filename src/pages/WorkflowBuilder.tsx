@@ -171,6 +171,7 @@ export default function WorkflowBuilder() {
   const { data: activeRun } = useWorkflowRun(activeRunId);
 
   const [nodes, setNodes] = useState<WFNode[]>([]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [edges, setEdges] = useState<WFEdge[]>([]);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -334,6 +335,33 @@ export default function WorkflowBuilder() {
   }, [draggingNode, dragOffset, zoom, pan]);
 
   const handleMouseUp = useCallback(() => setDraggingNode(null), []);
+
+  // 触摸支持：与鼠标共用同一套拖拽逻辑
+  const handleTouchStartNode = useCallback((e: React.TouchEvent, nodeId: string) => {
+    const t = e.touches[0];
+    if (!t) return;
+    e.stopPropagation();
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    pushHistory({ nodes, edges });
+    setDraggingNode(nodeId);
+    setDragOffset({ x: t.clientX - node.x * zoom - pan.x, y: t.clientY - node.y * zoom - pan.y });
+    setSelectedNode(nodeId);
+  }, [edges, nodes, pan, pushHistory, zoom]);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    const t = e.touches[0];
+    if (!t) return;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const mx = rect ? t.clientX - rect.left : t.clientX;
+    const my = rect ? t.clientY - rect.top : t.clientY;
+    setMousePos({ x: mx, y: my });
+    if (!draggingNode) return;
+    if (e.cancelable) e.preventDefault(); // 拖节点时阻止页面滚动
+    const newX = (t.clientX - dragOffset.x - pan.x) / zoom;
+    const newY = (t.clientY - dragOffset.y - pan.y) / zoom;
+    setNodes((prev) => prev.map((n) => n.id === draggingNode ? { ...n, x: newX, y: newY } : n));
+  }, [draggingNode, dragOffset, zoom, pan]);
 
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
@@ -572,7 +600,7 @@ export default function WorkflowBuilder() {
   return (
     <div className="flex" style={{ height: 'calc(100vh - 48px)', backgroundColor: 'var(--bg-primary)' }}>
       {/* Left Palette */}
-      <div className="w-[220px] shrink-0 border-r flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+      <div className={`absolute md:relative z-30 h-full w-[220px] shrink-0 border-r flex-col overflow-hidden ${paletteOpen ? 'flex' : 'hidden md:flex'}`} style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
         <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
           <span className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--accent-cyan)' }}>组件库</span>
         </div>
@@ -616,6 +644,7 @@ export default function WorkflowBuilder() {
         <div className="flex items-center justify-between px-4 py-2 border-b shrink-0 h-11" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
           <div className="flex items-center gap-2 min-w-0">
             <Link to="/workflows" className="p-1.5 rounded hover:bg-white/5 shrink-0" style={{ color: 'var(--text-muted)' }} title="返回列表"><ArrowLeft className="w-4 h-4" /></Link>
+            <button onClick={() => setPaletteOpen(!paletteOpen)} className="md:hidden p-1.5 rounded hover:bg-white/5 shrink-0 text-[11px]" style={{ color: 'var(--accent-cyan)' }} title="组件库">组件库</button>
             <input
               type="text"
               value={workflowName}
@@ -679,7 +708,8 @@ export default function WorkflowBuilder() {
         <div ref={canvasRef} className="flex-1 relative overflow-hidden cursor-grab active:cursor-grabbing"
           style={{ backgroundColor: 'var(--bg-primary)' }}
           onDragOver={(e) => e.preventDefault()} onDrop={handleCanvasDrop}
-          onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseDown={handleCanvasMouseDown}>
+          onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseDown={handleCanvasMouseDown}
+          onTouchMove={handleTouchMove} onTouchEnd={handleMouseUp}>
           {/* Grid */}
           <div className="absolute inset-0 opacity-30 bg-grid" style={{ backgroundSize: `${20 * zoom}px ${20 * zoom}px`, transform: `translate(${pan.x % (20 * zoom)}px, ${pan.y % (20 * zoom)}px)` }} />
 
@@ -719,7 +749,8 @@ export default function WorkflowBuilder() {
               const isConnecting = connectingFrom === node.id;
               return (
                 <div key={node.id} className="absolute select-none" style={{ left: node.x, top: node.y, transform: 'translate(-50%, -50%)', cursor: draggingNode === node.id ? 'grabbing' : 'grab', zIndex: isSelected ? 10 : 1 }}
-                  onMouseDown={(e) => handleMouseDown(e, node.id)}>
+                  onMouseDown={(e) => handleMouseDown(e, node.id)}
+                  onTouchStart={(e) => handleTouchStartNode(e, node.id)}>
                   <div className="min-w-[150px] rounded-lg overflow-hidden transition-all duration-200 sci-corner" style={{ backgroundColor: 'var(--bg-panel)', border: `1.5px solid ${isSelected || isConnecting ? catInfo.color : `${catInfo.color}40`}`, boxShadow: isSelected ? `0 0 20px ${catInfo.bg}, 0 4px 12px rgba(0,0,0,0.4)` : `0 2px 8px rgba(0,0,0,0.3)` }}>
                     <div className="h-[3px]" style={{ backgroundColor: catInfo.color }} />
                     <div className="px-2.5 py-1.5">

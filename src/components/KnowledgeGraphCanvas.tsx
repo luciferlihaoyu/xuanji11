@@ -23,6 +23,7 @@ export interface GraphCanvasEdge {
 }
 
 export interface KnowledgeGraphCanvasHandle {
+  zoomBy: (factor: number) => void;
   /** 平滑聚焦到指定节点（节点须当前可见），返回是否找到 */
   focusNode: (id: string) => boolean;
   /** 复位视图：整图适配视口居中 */
@@ -664,9 +665,22 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
       let downX = 0;
       let downY = 0;
       let moved = false;
+      // 双指捏合缩放（移动端）：跟踪活动触点
+      const activePointers = new Map<number, { x: number; y: number }>();
+      let pinchDist = 0;
 
       const onDown = (e: PointerEvent) => {
         cv.setPointerCapture(e.pointerId);
+        activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (activePointers.size === 2) {
+          // 进入捏合：取消拖拽/平移
+          dragNode.current = -1;
+          panning.current = false;
+          const pts = [...activePointers.values()];
+          pinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+          moved = true;
+          return;
+        }
         downX = e.clientX;
         downY = e.clientY;
         moved = false;
@@ -682,6 +696,23 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
       };
 
       const onMove = (e: PointerEvent) => {
+        if (activePointers.has(e.pointerId)) {
+          activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        }
+        if (activePointers.size === 2 && pinchDist > 0) {
+          // 捏合缩放：以两指中点为锚点
+          const pts = [...activePointers.values()];
+          const nd2 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+          const r = cv.getBoundingClientRect();
+          const mx = (pts[0].x + pts[1].x) / 2 - r.left;
+          const my = (pts[0].y + pts[1].y) / 2 - r.top;
+          const ns2 = Math.min(3.2, Math.max(0.25, scale.current * (nd2 / pinchDist)));
+          tx.current = mx - (mx - tx.current) * (ns2 / scale.current);
+          ty.current = my - (my - ty.current) * (ns2 / scale.current);
+          scale.current = ns2;
+          pinchDist = nd2;
+          return;
+        }
         const nh = hit(e.clientX, e.clientY);
         if (nh !== hover.current) hover.current = nh;
         if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 4) moved = true;
@@ -706,6 +737,9 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
       };
 
       const onUp = (e: PointerEvent) => {
+        activePointers.delete(e.pointerId);
+        if (activePointers.size < 2) pinchDist = 0;
+        if (activePointers.size > 0) return; // 还有触点在，不做点击判定
         const wasDraggingNode = dragNode.current;
         if (dragNode.current >= 0) {
           const nd = simNodes.current[dragNode.current];
@@ -795,6 +829,16 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         };
         requestAnimationFrame(animate);
         return true;
+      },
+      zoomBy(factor: number) {
+        const cv = canvasRef.current;
+        if (!cv) return;
+        const mx = cv.clientWidth / 2;
+        const my = cv.clientHeight / 2;
+        const ns2 = Math.min(3.2, Math.max(0.25, scale.current * factor));
+        tx.current = mx - (mx - tx.current) * (ns2 / scale.current);
+        ty.current = my - (my - ty.current) * (ns2 / scale.current);
+        scale.current = ns2;
       },
       resetView() {
         fitView();
