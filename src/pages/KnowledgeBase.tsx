@@ -587,6 +587,7 @@ export default function KnowledgeBase() {
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>主知识库</span>
               <div className="flex gap-1">
+                <button onClick={() => setSidebarVisible(false)} className="md:hidden p-1 rounded hover:bg-white/5" title="收起侧栏" style={{ color: 'var(--text-muted)' }}><X className="w-3.5 h-3.5" /></button>
                 <button onClick={handleCluster} className="p-1 rounded hover:bg-white/5" title="语义聚类：AI 自动发现主题群" style={{ color: '#7aa2f7' }}><Boxes className="w-3.5 h-3.5" /></button>
                 <button onClick={() => handleAddNode(null, 'folder')} className="p-1 rounded hover:bg-white/5" title="新建文件夹" style={{ color: 'var(--text-muted)' }}><FolderOpen className="w-3.5 h-3.5" /></button>
                 <button onClick={() => handleAddNode(null, 'file')} className="p-1 rounded hover:bg-white/5" title="新建文档" style={{ color: 'var(--text-muted)' }}><Plus className="w-3.5 h-3.5" /></button>

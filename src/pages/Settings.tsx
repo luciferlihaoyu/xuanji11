@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { User, BookOpen, Bot, HardDrive, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug, Network, Cpu, Users } from 'lucide-react';
+import { User, BookOpen, Bot, HardDrive, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug, Network, Cpu, Users, Menu, X } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import {
   useSettings,
@@ -226,6 +226,7 @@ function toVectorProvider(value: string): 'openai' | 'minimax' | 'local' | 'cust
 
 export default function Settings() {
   const { category = 'personal' } = useParams();
+  const [navOpen, setNavOpen] = useState(false);
   const { user, logout } = useAuth();
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
@@ -1414,9 +1415,36 @@ export default function Settings() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-48px)]" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      {/* Left Nav */}
-      <div className="w-[240px] shrink-0 border-r overflow-y-auto" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+    <div className="flex flex-col md:flex-row h-[calc(100vh-48px)]" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      {/* 移动端：当前栏目 + 呼出按钮 */}
+      <div className="md:hidden flex items-center gap-2 px-3 py-2 border-b shrink-0" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+        <button
+          onClick={() => setNavOpen(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm"
+          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent-cyan)' }}
+        >
+          <Menu className="w-4 h-4" />
+          {SETTINGS_NAV.find((n) => n.key === category)?.label ?? '设置项'}
+        </button>
+        <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>点击切换栏目</span>
+      </div>
+
+      {/* 移动端抽屉遮罩 */}
+      {navOpen && (
+        <div className="fixed inset-0 top-12 bg-black/40 z-40 md:hidden" onClick={() => setNavOpen(false)} />
+      )}
+
+      {/* Left Nav（移动端抽屉 / 桌面常驻） */}
+      <div
+        className={`${navOpen ? 'absolute z-50 h-[calc(100%-44px)] top-11 flex' : 'hidden'} md:relative md:top-0 md:h-auto md:flex md:z-auto w-[240px] shrink-0 border-r overflow-y-auto flex-col`}
+        style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
+      >
+        <div className="md:hidden flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+          <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>设置栏目</span>
+          <button onClick={() => setNavOpen(false)} className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }} title="关闭">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
         <div className="p-3">
           {SETTINGS_NAV.map((item) => {
             const isActive = category === item.key;
@@ -1432,6 +1460,7 @@ export default function Settings() {
                 }}
                 onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
                 onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                onClick={() => setNavOpen(false)}
               >
                 <item.icon className="w-4 h-4" />
                 <span>{item.label}</span>
