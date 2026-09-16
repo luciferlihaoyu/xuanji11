@@ -447,6 +447,20 @@ if (env.isProduction) {
   });
 
   const stopScheduler = startWorkflowScheduler();
+
+  // 清理孤儿备份任务：重启前中断的一次性 running/pending 任务标记为 failed（定时定义 cron!=null 不动）
+  import("./queries/connection").then(({ getDb }) =>
+    import("drizzle-orm").then(async ({ and, isNull, inArray }) => {
+      const { backupJobs } = await import("@db/schema");
+      const db = getDb();
+      const orphan = await db.update(backupJobs)
+        .set({ status: "failed", error: "服务重启，备份中断" })
+        .where(and(isNull(backupJobs.cron), inArray(backupJobs.status, ["running", "pending"])));
+      const n = (orphan as { rowsAffected?: number }).rowsAffected ?? 0;
+      if (n > 0) console.log(`[Backup] 清理 ${n} 个重启中断的备份任务`);
+    }).catch((e) => console.warn("[Backup] 孤儿任务清理失败（不阻塞启动）:", e)),
+  );
+
   const stopBackupScheduler = startBackupScheduler();
 
   // 启动时种子默认工作流（幂等按名查重；失败不阻塞启动）

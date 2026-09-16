@@ -206,6 +206,8 @@ export const alistRepository: BackupRepository = {
     const parentDir = target.slice(0, target.lastIndexOf("/")) || "/";
     await ensureDir(cfg, token, parentDir);
     await assertEgressAllowed(cfg.baseUrl);
+    // 大文件动态超时：基础 30s + 每 MB 5s（235MB 库约 20 分钟），封顶 15 分钟
+    const uploadTimeoutMs = Math.min(15 * 60_000, TIMEOUT_MS + Math.floor(content.length / 1048576) * 5_000);
     const res = await fetch(`${cfg.baseUrl}/api/fs/put`, {
       method: "PUT",
       headers: {
@@ -214,7 +216,7 @@ export const alistRepository: BackupRepository = {
         "Content-Type": "application/octet-stream",
       },
       body: new Uint8Array(content),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(uploadTimeoutMs),
     });
     if (!res.ok) throw new AlistError(res.status, "PUT", safePath);
     const payload = (await res.json().catch(() => null)) as { code?: number; message?: string } | null;

@@ -67,13 +67,15 @@ async function walkStagingFiles(dir: string): Promise<BackupBundleFile[]> {
   return files.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-async function copyTree(srcDir: string, destDir: string): Promise<void> {
+async function copyTree(srcDir: string, destDir: string, excludeDirs: ReadonlySet<string> = new Set()): Promise<void> {
   const entries = await fsp.readdir(srcDir, { withFileTypes: true });
   for (const entry of entries) {
     const srcPath = path.join(srcDir, entry.name);
     const destPath = path.join(destDir, entry.name);
     if (entry.isDirectory()) {
-      await copyTree(srcPath, destPath);
+      // 排除备份暂存区（默认 /data/app/backups），防止把 staging 目录复制进自身
+      if (excludeDirs.has(path.resolve(srcPath))) continue;
+      await copyTree(srcPath, destPath, excludeDirs);
     } else if (entry.isFile()) {
       await fsp.mkdir(path.dirname(destPath), { recursive: true });
       await fsp.copyFile(srcPath, destPath);
@@ -93,7 +95,12 @@ async function assembleContent(stagingDir: string, sourcePath: string, uploadDir
     await copyTree(uploadDir, path.join(stagingDir, "attachments"));
     return;
   }
-  await copyTree(sourcePath, stagingDir);
+  // 排除所有备份暂存根目录（含历史 staging-N），避免递归自吞
+  const excludeDirs = new Set<string>([
+    path.resolve(env.backupTempDir),
+    path.resolve(stagingDir),
+  ]);
+  await copyTree(sourcePath, stagingDir, excludeDirs);
 }
 
 export async function buildBackupBundle(
