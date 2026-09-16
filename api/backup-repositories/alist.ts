@@ -19,9 +19,10 @@ import type { BackupRepository } from "./base";
 
 const TIMEOUT_MS = 30_000;
 
-/** Cloudflare 免费版请求体上限 100MB + 100s 响应超时（524）；保守取 30MB 分片（慢链路 0.5MB/s 也能 60s 内传完） */
+/** CF 免费版 100MB 上限 + 100s 响应超时（524）。真实数据走 115 真实上传（秒传 miss）
+ *  实测：随机 10MB=14s ✓ / 随机 30MB>100s ✗（零填充有秒传命中假象）→ 取 10MB 分片 */
 const CHUNK_THRESHOLD = 80 * 1048576;
-const CHUNK_SIZE = 30 * 1048576;
+const CHUNK_SIZE = 10 * 1048576;
 /** 单片失败重试次数 */
 const PART_MAX_ATTEMPTS = 3;
 /** 分片清单后缀：file.xjmanifest 记录 {parts, size}；分片名 file.partNNN */
