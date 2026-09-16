@@ -19,6 +19,12 @@ import type { BackupRepository } from "./base";
 
 const TIMEOUT_MS = 30_000;
 
+/** Cloudflare 免费版请求体上限 100MB；保守取 80MB 分片 */
+const CHUNK_THRESHOLD = 80 * 1048576;
+const CHUNK_SIZE = 80 * 1048576;
+/** 分片清单后缀：file.xjmanifest 记录 {parts, size}；分片名 file.partNNN */
+const PARTS_MANIFEST_SUFFIX = ".xjmanifest";
+
 const alistConfigSchema = z.object({
   url: z
     .string()
@@ -38,6 +44,35 @@ interface AlistConfig {
 }
 
 /** 带状态码的错误；消息不含任何凭据。 */
+
+/** 单文件 PUT（动态超时：30s + 5s/MB，封顶 15 分钟） */
+async function putOne(
+  cfg: AlistConfig,
+  token: string,
+  safePath: string,
+  content: Buffer,
+): Promise<void> {
+  const target = joinFsPath(cfg.basePath, safePath);
+  const parentDir = target.slice(0, target.lastIndexOf("/")) || "/";
+  await ensureDir(cfg, token, parentDir);
+  await assertEgressAllowed(cfg.baseUrl);
+  const uploadTimeoutMs = Math.min(15 * 60_000, TIMEOUT_MS + Math.floor(content.length / 1048576) * 5_000);
+  const res = await fetch(`${cfg.baseUrl}/api/fs/put`, {
+    method: "PUT",
+    headers: {
+      Authorization: token,
+      "File-Path": encodeURIComponent(target),
+      "Content-Type": "application/octet-stream",
+    },
+    body: new Uint8Array(content),
+    signal: AbortSignal.timeout(uploadTimeoutMs),
+  });
+  if (!res.ok) throw new AlistError(res.status, "PUT", safePath);
+  const payload = (await res.json().catch(() => null)) as { code?: number; message?: string } | null;
+  if (payload && payload.code !== 200) {
+    throw new Error(`AList 上传失败 (${safePath})${payload.message ? `: ${payload.message}` : ""}`);
+  }
+}
 export class AlistError extends Error {
   readonly statusCode: number;
 
@@ -200,34 +235,47 @@ export const alistRepository: BackupRepository = {
   async uploadFile(config: Record<string, unknown>, remoteRelPath: string, content: Buffer): Promise<void> {
     const cfg = requireConfig(config);
     const safePath = sanitizeRelativePath(remoteRelPath);
-    const target = joinFsPath(cfg.basePath, safePath);
     const token = await login(cfg);
-    // AList 的 fs/put 不自动创建父目录，先确保父目录存在
-    const parentDir = target.slice(0, target.lastIndexOf("/")) || "/";
-    await ensureDir(cfg, token, parentDir);
-    await assertEgressAllowed(cfg.baseUrl);
-    // 大文件动态超时：基础 30s + 每 MB 5s（235MB 库约 20 分钟），封顶 15 分钟
-    const uploadTimeoutMs = Math.min(15 * 60_000, TIMEOUT_MS + Math.floor(content.length / 1048576) * 5_000);
-    const res = await fetch(`${cfg.baseUrl}/api/fs/put`, {
-      method: "PUT",
-      headers: {
-        Authorization: token,
-        "File-Path": encodeURIComponent(target),
-        "Content-Type": "application/octet-stream",
-      },
-      body: new Uint8Array(content),
-      signal: AbortSignal.timeout(uploadTimeoutMs),
-    });
-    if (!res.ok) throw new AlistError(res.status, "PUT", safePath);
-    const payload = (await res.json().catch(() => null)) as { code?: number; message?: string } | null;
-    if (payload && payload.code !== 200) {
-      throw new Error(`AList 上传失败 (${safePath})${payload.message ? `: ${payload.message}` : ""}`);
+
+    // 大文件分片上传（绕开 Cloudflare 100MB 上限）
+    if (content.length > CHUNK_THRESHOLD) {
+      const parts = Math.ceil(content.length / CHUNK_SIZE);
+      for (let i = 0; i < parts; i++) {
+        const part = content.subarray(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        await putOne(cfg, token, `${safePath}.part${String(i + 1).padStart(3, "0")}`, part);
+      }
+      const manifest = Buffer.from(JSON.stringify({ parts, size: content.length }));
+      await putOne(cfg, token, `${safePath}${PARTS_MANIFEST_SUFFIX}`, manifest);
+      return;
     }
+    await putOne(cfg, token, safePath, content);
   },
 
   async readFile(config: Record<string, unknown>, remoteRelPath: string): Promise<Buffer | null> {
     const cfg = requireConfig(config);
     const safePath = sanitizeRelativePath(remoteRelPath);
+
+    // 先查分片清单：大文件以 file.partNNN + file.xjmanifest 存储
+    const manifestBuf = await this.readFile(config, `${safePath}${PARTS_MANIFEST_SUFFIX}`);
+    if (manifestBuf) {
+      try {
+        const meta = JSON.parse(manifestBuf.toString("utf8")) as { parts?: number };
+        const n = typeof meta.parts === "number" ? meta.parts : 0;
+        if (n > 0) {
+          const chunks: Buffer[] = [];
+          for (let i = 1; i <= n; i++) {
+            const part = await this.readFile(config, `${safePath}.part${String(i).padStart(3, "0")}`);
+            if (!part) throw new Error(`分片缺失: ${safePath}.part${String(i).padStart(3, "0")}`);
+            chunks.push(part);
+          }
+          return Buffer.concat(chunks);
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith("分片缺失")) throw err;
+        // manifest 解析失败按整文件继续
+      }
+    }
+
     const target = joinFsPath(cfg.basePath, safePath);
     const token = await login(cfg);
     await assertEgressAllowed(cfg.baseUrl);
@@ -274,6 +322,23 @@ export const alistRepository: BackupRepository = {
     if (payload && payload.code !== 200 && !/not found|不存在/i.test(payload.message ?? "")) {
       throw new Error(`AList 删除失败 (${safePath})${payload.message ? `: ${payload.message}` : ""}`);
     }
+    // 分片文件连带删除（读 manifest 得片数；失败不阻塞主删除）
+    try {
+      const manifestBuf = await this.readFile(config, `${safePath}${PARTS_MANIFEST_SUFFIX}`);
+      if (manifestBuf) {
+        const meta = JSON.parse(manifestBuf.toString("utf8")) as { parts?: number };
+        const names = [`${name}${PARTS_MANIFEST_SUFFIX}`];
+        for (let i = 1; i <= (meta.parts ?? 0); i++) {
+          names.push(`${name}.part${String(i).padStart(3, "0")}`);
+        }
+        await fetch(`${cfg.baseUrl}/api/fs/remove`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: token },
+          body: JSON.stringify({ dir, names }),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+      }
+    } catch { /* 分片清理失败不阻塞 */ }
   },
 
   async listFiles(config: Record<string, unknown>, remoteRelPath?: string): Promise<string[]> {
@@ -283,6 +348,17 @@ export const alistRepository: BackupRepository = {
     const token = await login(cfg);
     const items = await fsList(cfg, token, dir);
     const prefix = safePath ? `${safePath}/` : "";
-    return items.filter((item) => !item.is_dir).map((item) => `${prefix}${item.name ?? ""}`);
+    const out: string[] = [];
+    for (const item of items) {
+      if (item.is_dir) continue;
+      const name = item.name ?? "";
+      if (/\.part\d{3}$/.test(name)) continue; // 分片不单独列出
+      if (name.endsWith(PARTS_MANIFEST_SUFFIX)) {
+        out.push(`${prefix}${name.slice(0, -PARTS_MANIFEST_SUFFIX.length)}`); // 分片文件按逻辑名
+        continue;
+      }
+      out.push(`${prefix}${name}`);
+    }
+    return out;
   },
 };
