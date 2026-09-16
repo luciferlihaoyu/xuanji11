@@ -655,21 +655,7 @@ export default function Settings() {
         );
 
       case 'knowledge':
-        return (
-          <div className="space-y-6">
-            <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>知识库设置</h3>
-            <div className="max-w-lg space-y-4">
-              <div className="card-base p-4">
-                <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                  知识库设置尚未实现
-                </div>
-                <div className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
-                  默认文件夹、默认文档格式等高级配置将在后续版本开放。
-                </div>
-              </div>
-            </div>
-          </div>
-        );
+        return <KnowledgeStatusPanel />;
 
       case 'agent':
         return (
@@ -1424,6 +1410,51 @@ export default function Settings() {
       <div className="flex-1 overflow-y-auto p-6 animate-fade-in">
         {renderContent()}
       </div>
+    </div>
+  );
+}
+
+/** 知识库状态面板：替代原占位 tab，展示真实统计 */
+function KnowledgeStatusPanel() {
+  const { data: stats, isLoading } = trpc.kb.stats.useQuery(undefined, { staleTime: 30_000 });
+
+  const items = stats ? [
+    { label: '文档', value: stats.documents, note: stats.deletedDocuments > 0 ? `${stats.deletedDocuments} 篇已软删` : undefined },
+    { label: '文件夹', value: stats.folders },
+    { label: '分块', value: stats.chunks },
+    { label: '向量', value: stats.vectors, note: stats.vectors === stats.chunks ? '100% 索引' : stats.vectors < stats.chunks ? `缺 ${stats.chunks - stats.vectors}` : undefined },
+    { label: 'FTS 索引', value: stats.ftsRows },
+    { label: '图谱节点', value: stats.graphNodes },
+    { label: '图谱边', value: stats.graphEdges },
+    { label: '版本快照', value: stats.versions },
+    { label: '待审核', value: stats.pendingReviews, note: stats.pendingReviews > 0 ? '收件箱有待处理事项' : undefined },
+  ] : [];
+
+  return (
+    <div className="space-y-6">
+      <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>知识库状态</h3>
+      {isLoading ? (
+        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>加载中…</div>
+      ) : (
+        <>
+          <div className="grid grid-cols-3 gap-3 max-w-2xl">
+            {items.map((item) => (
+              <div key={item.label} className="card-base p-3">
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{item.label}</div>
+                <div className="text-xl font-semibold mt-1" style={{ color: 'var(--text-primary)' }}>
+                  {item.value.toLocaleString()}
+                </div>
+                {item.note && (
+                  <div className="text-[10px] mt-0.5" style={{ color: 'var(--accent-cyan)' }}>{item.note}</div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="text-xs max-w-2xl" style={{ color: 'var(--text-muted)' }}>
+            知识库正常运行。向量与分块数量一致表示索引完整；「待审核」来自收件箱（分拣建议/疑似重复/质量异常）。
+          </div>
+        </>
+      )}
     </div>
   );
 }

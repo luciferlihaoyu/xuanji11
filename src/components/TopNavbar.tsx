@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Search, Bell, Settings, Command, Menu, X, Orbit } from 'lucide-react';
+import { Search, Bell, Settings, Command, Menu, X, Orbit, LogOut } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuth';
 import { trpc } from '@/providers/trpc';
 import { useAppStore } from '@/store/useAppStore';
 import ThemeSwitch from './ThemeSwitch';
@@ -27,6 +28,8 @@ export default function TopNavbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const addToast = useAppStore((state) => state.addToast);
   const { data: user } = trpc.auth.me.useQuery();
+  const { logout } = useAuth();
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return;
@@ -158,16 +161,40 @@ export default function TopNavbar() {
           <Settings className="w-4 h-4" />
         </Link>
 
-        <div
-          className="w-7 h-7 rounded-full border flex items-center justify-center text-xs font-bold"
-          style={{
-            borderColor: 'var(--accent-cyan)',
-            background: 'linear-gradient(135deg, rgba(0,229,255,0.2), rgba(167,139,250,0.2))',
-            color: 'var(--accent-cyan)',
-            boxShadow: '0 0 6px var(--accent-cyan-dim)',
-          }}
-        >
-          {userInitial}
+        <div className="relative">
+          <button
+            onClick={() => setUserMenuOpen(!userMenuOpen)}
+            className="w-7 h-7 rounded-full border flex items-center justify-center text-xs font-bold cursor-pointer transition-transform hover:scale-105"
+            style={{
+              borderColor: 'var(--accent-cyan)',
+              background: 'linear-gradient(135deg, rgba(0,229,255,0.2), rgba(167,139,250,0.2))',
+              color: 'var(--accent-cyan)',
+              boxShadow: '0 0 6px var(--accent-cyan-dim)',
+            }}
+            title="账户菜单"
+          >
+            {userInitial}
+          </button>
+          {userMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
+              <div className="absolute right-0 top-9 z-50 w-44 rounded-lg border shadow-lg py-1"
+                style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+                <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{user?.name ?? '—'}</div>
+                  <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{user?.role ?? ''}</div>
+                </div>
+                <button
+                  onClick={() => { setUserMenuOpen(false); logout(); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors hover:bg-red-500/10"
+                  style={{ color: '#ef4444' }}
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  登出 / 切换账户
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         <button className="lg:hidden p-2 rounded-md ml-1" style={{ color: 'var(--text-muted)' }} onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>

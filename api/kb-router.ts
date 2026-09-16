@@ -26,6 +26,25 @@ export const kbRouter = createRouter({
     return db.select().from(kbFolders).orderBy(kbFolders.sortOrder);
   }),
 
+  /** 知识库状态统计：设置页展示用（文档/chunks/向量/FTS/图谱/收件箱） */
+  stats: authedQuery.query(async () => {
+    const { getRawDb } = await import("./queries/connection");
+    const raw = getRawDb();
+    const c = (sql: string): number => (raw.prepare(sql).get() as { c: number }).c;
+    return {
+      documents: c("SELECT COUNT(*) c FROM kb_documents WHERE deletedAt IS NULL"),
+      deletedDocuments: c("SELECT COUNT(*) c FROM kb_documents WHERE deletedAt IS NOT NULL"),
+      folders: c("SELECT COUNT(*) c FROM kb_folders"),
+      chunks: c("SELECT COUNT(*) c FROM document_chunks"),
+      vectors: c("SELECT COUNT(*) c FROM vec_chunk_meta"),
+      ftsRows: c("SELECT COUNT(*) c FROM chunks_fts"),
+      graphNodes: c("SELECT COUNT(*) c FROM knowledge_nodes"),
+      graphEdges: c("SELECT COUNT(*) c FROM knowledge_edges"),
+      pendingReviews: c("SELECT COUNT(*) c FROM kb_review_items WHERE status = 'pending'"),
+      versions: c("SELECT COUNT(*) c FROM kb_document_versions"),
+    };
+  }),
+
   listRootFolders: authedQuery.query(async () => {
     const db = getDb();
     return db.select().from(kbFolders)
