@@ -331,6 +331,8 @@ describe("Search REST router", () => {
         total: 0,
         keywordResults: 0,
         vectorResults: 0,
+        durationMs: 0,
+        cached: false,
       },
     });
 

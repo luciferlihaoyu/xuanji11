@@ -70,6 +70,8 @@ export interface SearchResponse {
     readonly total: number;
     readonly keywordResults: number;
     readonly vectorResults: number;
+    readonly durationMs: number;
+    readonly cached: boolean;
   };
 }
 
@@ -299,8 +301,39 @@ async function rerankWithLlm(query: string, hits: MergedHit[], limit: number): P
   }
 }
 
+/** 搜索结果缓存：TTL 60s + LRU 200 条。文档变更时调 invalidateSearchCache()。 */
+const searchCache = new Map<string, { at: number; response: SearchResponse }>();
+const SEARCH_CACHE_TTL_MS = 60_000;
+const SEARCH_CACHE_MAX = 200;
+
+export function invalidateSearchCache(): void {
+  searchCache.clear();
+}
+
 export async function executeHybridSearch(input: SearchInput): Promise<SearchResponse> {
-  const { query, mode, limit, filters, rerank } = searchInputSchema.parse(input);
+  const parsed = searchInputSchema.parse(input);
+  const cacheKey = JSON.stringify(parsed);
+  const now = Date.now();
+  const hit = searchCache.get(cacheKey);
+  if (hit && now - hit.at < SEARCH_CACHE_TTL_MS) {
+    // LRU：命中后提到最新位置
+    searchCache.delete(cacheKey);
+    searchCache.set(cacheKey, hit);
+    return { ...hit.response, metadata: { ...hit.response.metadata, cached: true } };
+  }
+  const response = await executeHybridSearchUncached(parsed);
+  searchCache.set(cacheKey, { at: now, response });
+  if (searchCache.size > SEARCH_CACHE_MAX) {
+    // 淘汰最旧
+    const oldest = searchCache.keys().next().value;
+    if (oldest !== undefined) searchCache.delete(oldest);
+  }
+  return response;
+}
+
+async function executeHybridSearchUncached(parsed: z.output<typeof searchInputSchema>): Promise<SearchResponse> {
+  const startedAt = Date.now();
+  const { query, mode, limit, filters, rerank } = parsed;
 
   const keywordHits: InternalHit[] = mode !== "vector" ? await fetchKeywordResults(query, limit) : [];
   const vectorHits: InternalHit[] = mode !== "keyword" ? await fetchVectorResults(query, limit) : [];
@@ -329,6 +362,8 @@ export async function executeHybridSearch(input: SearchInput): Promise<SearchRes
       total: results.length,
       keywordResults: keywordHits.length,
       vectorResults: vectorHits.length,
+      durationMs: Date.now() - startedAt,
+      cached: false,
     },
   };
 }

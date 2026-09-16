@@ -10,6 +10,7 @@ import { indexDocumentById, tryIndexDocumentById, startReindexAll, getReindexPro
 import { collectDescendantFolderIds } from "./lib/kb-tree";
 
 async function deleteDocumentVectors(documentId: number): Promise<void> {
+  void import("./lib/hybrid-search").then((m) => m.invalidateSearchCache());
   const db = getDb();
   // 先清 FTS（依赖 document_chunks 的 id 子查询，必须赶在删 chunks 之前）
   try {
@@ -402,6 +403,7 @@ export const kbRouter = createRouter({
       // 内容变更时自动重建索引；索引失败不影响文档更新
       if (input.content !== undefined) {
         await tryIndexDocumentById(id);
+      void import("./lib/hybrid-search").then((m) => m.invalidateSearchCache());
       }
       return { success: true };
     }),
