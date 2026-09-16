@@ -75,7 +75,7 @@ async function uploadFilesToRepository(
   let failed = 0;
 
   // 大文件阈值：超过则走磁盘流式路径（防加密三份拷贝 OOM，实测 224MB 峰值 1.35GB 触发容器重启）
-  const BIG_FILE_BYTES = 50 * 1048576;
+  const BIG_FILE_BYTES = 15 * 1048576;
   const tmpDir = path.join(env.backupTempDir, `tmp-enc-${job.id}`);
 
   for (const file of ctx.files) {

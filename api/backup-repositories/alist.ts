@@ -21,7 +21,7 @@ const TIMEOUT_MS = 30_000;
 
 /** CF 免费版 100MB 上限 + 100s 响应超时（524）。真实数据走 115 真实上传（秒传 miss）
  *  实测：随机 10MB=14s ✓ / 随机 30MB>100s ✗（零填充有秒传命中假象）→ 取 10MB 分片 */
-const CHUNK_THRESHOLD = 80 * 1048576;
+const CHUNK_THRESHOLD = 12 * 1048576;
 const CHUNK_SIZE = 10 * 1048576;
 /** 单片失败重试次数 */
 const PART_MAX_ATTEMPTS = 3;

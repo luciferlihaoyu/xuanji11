@@ -461,6 +461,18 @@ if (env.isProduction) {
     }).catch((e) => console.warn("[Backup] 孤儿任务清理失败（不阻塞启动）:", e)),
   );
 
+  // 启动清理备份暂存残留（OOM/崩溃时 finally 来不及清，staging 一份就是 3GB+）
+  import("node:fs/promises").then(async (fsp) => {
+    const { env } = await import("./lib/env");
+    const entries = await fsp.readdir(env.backupTempDir, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) {
+      if (e.isDirectory() && (e.name.startsWith("staging-") || e.name.startsWith("tmp-enc-"))) {
+        await fsp.rm(`${env.backupTempDir}/${e.name}`, { recursive: true, force: true }).catch(() => undefined);
+        console.log(`[Backup] 清理启动残留 ${e.name}`);
+      }
+    }
+  }).catch(() => undefined);
+
   const stopBackupScheduler = startBackupScheduler();
 
   // 启动时种子默认工作流（幂等按名查重；失败不阻塞启动）
