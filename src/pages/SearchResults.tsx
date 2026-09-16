@@ -106,7 +106,7 @@ export default function SearchResults() {
   };
 
   return (
-    <div className="p-6 max-w-5xl mx-auto" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="p-3 sm:p-6 max-w-5xl mx-auto" style={{ backgroundColor: 'var(--bg-primary)' }}>
       <div className="mb-6">
         <form
           onSubmit={handleSearch}

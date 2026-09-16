@@ -42,7 +42,7 @@ export default function AuditLog() {
         </div>
       </div>
 
-      <div className="border rounded-md overflow-hidden" style={{ borderColor: 'var(--border-subtle)' }}>
+      <div className="border rounded-md overflow-x-auto" style={{ borderColor: 'var(--border-subtle)' }}>
         <table className="w-full text-sm">
           <thead style={{ backgroundColor: 'var(--bg-tertiary)' }}>
             <tr>

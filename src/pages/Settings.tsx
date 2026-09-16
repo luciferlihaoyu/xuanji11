@@ -1469,7 +1469,7 @@ function KnowledgeStatusPanel() {
         <div className="text-xs" style={{ color: 'var(--text-muted)' }}>加载中…</div>
       ) : (
         <>
-          <div className="grid grid-cols-3 gap-3 max-w-2xl">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-w-2xl">
             {items.map((item) => (
               <div key={item.label} className="card-base p-3">
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{item.label}</div>

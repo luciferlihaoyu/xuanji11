@@ -411,7 +411,7 @@ export default function APICenter() {
           {selectedEndpoint.params && selectedEndpoint.params.length > 0 && (
             <div className="mb-6">
               <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>参数</h3>
-              <div className="border rounded-md overflow-hidden" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="border rounded-md overflow-x-auto" style={{ borderColor: 'var(--border-subtle)' }}>
                 <table className="w-full text-sm">
                   <thead>
                     <tr style={{ backgroundColor: 'var(--bg-tertiary)' }}>
@@ -590,7 +590,7 @@ export default function APICenter() {
       {/* Token Modal */}
       {tokenModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
-          <div className="animate-scale-in rounded-lg border p-6 w-[500px] max-h-[80vh] overflow-y-auto" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+          <div className="animate-scale-in rounded-lg border p-4 sm:p-6 w-[500px] max-w-[calc(100vw-2rem)] max-h-[85vh] overflow-y-auto" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>API Token 管理</h3>
               <button onClick={() => setTokenModalOpen(false)} className="p-1 rounded hover:bg-white/5">

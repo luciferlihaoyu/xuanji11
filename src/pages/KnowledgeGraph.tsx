@@ -528,7 +528,7 @@ export default function KnowledgeGraph() {
       {/* Create Node Modal */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
-          <div className="rounded-lg border p-6 w-[420px]" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+          <div className="rounded-lg border p-4 sm:p-6 w-[420px] max-w-[calc(100vw-2rem)]" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>新建知识节点</h3>
               <button onClick={() => setShowAddModal(false)} className="p-1 rounded hover:bg-white/5">
@@ -604,7 +604,7 @@ export default function KnowledgeGraph() {
       {/* Auto-Link Modal */}
       {showAutoLinkModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(30,40,60,0.35)' }}>
-          <div className="rounded-lg border p-6 w-[480px] max-h-[80vh] flex flex-col" style={{ backgroundColor: '#ffffff', borderColor: 'rgba(30,40,60,0.12)' }}>
+          <div className="rounded-lg border p-4 sm:p-6 w-[480px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col" style={{ backgroundColor: '#ffffff', borderColor: 'rgba(30,40,60,0.12)' }}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold" style={{ color: '#2b3440' }}>一键自动建边</h3>
               <button onClick={() => setShowAutoLinkModal(false)} className="p-1 rounded hover:bg-black/5">

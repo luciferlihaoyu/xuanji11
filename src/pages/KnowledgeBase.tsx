@@ -578,7 +578,9 @@ export default function KnowledgeBase() {
     <div className="flex h-[calc(100vh-48px)]" style={{ backgroundColor: 'var(--bg-primary)' }}>
       {/* Left Sidebar */}
       {sidebarVisible && (
-        <div className="w-[260px] shrink-0 border-r flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+        <>
+        <div className="fixed inset-0 top-12 bg-black/40 z-20 md:hidden" onClick={() => setSidebarVisible(false)} />
+        <div className="absolute md:relative z-30 h-full w-[260px] shrink-0 border-r flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
           <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>主知识库</span>
@@ -654,6 +656,7 @@ export default function KnowledgeBase() {
             </>
           )}
         </div>
+        </>
       )}
 
       {/* Main Content */}
@@ -725,7 +728,9 @@ export default function KnowledgeBase() {
 
       {/* Right Panel */}
       {rightPanelVisible && (
-        <div className="w-[280px] shrink-0 border-l overflow-y-auto relative" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+        <>
+        <div className="fixed inset-0 top-12 bg-black/40 z-20 md:hidden" onClick={() => setRightPanelVisible(false)} />
+        <div className="absolute md:relative right-0 z-30 h-full w-[280px] max-w-[85vw] shrink-0 border-l overflow-y-auto" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
           <button onClick={() => setRightPanelVisible(false)} className="absolute top-2 left-2 p-1 rounded z-10" style={{ color: 'var(--text-muted)' }}><ChevronRight className="w-4 h-4" /></button>
           <div className="flex border-b pt-8" style={{ borderColor: 'var(--border-subtle)' }}>
             {[{ key: 'outline', label: '大纲' }, { key: 'links', label: '链接' }, { key: 'tags', label: '标签' }].map((tab) => (
@@ -776,12 +781,13 @@ export default function KnowledgeBase() {
             )}
           </div>
         </div>
+        </>
       )}
 
       {/* 语义聚类结果弹窗 */}
       {showClusterModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.6)' }}>
-          <div className="rounded-lg border p-6 w-[560px] max-h-[80vh] flex flex-col" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+          <div className="rounded-lg border p-4 sm:p-6 w-[560px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
                 <Boxes className="w-4 h-4" style={{ color: '#7aa2f7' }} />
@@ -831,7 +837,7 @@ export default function KnowledgeBase() {
       {/* 智能分拣建议弹窗 */}
       {showSuggestModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.6)' }}>
-          <div className="rounded-lg border p-6 w-[480px] max-h-[80vh] flex flex-col" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+          <div className="rounded-lg border p-4 sm:p-6 w-[480px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
                 <Sparkles className="w-4 h-4" style={{ color: '#7aa2f7' }} />

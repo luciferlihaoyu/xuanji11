@@ -90,10 +90,10 @@ export default function ReviewInbox() {
 
       {/* 反馈评估报告 */}
       {showFeedback && feedbackQuery.data && (
-        <div className="mx-4 mt-3 rounded-lg border p-4 shrink-0"
+        <div className="mx-2 sm:mx-4 mt-3 rounded-lg border p-4 shrink-0"
           style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'rgba(167,139,250,0.3)' }}>
           <div className="text-xs font-semibold mb-3" style={{ color: '#a78bfa' }}>反馈评估报告</div>
-          <div className="grid grid-cols-3 gap-4 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
             <div>
               <div className="mb-1" style={{ color: 'var(--text-muted)' }}>自动边删除率</div>
               <div className="text-lg font-semibold" style={{ color: feedbackQuery.data.edgeFeedback.deletionRate > 0.2 ? '#ef4444' : '#22c55e' }}>
@@ -132,7 +132,7 @@ export default function ReviewInbox() {
       )}
 
       {/* 列表 */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-2">
+      <div className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-2">
         {listQuery.isLoading && (
           <div className="text-center text-xs py-10" style={{ color: 'var(--text-muted)' }}>加载中…</div>
         )}

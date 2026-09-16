@@ -519,7 +519,7 @@ export default function AgentManagement() {
           ))}
         </div>
       ) : (
-        <div className="border rounded-md overflow-hidden" style={{ borderColor: 'var(--border-subtle)' }}>
+        <div className="border rounded-md overflow-x-auto" style={{ borderColor: 'var(--border-subtle)' }}>
           <table className="w-full text-sm">
             <thead><tr style={{ backgroundColor: 'var(--bg-tertiary)' }}>
               {['Agent', '角色', '部门', '状态', '权限', '操作'].map((h) => (<th key={h} className="text-left px-4 py-2.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>{h}</th>))}
@@ -548,7 +548,7 @@ export default function AgentManagement() {
 
       {/* Detail Drawer */}
       {selectedAgentData && (
-        <div className="fixed top-12 right-0 bottom-0 w-[480px] z-40 border-l overflow-y-auto animate-slide-in-right" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+        <div className="fixed top-12 right-0 bottom-0 w-full sm:w-[480px] z-40 border-l overflow-y-auto animate-slide-in-right" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
           <div className="p-6">
             <div className="flex items-start justify-between mb-6">
               <div className="flex items-center gap-4">
@@ -793,7 +793,7 @@ export default function AgentManagement() {
                     </button>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>模型</label>
                     {tianshuModels.length > 0 && (
@@ -871,7 +871,7 @@ export default function AgentManagement() {
             {/* Radar */}
             <div className="mb-6"><h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>能力评估</h4>
               <div className="flex justify-center">{renderRadarChart(selectedAgentData.abilities)}</div>
-              <div className="grid grid-cols-3 gap-2 mt-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3">
                 {ABILITY_LABELS.map((label, i) => {
                   const vals = [selectedAgentData.abilities.knowledge, selectedAgentData.abilities.creation, selectedAgentData.abilities.coding, selectedAgentData.abilities.analysis, selectedAgentData.abilities.communication, selectedAgentData.abilities.learning];
                   return (<div key={label} className="text-center"><div className="text-sm font-bold" style={{ color: 'var(--accent-cyan)' }}>{vals[i]}</div><div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{label}</div></div>);
@@ -890,18 +890,18 @@ export default function AgentManagement() {
       {/* Add/Edit Modal */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
-          <div className="animate-scale-in rounded-lg border p-6 w-[560px] max-h-[85vh] overflow-y-auto" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+          <div className="animate-scale-in rounded-lg border p-4 sm:p-6 w-[560px] max-w-[calc(100vw-2rem)] max-h-[85vh] overflow-y-auto" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>{isEditing ? '编辑 Agent' : '添加 Agent'}</h3>
               <button onClick={() => { setShowAddModal(false); resetForm(); setIsEditing(false); }} className="p-1 rounded hover:bg-white/5"><X className="w-5 h-5" style={{ color: 'var(--text-muted)' }} /></button>
             </div>
 
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>名称 *</label><input type="text" value={formData.name || ''} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="如：新助手" className="input-base text-xs" /></div>
                 <div><label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>角色 *</label><input type="text" value={formData.role || ''} onChange={(e) => setFormData({ ...formData, role: e.target.value })} placeholder="如：内容编辑" className="input-base text-xs" /></div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>部门 *</label>
                   <select value={formData.department || ''} onChange={(e) => setFormData({ ...formData, department: e.target.value })} className="input-base text-xs">
                     <option value="">选择部门</option>
@@ -914,7 +914,7 @@ export default function AgentManagement() {
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>平台</label>
                   <select
                     value={PLATFORM_PRESETS.includes(formData.platform ?? '') ? (formData.platform ?? '天宫') : '___custom___'}
