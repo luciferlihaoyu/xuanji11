@@ -164,9 +164,10 @@ export async function verifyAdminCredentials(
   }
 }
 
-export async function signLocalToken(username: string): Promise<string> {
+export async function signLocalToken(username: string, role: "admin" | "viewer" = "admin"): Promise<string> {
   return new jose.SignJWT({
     username,
+    role,
     type: "local",
     unionId: LOCAL_ADMIN_UNION_ID,
     })
@@ -179,7 +180,7 @@ export async function signLocalToken(username: string): Promise<string> {
 
 export async function verifyLocalToken(
   token: string,
-): Promise<{ username: string } | null> {
+): Promise<{ username: string; role: "admin" | "viewer" } | null> {
   if (!token) return null;
   try {
     const { payload } = await jose.jwtVerify(token, getSecret(), {
@@ -195,7 +196,7 @@ export async function verifyLocalToken(
       return null;
     }
 
-    return { username: payload.username };
+    return { username: payload.username, role: payload.role === "viewer" ? "viewer" : "admin" };
   } catch {
     return null;
   }
@@ -217,7 +218,7 @@ export async function authenticateLocalRequest(
     name: claim.username,
     email: null,
     avatar: null,
-    role: "admin",
+    role: claim.role === "viewer" ? "user" : "admin",
     createdAt: new Date(),
     updatedAt: new Date(),
     lastSignInAt: new Date(),

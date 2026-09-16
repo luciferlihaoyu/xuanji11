@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { User, BookOpen, Bot, HardDrive, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug, Network, Cpu } from 'lucide-react';
+import { User, BookOpen, Bot, HardDrive, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug, Network, Cpu, Users } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import {
   useSettings,
@@ -35,6 +35,7 @@ const SETTINGS_NAV = [
   { key: 'storage', label: '存储管理', icon: HardDrive },
   { key: 'connector', label: '连接器', icon: Plug },
   { key: 'mcp-servers', label: 'MCP 服务器', icon: Network },
+  { key: 'accounts', label: '账户', icon: Users },
   { key: 'security', label: '安全', icon: Shield },
   { key: 'appearance', label: '外观', icon: Palette },
   { key: 'about', label: '关于', icon: Info },
@@ -1095,6 +1096,8 @@ export default function Settings() {
       case 'mcp-servers':
         return <McpServersPanel />;
 
+      case 'accounts':
+        return <AccountsPanel />;
       case 'security':
         return (
           <div className="space-y-6">
@@ -1487,6 +1490,135 @@ function KnowledgeStatusPanel() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** 账户管理面板：多用户（admin 可建/删/重置密码；viewer 只读权限） */
+function AccountsPanel() {
+  const utils = trpc.useUtils();
+  const { data: accounts, isLoading } = trpc.auth.listAccounts.useQuery();
+  const [form, setForm] = useState({ username: '', password: '', role: 'viewer' as 'admin' | 'viewer' });
+  const [resetId, setResetId] = useState<number | null>(null);
+  const [resetPw, setResetPw] = useState('');
+
+  const createMutation = trpc.auth.createAccount.useMutation({
+    onSuccess: () => {
+      addToastLocal('账户已创建');
+      setForm({ username: '', password: '', role: 'viewer' });
+      void utils.auth.listAccounts.invalidate();
+    },
+    onError: (e) => addToastLocal(e.message, true),
+  });
+  const deleteMutation = trpc.auth.deleteAccount.useMutation({
+    onSuccess: () => { addToastLocal('账户已删除'); void utils.auth.listAccounts.invalidate(); },
+    onError: (e) => addToastLocal(e.message, true),
+  });
+  const resetMutation = trpc.auth.resetAccountPassword.useMutation({
+    onSuccess: () => { addToastLocal('密码已重置'); setResetId(null); setResetPw(''); },
+    onError: (e) => addToastLocal(e.message, true),
+  });
+
+  const { addToast } = useAppStore();
+  function addToastLocal(title: string, isError = false) {
+    addToast({ type: isError ? 'error' : 'success', title });
+  }
+
+  return (
+    <div className="space-y-6">
+      <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>账户管理</h3>
+      <div className="max-w-2xl space-y-4">
+        {/* 创建账户 */}
+        <div className="card-base p-4">
+          <h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>新建账户</h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>用户名</label>
+              <input type="text" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })}
+                className="input-base text-sm" placeholder="至少 2 字" />
+            </div>
+            <div>
+              <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>密码</label>
+              <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })}
+                className="input-base text-sm" placeholder="至少 8 位" />
+            </div>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-primary)' }}>
+              <input type="radio" checked={form.role === 'viewer'} onChange={() => setForm({ ...form, role: 'viewer' })} className="accent-cyan-400" />
+              只读（浏览/搜索/问答）
+            </label>
+            <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-primary)' }}>
+              <input type="radio" checked={form.role === 'admin'} onChange={() => setForm({ ...form, role: 'admin' })} className="accent-cyan-400" />
+              管理员（全部权限）
+            </label>
+            <button
+              onClick={() => createMutation.mutate(form)}
+              disabled={form.username.length < 2 || form.password.length < 8 || createMutation.isPending}
+              className="btn-primary text-xs py-2 px-4 ml-auto disabled:opacity-40"
+            >{createMutation.isPending ? '创建中…' : '创建'}</button>
+          </div>
+        </div>
+
+        {/* 账户列表 */}
+        <div className="card-base p-4">
+          <h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
+            已有账户 <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>{accounts?.length ?? 0} 个（不含主管理员）</span>
+          </h4>
+          {isLoading ? (
+            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>加载中…</div>
+          ) : (accounts ?? []).length === 0 ? (
+            <div className="text-xs py-4 text-center" style={{ color: 'var(--text-muted)' }}>
+              还没有子账户。创建后他人可用自己的账号密码登录，无需共享主管理员密码。
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {(accounts ?? []).map((acc) => (
+                <div key={acc.id} className="flex items-center gap-3 px-3 py-2 rounded border" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{acc.username}</div>
+                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      {acc.lastSignInAt ? `最近登录 ${new Date(acc.lastSignInAt).toLocaleString()}` : '从未登录'}
+                    </div>
+                  </div>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                    style={{
+                      backgroundColor: acc.role === 'admin' ? 'rgba(251,191,36,0.15)' : 'rgba(34,211,238,0.1)',
+                      color: acc.role === 'admin' ? '#fbbf24' : 'var(--accent-cyan)',
+                    }}>
+                    {acc.role === 'admin' ? '管理员' : '只读'}
+                  </span>
+                  {resetId === acc.id ? (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <input type="password" value={resetPw} onChange={(e) => setResetPw(e.target.value)}
+                        placeholder="新密码≥8位" className="input-base text-[11px] py-1 w-28" />
+                      <button onClick={() => resetMutation.mutate({ id: acc.id, password: resetPw })}
+                        disabled={resetPw.length < 8 || resetMutation.isPending}
+                        className="text-[10px] px-2 py-1 rounded disabled:opacity-40"
+                        style={{ backgroundColor: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>确定</button>
+                      <button onClick={() => { setResetId(null); setResetPw(''); }}
+                        className="text-[10px] px-2 py-1 rounded" style={{ color: 'var(--text-muted)' }}>取消</button>
+                    </div>
+                  ) : (
+                    <>
+                      <button onClick={() => setResetId(acc.id)}
+                        className="text-[10px] px-2 py-1 rounded shrink-0"
+                        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>重置密码</button>
+                      <button
+                        onClick={() => { if (window.confirm(`删除账户「${acc.username}」？`)) deleteMutation.mutate({ id: acc.id }); }}
+                        className="text-[10px] px-2 py-1 rounded shrink-0"
+                        style={{ backgroundColor: 'rgba(239,68,68,0.15)', color: '#ef4444' }}>删除</button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          只读账户可浏览知识库、搜索、问答，但不能新建/修改/删除文档和设置。主管理员账户（环境变量配置）不受此管理。
+        </div>
+      </div>
     </div>
   );
 }

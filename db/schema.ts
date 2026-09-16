@@ -300,6 +300,15 @@ export const kbSearchEvents = sqliteTable("kb_search_events", {
 export type KbReviewItem = typeof kbReviewItems.$inferSelect;
 
 // ========== 工作流表 ==========
+export const localAccounts = sqliteTable("local_accounts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  username: text("username").notNull().unique(),
+  passwordHash: text("passwordHash").notNull(),
+  role: text("role", { enum: ["admin", "viewer"] }).default("viewer").notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  lastSignInAt: integer("lastSignInAt", { mode: "timestamp_ms" }),
+});
+
 export const workflows = sqliteTable("workflows", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),

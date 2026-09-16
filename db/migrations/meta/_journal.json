@@ -43,6 +43,13 @@
       "when": 1789553727456,
       "tag": "0005_spotty_rattler",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1789556828756,
+      "tag": "0006_fine_calypso",
+      "breakpoints": true
     }
   ]
 }

@@ -13,6 +13,28 @@ import {
 } from "./local-auth";
 import { createRouter, publicQuery, adminQuery } from "./middleware";
 import { env } from "./lib/env";
+import bcrypt from "bcryptjs";
+import { eq } from "drizzle-orm";
+import { getDb } from "./queries/connection";
+import { localAccounts } from "@db/schema";
+import { logAction } from "./lib/audit";
+
+/** 多用户登录校验：命中 local_accounts 返回角色，否则返回 undefined 走管理员回退 */
+async function verifyLocalAccount(
+  username: string,
+  password: string,
+): Promise<"admin" | "viewer" | undefined> {
+  const db = getDb();
+  const rows = await db.select().from(localAccounts)
+    .where(eq(localAccounts.username, username));
+  const account = rows[0];
+  if (!account) return undefined;
+  const ok = await bcrypt.compare(password, account.passwordHash);
+  if (!ok) return undefined;
+  await db.update(localAccounts).set({ lastSignInAt: new Date() })
+    .where(eq(localAccounts.id, account.id));
+  return account.role;
+}
 
 export const authRouter = createRouter({
   // 获取当前用户信息 - 使用 publicQuery，未登录返回 null
@@ -30,19 +52,28 @@ export const authRouter = createRouter({
     )
     .mutation(async ({ input, ctx }) => {
       assertTrustedMutationRequest(ctx.req);
-      const valid = await verifyAdminCredentials(
-        input.username,
-        input.password,
-        getClientIp(ctx.req.headers),
-      );
-      if (!valid) {
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "账号或密码错误",
-        });
+
+      // 多用户：先查 local_accounts（管理员创建的账户）
+      const accountRole = await verifyLocalAccount(input.username, input.password);
+      let role: "admin" | "viewer";
+      if (accountRole) {
+        role = accountRole;
+      } else {
+        const valid = await verifyAdminCredentials(
+          input.username,
+          input.password,
+          getClientIp(ctx.req.headers),
+        );
+        if (!valid) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "账号或密码错误",
+          });
+        }
+        role = "admin";
       }
 
-      const token = await signLocalToken(input.username);
+      const token = await signLocalToken(input.username, role);
       const opts = getSessionCookieOptions(ctx.req.headers);
       ctx.resHeaders.append(
         "set-cookie",
@@ -59,9 +90,78 @@ export const authRouter = createRouter({
         success: true,
         user: {
           name: input.username,
-          role: "admin",
+          role,
         },
       };
+    }),
+
+  // ========== 多用户账户管理（admin） ==========
+
+  listAccounts: adminQuery.query(async () => {
+    const db = getDb();
+    const rows = await db.select({
+      id: localAccounts.id,
+      username: localAccounts.username,
+      role: localAccounts.role,
+      createdAt: localAccounts.createdAt,
+      lastSignInAt: localAccounts.lastSignInAt,
+    }).from(localAccounts).orderBy(localAccounts.id);
+    return rows;
+  }),
+
+  createAccount: adminQuery
+    .input(z.object({
+      username: z.string().min(2, "用户名至少 2 字").max(50),
+      password: z.string().min(8, "密码至少 8 位").max(100),
+      role: z.enum(["admin", "viewer"]).default("viewer"),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      const existing = await db.select({ id: localAccounts.id }).from(localAccounts)
+        .where(eq(localAccounts.username, input.username));
+      if (existing.length > 0) {
+        throw new TRPCError({ code: "CONFLICT", message: "用户名已存在" });
+      }
+      const passwordHash = await bcrypt.hash(input.password, 10);
+      await db.insert(localAccounts).values({
+        username: input.username,
+        passwordHash,
+        role: input.role,
+      });
+      await logAction(ctx.user?.id ?? null, "create", {
+        entityType: "local_account",
+        detail: `创建账户 ${input.username} (${input.role})`,
+      });
+      return { success: true };
+    }),
+
+  deleteAccount: adminQuery
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      await db.delete(localAccounts).where(eq(localAccounts.id, input.id));
+      await logAction(ctx.user?.id ?? null, "delete", {
+        entityType: "local_account",
+        detail: `删除账户 #${input.id}`,
+      });
+      return { success: true };
+    }),
+
+  resetAccountPassword: adminQuery
+    .input(z.object({
+      id: z.number().int().positive(),
+      password: z.string().min(8, "密码至少 8 位").max(100),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      const passwordHash = await bcrypt.hash(input.password, 10);
+      await db.update(localAccounts).set({ passwordHash })
+        .where(eq(localAccounts.id, input.id));
+      await logAction(ctx.user?.id ?? null, "update", {
+        entityType: "local_account",
+        detail: `重置账户 #${input.id} 密码`,
+      });
+      return { success: true };
     }),
 
   // 登出 - 使用 publicQuery 让任何人都能调用登出
