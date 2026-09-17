@@ -43,6 +43,7 @@ vi.mock("mysql2/promise", () => ({
 }));
 
 import { backupRouter } from "./backup-router";
+import { nextCronTime } from "./lib/backup-scheduler";
 import { executeRestore } from "./backup-repositories/restore";
 import { registerBackupRepository, type BackupRepository } from "./backup-repositories/base";
 import { encryptBuffer } from "./backup-repositories/crypto";
@@ -136,6 +137,8 @@ interface FakeDbOptions {
 
 function createFakeDb(options: FakeDbOptions = {}) {
   const restoreUpdates: Record<string, unknown>[] = [];
+  const backupUpdates: Record<string, unknown>[] = [];
+  const insertedBackupValues: Record<string, unknown>[] = [];
   const rowsFor = (table: unknown): unknown[] => {
     if (table === backupJobs) return options.backupJobRows ?? [];
     if (table === backupJobFiles) return options.backupJobFileRows ?? [];
@@ -152,12 +155,16 @@ function createFakeDb(options: FakeDbOptions = {}) {
         };
       }),
     })),
-    insert: vi.fn((_table: unknown) => ({
-      values: vi.fn(() => Promise.resolve([{ insertId: options.insertId ?? 42 }])),
+    insert: vi.fn((table: unknown) => ({
+      values: vi.fn((data: Record<string, unknown>) => {
+        if (table === backupJobs) insertedBackupValues.push(data);
+        return Promise.resolve([{ insertId: options.insertId ?? 42 }]);
+      }),
     })),
     update: vi.fn((table: unknown) => ({
       set: vi.fn((data: Record<string, unknown>) => {
         if (table === restoreJobs) restoreUpdates.push(data);
+        if (table === backupJobs) backupUpdates.push(data);
         return {
           where: vi.fn(() => Promise.resolve([{ affectedRows: 1 }])),
         };
@@ -167,7 +174,7 @@ function createFakeDb(options: FakeDbOptions = {}) {
       where: vi.fn(() => Promise.resolve([{ affectedRows: 1 }])),
     })),
   };
-  return { ...db, restoreUpdates };
+  return { ...db, restoreUpdates, backupUpdates, insertedBackupValues };
 }
 
 /** 最后一次针对 restoreJobs 的 update 数据（含最终 status/manifestVerified）。 */
@@ -274,6 +281,100 @@ describe("backup router target registry", () => {
     env.backupEncryptionKey = "";
     fs.rmSync(path.join(tmpRoot, "staging-1"), { recursive: true, force: true });
     fs.rmSync(path.join(tmpRoot, "staging-42"), { recursive: true, force: true });
+  });
+});
+
+describe("定时计划的 nextRunAt 维护", () => {
+  beforeEach(() => {
+    fs.mkdirSync(tmpRoot, { recursive: true });
+    vi.mocked(authenticateApiKey).mockResolvedValue({ user: fakeUser(), auth: adminContext().auth });
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
+    env.backupEncryptionKey = "test-encryption-key";
+    registerBackupRepository("alist", fakeRepo());
+    mockedCreatePool.mockReturnValue(fakeDbPool() as never);
+  });
+
+  afterEach(() => {
+    env.backupEncryptionKey = "";
+  });
+
+  it("nextCronTime 返回严格晚于当前时刻的下一次匹配时间", () => {
+    const now = new Date("2026-09-17T10:37:12Z");
+    const next = nextCronTime("0 2 * * *", now)!;
+    expect(next.getTime()).toBeGreaterThan(now.getTime());
+    expect(next.getMinutes()).toBe(0);
+    // 与本地时区无关：下一次 02:00 必然落在未来 24 小时内
+    expect(next.getTime() - now.getTime()).toBeLessThanOrEqual(24 * 60 * 60 * 1000);
+
+    // 对齐到分钟边界：10:37:12 → 10:38:00（48 秒后），而不是整 60 秒
+    const everyMinute = nextCronTime("* * * * *", now)!;
+    expect(everyMinute.getSeconds()).toBe(0);
+    expect(everyMinute.getMilliseconds()).toBe(0);
+    expect(everyMinute.getTime()).toBeGreaterThan(now.getTime());
+    expect(everyMinute.getTime() - now.getTime()).toBeLessThanOrEqual(60_000);
+  });
+
+  it("创建已启用的定时计划时写入 nextRunAt（否则调度器永远选不中）", async () => {
+    const fakeDb = createFakeDb({ backupJobRows: [sampleBackupJob({ id: 7 })], insertId: 7 });
+    vi.mocked(getDb).mockReturnValue(fakeDb as never);
+
+    await caller().create({
+      target: "alist",
+      sourcePath: "bundle",
+      config: { url: "https://alist.example.com/dav", username: "user", password: "pw" },
+      cron: "0 2 * * *",
+      enabled: true,
+    });
+
+    const inserted = fakeDb.insertedBackupValues.at(-1)!;
+    expect(inserted.cron).toBe("0 2 * * *");
+    expect(inserted.enabled).toBe("true");
+    const next = inserted.nextRunAt as Date;
+    expect(next).toBeInstanceOf(Date);
+    expect(next.getTime()).toBeGreaterThan(Date.now());
+    expect(next.getMinutes()).toBe(0);
+  });
+
+  it("创建但未启用时 nextRunAt 为 null", async () => {
+    const fakeDb = createFakeDb({ backupJobRows: [sampleBackupJob({ id: 8 })], insertId: 8 });
+    vi.mocked(getDb).mockReturnValue(fakeDb as never);
+
+    await caller().create({
+      target: "alist",
+      sourcePath: "bundle",
+      config: { url: "https://alist.example.com/dav", username: "user", password: "pw" },
+      cron: "0 2 * * *",
+      enabled: false,
+    });
+
+    expect(fakeDb.insertedBackupValues.at(-1)!.nextRunAt).toBeNull();
+  });
+
+  it("改 cron 后 nextRunAt 重算到新时间点", async () => {
+    const row = sampleBackupJob({ id: 5, cron: "0 2 * * *", enabled: "true", nextRunAt: new Date() });
+    const fakeDb = createFakeDb({ backupJobRows: [row] });
+    vi.mocked(getDb).mockReturnValue(fakeDb as never);
+
+    await caller().updateSchedule({ id: 5, cron: "30 3 * * *" });
+
+    const updated = fakeDb.backupUpdates.at(-1)!;
+    expect(updated.cron).toBe("30 3 * * *");
+    const next = updated.nextRunAt as Date;
+    expect(next).toBeInstanceOf(Date);
+    expect(next.getMinutes()).toBe(30);
+    expect(next.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("禁用计划时 nextRunAt 置空（不再参与调度）", async () => {
+    const row = sampleBackupJob({ id: 5, cron: "0 2 * * *", enabled: "true", nextRunAt: new Date() });
+    const fakeDb = createFakeDb({ backupJobRows: [row] });
+    vi.mocked(getDb).mockReturnValue(fakeDb as never);
+
+    await caller().updateSchedule({ id: 5, enabled: false });
+
+    const updated = fakeDb.backupUpdates.at(-1)!;
+    expect(updated.enabled).toBe("false");
+    expect(updated.nextRunAt).toBeNull();
   });
 });
 

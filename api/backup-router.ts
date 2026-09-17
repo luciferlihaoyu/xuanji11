@@ -9,6 +9,7 @@ import { env } from "./lib/env";
 import { hasPathTraversal } from "./lib/backup-path";
 import { getBackupRepository } from "./backup-repositories/base";
 import { executeBackup, executeRestore, serializeBackupJob } from "./backup-repositories/execution";
+import { nextCronTime } from "./lib/backup-scheduler";
 
 const BACKUP_TARGETS = ["alist", "nas", "local"] as const;
 
@@ -118,6 +119,9 @@ export const backupRouter = createRouter({
         values.keepLastN = input.keepLastN;
         values.maxRetries = input.maxRetries;
         values.retryCount = 0;
+        // 调度器按 `enabled='true' AND nextRunAt <= now` 选计划，nextRunAt 为 NULL 时
+        // SQL 比较结果为假 → 新建的计划永远不会触发。创建时就要定好首次运行时间。
+        values.nextRunAt = input.enabled ? nextCronTime(input.cron as string, new Date()) : null;
       }
 
       const result = await db.insert(backupJobs).values(values);
@@ -156,6 +160,15 @@ export const backupRouter = createRouter({
       if (data.keepLastN !== undefined) setData.keepLastN = data.keepLastN;
       if (data.maxRetries !== undefined) setData.maxRetries = data.maxRetries;
       if (data.config !== undefined) setData.config = data.config;
+
+      // 改 cron 或启停时必须同步重算 nextRunAt，否则改了时间也不生效（或一直为 NULL 永不触发）
+      if (data.cron !== undefined || data.enabled !== undefined) {
+        const [existing] = await db.select().from(backupJobs).where(eq(backupJobs.id, id));
+        const cron = data.cron ?? existing?.cron ?? null;
+        const enabled = data.enabled ?? (existing?.enabled === "true");
+        setData.nextRunAt = enabled && cron ? nextCronTime(cron, new Date()) : null;
+      }
+
       await db.update(backupJobs).set(clean(setData)).where(eq(backupJobs.id, id));
       // 审计只记录 key，config（可能含凭据）不落 audit
       await logAudit(ctx, "backup_job", "update", id, {

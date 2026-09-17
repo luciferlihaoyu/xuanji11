@@ -43,7 +43,7 @@ function matchCron(schedule: string, date: Date): boolean {
   );
 }
 
-function nextCronTime(schedule: string, after: Date): Date | null {
+export function nextCronTime(schedule: string, after: Date): Date | null {
   const candidate = new Date(after.getTime());
   candidate.setSeconds(0, 0);
   candidate.setMinutes(candidate.getMinutes() + 1);
