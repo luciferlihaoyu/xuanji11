@@ -646,4 +646,39 @@ describe("版本化快照目录（runDir）", () => {
     await vi.waitFor(() => expect(uploadMock).toHaveBeenCalled());
     expect((uploadMock.mock.calls[0][0] as Record<string, unknown>).runDir).toBeUndefined();
   });
+
+  it("恢复时按 manifest.remoteDir 回到该次运行的快照目录", async () => {
+    const readMock = vi.fn().mockResolvedValue(null);
+    registerBackupRepository("alist", fakeRepo({ readFile: readMock }));
+    const fakeDb = createFakeDb({
+      backupJobRows: [
+        sampleBackupJob({
+          id: 5,
+          manifest: { remoteDir: "2026-09-17T05-23-00", files: [], total: 0, done: 0, failed: 0 },
+        }),
+      ],
+      restoreJobRows: [sampleRestoreJob({ id: 3, backupJobId: 5 })],
+    });
+    vi.mocked(getDb).mockReturnValue(fakeDb as never);
+
+    await executeRestore(3);
+
+    expect(readMock).toHaveBeenCalled();
+    expect((readMock.mock.calls[0][0] as Record<string, unknown>).runDir).toBe("2026-09-17T05-23-00");
+  });
+
+  it("旧版（无 remoteDir）作业恢复时不注入 runDir（向后兼容）", async () => {
+    const readMock = vi.fn().mockResolvedValue(null);
+    registerBackupRepository("alist", fakeRepo({ readFile: readMock }));
+    const fakeDb = createFakeDb({
+      backupJobRows: [sampleBackupJob({ id: 6, manifest: { files: [], total: 0, done: 0, failed: 0 } })],
+      restoreJobRows: [sampleRestoreJob({ id: 4, backupJobId: 6 })],
+    });
+    vi.mocked(getDb).mockReturnValue(fakeDb as never);
+
+    await executeRestore(4);
+
+    expect(readMock).toHaveBeenCalled();
+    expect((readMock.mock.calls[0][0] as Record<string, unknown>).runDir).toBeUndefined();
+  });
 });
