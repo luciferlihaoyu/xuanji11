@@ -14,7 +14,7 @@ import * as path from "path";
 import { promises as fsp } from "fs";
 import { env } from "../lib/env";
 import { hasPathTraversal, sanitizeRelativePath } from "../lib/backup-path";
-import { getBackupRepository, type BackupRepository } from "./base";
+import { formatRunDir, getBackupRepository, type BackupRepository } from "./base";
 import { encryptBuffer, encryptFileToFile } from "./crypto";
 import { buildBackupBundle, type BackupManifest } from "./bundle";
 import { sha256, walkDir } from "./shared";
@@ -162,6 +162,9 @@ async function executeBackupToRepository(
   const config = effectiveRepoConfig(job.target, job.id, job.config ?? {});
   Object.assign(config, connectorConfig);
   const encrypt = job.target === "alist";
+  // 版本化备份：整次运行固定在一个快照目录里（仓库不支持则该能力自动关闭，行为回到旧版）
+  const runDir = repo.supportsRunDirs === true ? formatRunDir(new Date()) : null;
+  if (runDir) config.runDir = runDir;
   if (encrypt && env.backupEncryptionKey.length === 0) {
     throw new Error("BACKUP_ENCRYPTION_KEY 未配置，拒绝执行 AList 备份（加密策略要求）");
   }
@@ -211,7 +214,14 @@ async function executeBackupToRepository(
       .set({
         status,
         progress: 100,
-        manifest: { files: manifestFiles, total: manifestFiles.length, done: doneCount, failed: failedCount },
+        manifest: {
+          files: manifestFiles,
+          total: manifestFiles.length,
+          done: doneCount,
+          failed: failedCount,
+          // 恢复时靠它回到本次运行的快照目录
+          ...(runDir ? { remoteDir: runDir } : {}),
+        },
         error: failedCount > 0 ? `${failedCount} 个文件备份失败` : null,
         completedAt: new Date(),
         retryCount: 0,

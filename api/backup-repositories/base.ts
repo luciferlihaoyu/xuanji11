@@ -24,6 +24,31 @@ export interface BackupRepository {
   deleteFile(config: Record<string, unknown>, remoteRelPath: string): Promise<void>;
   /** 列出 basePath（或子目录）下的相对路径（仅文件，不含目录） */
   listFiles(config: Record<string, unknown>, remoteRelPath?: string): Promise<string[]>;
+  /**
+   * 是否支持「每次运行独立快照目录」（版本化备份）。
+   * 支持时执行层会给 config 注入 runDir，该次运行的全部文件都落在 basePath/runDir 下。
+   */
+  readonly supportsRunDirs?: boolean;
+  /**
+   * 清理历史快照目录，只保留最新 keepLastN 份（可选能力）。
+   * 删除权限不足时应把失败明细放进 failures 返回，而不是抛错——备份本身已经成功。
+   */
+  pruneRuns?(config: Record<string, unknown>, keepLastN: number): Promise<PruneRunsResult>;
+}
+
+/** 远端快照清理结果 */
+export interface PruneRunsResult {
+  /** 成功删除的快照目录名 */
+  deleted: string[];
+  /** 保留（未删除）的快照目录数 */
+  kept: number;
+  /** 删除失败的明细（如权限不足） */
+  failures: string[];
+}
+
+/** 快照目录名约定：2026-09-17T05-23-00（UTC，可字典序排序 = 时间序） */
+export function formatRunDir(from: Date): string {
+  return from.toISOString().replace(/\.\d{3}Z$/, "").replace(/:/g, "-");
 }
 
 const registry = new Map<string, BackupRepository>();

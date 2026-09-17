@@ -294,4 +294,105 @@ describe("分片文件读取（回归：readFile 曾因自探清单而无限递�
 
     expect(buf?.toString()).toBe("hello");
   });
+
+  describe("版本化快照目录（runDir）", () => {
+    it("runDir 注入后上传落在 <basePath>/<runDir>/ 下", async () => {
+      routeFetch(fetchMock);
+      await alistRepository.uploadFile(
+        config({ url: "https://alist.example.com/backup/xuanji", runDir: "2026-09-17T05-23-00" }),
+        "sub/file.txt",
+        Buffer.from("data")
+      );
+      const [, putInit] = callsTo(fetchMock, "/api/fs/put")[0];
+      const headers = putInit.headers as Record<string, string>;
+      expect(decodeURIComponent(headers["File-Path"])).toBe("/backup/xuanji/2026-09-17T05-23-00/sub/file.txt");
+    });
+
+    it("runDir 含路径穿越时视为配置无效，拒绝上传", async () => {
+      routeFetch(fetchMock);
+      await expect(
+        alistRepository.uploadFile(config({ runDir: "../../etc" }), "a.txt", Buffer.from("x"))
+      ).rejects.toThrow(/配置无效/);
+      expect(callsTo(fetchMock, "/api/fs/put")).toHaveLength(0);
+    });
+
+    it("读取也落在同一快照目录内（恢复路径一致）", async () => {
+      routeFetch(fetchMock, {
+        "/api/fs/get": () => json({ code: 200, message: "success", data: { raw_url: "https://alist.example.com/d/x" } }),
+      });
+      fetchMock.mockImplementation((url: string, init: RequestInit) => {
+        if (url.includes("/api/auth/login")) return Promise.resolve(loginOk());
+        if (url.includes("/api/fs/get")) {
+          const path = JSON.parse(String(init.body)).path as string;
+          expect(path).toBe("/backup/xuanji/2026-09-17T05-23-00/xuanji.db");
+          return Promise.resolve(json({ code: 200, message: "success", data: { raw_url: "https://alist.example.com/d/x" } }));
+        }
+        return Promise.resolve(new Response("hello"));
+      });
+      const buf = await alistRepository.readFile(
+        config({ url: "https://alist.example.com/backup/xuanji", runDir: "2026-09-17T05-23-00" }),
+        "xuanji.db"
+      );
+      expect(buf?.toString()).toBe("hello");
+    });
+  });
+
+  describe("远端快照目录保留策略（pruneRuns）", () => {
+    function listHandler(root: [string, boolean][]) {
+      return (init: RequestInit) => {
+        const path = JSON.parse(String(init.body)).path as string;
+        if (path.endsWith("/2026-09-15T02-00-00")) {
+          return json({
+            code: 200,
+            message: "success",
+            data: { content: [{ name: "xuanji.db", is_dir: false }, { name: "uploads", is_dir: true }] },
+          });
+        }
+        if (path.endsWith("/2026-09-15T02-00-00/uploads")) {
+          return json({ code: 200, message: "success", data: { content: [{ name: "a.md", is_dir: false }] } });
+        }
+        return json({ code: 200, message: "success", data: { content: root.map(([name, is_dir]) => ({ name, is_dir })) } });
+      };
+    }
+    const root: [string, boolean][] = [
+      ["2026-09-17T05-23-00", true],
+      ["2026-09-16T02-00-00", true],
+      ["2026-09-15T02-00-00", true],
+      ["loose.txt", false],
+      ["uploads", true],
+    ];
+
+    it("只保留最新 N 份，其余按目录自底向上递归删除", async () => {
+      routeFetch(fetchMock, { "/api/fs/list": listHandler(root) });
+      const result = await alistRepository.pruneRuns!(config({ url: "https://alist.example.com/backup/xuanji" }), 2);
+      expect(result.kept).toBe(2);
+      expect(result.deleted).toEqual(["2026-09-15T02-00-00"]);
+      expect(result.failures).toEqual([]);
+      const removes = callsTo(fetchMock, "/api/fs/remove").map(([, init]) => JSON.parse(String(init.body)));
+      expect(removes).toEqual([
+        { dir: "/backup/xuanji/2026-09-15T02-00-00", names: ["xuanji.db"] },
+        { dir: "/backup/xuanji/2026-09-15T02-00-00/uploads", names: ["a.md"] },
+        { dir: "/backup/xuanji/2026-09-15T02-00-00", names: ["uploads"] },
+        { dir: "/backup/xuanji", names: ["2026-09-15T02-00-00"] },
+      ]);
+    });
+
+    it("删除被拒（403）时不抛错，仅记入 failures", async () => {
+      routeFetch(fetchMock, {
+        "/api/fs/list": listHandler(root),
+        "/api/fs/remove": () => json({ code: 403, message: "permission denied" }),
+      });
+      const result = await alistRepository.pruneRuns!(config({ url: "https://alist.example.com/backup/xuanji" }), 2);
+      expect(result.deleted).toEqual([]);
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]).toContain("permission denied");
+    });
+
+    it("份数不超过 N 时一个也不删", async () => {
+      routeFetch(fetchMock, { "/api/fs/list": listHandler([["2026-09-17T05-23-00", true]]) });
+      const result = await alistRepository.pruneRuns!(config({ url: "https://alist.example.com/backup/xuanji" }), 3);
+      expect(result.deleted).toEqual([]);
+      expect(callsTo(fetchMock, "/api/fs/remove")).toHaveLength(0);
+    });
+  });
 });

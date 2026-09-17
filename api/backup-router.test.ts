@@ -586,3 +586,64 @@ describe("executeRestore uses the backup job's original target repository", () =
     env.backupEncryptionKey = "";
   });
 });
+
+describe("版本化快照目录（runDir）", () => {
+  beforeEach(() => {
+    fs.mkdirSync(tmpRoot, { recursive: true });
+    vi.mocked(authenticateApiKey).mockResolvedValue({ user: fakeUser(), auth: adminContext().auth });
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
+    env.backupEncryptionKey = "test-encryption-key";
+    mockedCreatePool.mockReturnValue(fakeDbPool() as never);
+  });
+
+  afterEach(() => {
+    env.backupEncryptionKey = "";
+    fs.rmSync(path.join(tmpRoot, "staging-1"), { recursive: true, force: true });
+  });
+
+  it("支持快照目录的仓库：同一次运行共用一个 runDir，并把 remoteDir 记入 manifest", async () => {
+    const repo = fakeRepo({ supportsRunDirs: true });
+    registerBackupRepository("alist", repo);
+    const jobRow = sampleBackupJob({ target: "alist" });
+    const fakeDb = createFakeDb({ backupJobRows: [jobRow], insertId: 1 });
+    vi.mocked(getDb).mockReturnValue(fakeDb as never);
+
+    await caller().create({
+      target: "alist",
+      sourcePath: "bundle",
+      config: { url: "https://alist.example.com/dav", username: "user", password: "pw" },
+    });
+
+    const uploadMock = vi.mocked(repo.uploadFile);
+    await vi.waitFor(() => expect(uploadMock).toHaveBeenCalled());
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const runDirs = new Set(uploadMock.mock.calls.map((c) => (c[0] as Record<string, unknown>).runDir));
+    expect(runDirs.size).toBe(1);
+    const runDir = [...runDirs][0];
+    expect(String(runDir)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$/);
+
+    const manifestUpdate = fakeDb.backupUpdates.find(
+      (u) => Boolean((u.manifest as { files?: unknown[] } | undefined)?.files?.length)
+    );
+    expect((manifestUpdate?.manifest as Record<string, unknown>).remoteDir).toBe(runDir);
+  });
+
+  it("不支持快照目录的仓库：不注入 runDir（旧行为不变）", async () => {
+    const repo = fakeRepo();
+    registerBackupRepository("alist", repo);
+    const jobRow = sampleBackupJob({ target: "alist" });
+    const fakeDb = createFakeDb({ backupJobRows: [jobRow], insertId: 1 });
+    vi.mocked(getDb).mockReturnValue(fakeDb as never);
+
+    await caller().create({
+      target: "alist",
+      sourcePath: "bundle",
+      config: { url: "https://alist.example.com/dav", username: "user", password: "pw" },
+    });
+
+    const uploadMock = vi.mocked(repo.uploadFile);
+    await vi.waitFor(() => expect(uploadMock).toHaveBeenCalled());
+    expect((uploadMock.mock.calls[0][0] as Record<string, unknown>).runDir).toBeUndefined();
+  });
+});

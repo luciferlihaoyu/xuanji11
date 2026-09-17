@@ -15,7 +15,7 @@
 import { z } from "zod";
 import { sanitizeRelativePath } from "../lib/backup-path";
 import { assertEgressAllowed } from "../lib/egress";
-import type { BackupRepository } from "./base";
+import type { BackupRepository, PruneRunsResult } from "./base";
 
 const TIMEOUT_MS = 30_000;
 
@@ -110,6 +110,9 @@ export class AlistError extends Error {
   }
 }
 
+/** 快照目录名：只允许 formatRunDir 产出的时间戳形态，杜绝路径穿越 */
+const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$/;
+
 function parseConfig(config: Record<string, unknown>): AlistConfig | null {
   const result = alistConfigSchema.safeParse(config);
   if (!result.success) return null;
@@ -119,9 +122,13 @@ function parseConfig(config: Record<string, unknown>): AlistConfig | null {
   // 兼容旧的 WebDAV 写法：剥掉 /dav 前缀，剩余部分作为备份目录
   if (pathname === "/dav") pathname = "";
   else if (pathname.startsWith("/dav/")) pathname = pathname.slice("/dav".length);
+  // 版本化：本次运行的 runDir 直接拼进 basePath，上传/读取/删除全部自动落在该快照目录内
+  const runDir = typeof config.runDir === "string" ? config.runDir.trim() : "";
+  if (runDir && !RUN_DIR_PATTERN.test(runDir)) return null;
+  const basePath = runDir ? joinFsPath(pathname || "/", runDir) : pathname || "/";
   return {
     baseUrl: u.origin,
-    basePath: pathname || "/",
+    basePath,
     username,
     password,
   };
@@ -226,6 +233,33 @@ async function ensureDir(cfg: AlistConfig, token: string, dir: string): Promise<
 }
 
 /** 裸取远端单个文件（不做分片探测）：readFile / deleteFile 共用，杜绝递归自探 */
+/** AList 删除（一次调用可带多个名字）；code != 200 视为失败并带上服务端消息 */
+async function fsRemove(cfg: AlistConfig, token: string, dir: string, names: string[]): Promise<void> {
+  const res = await fetch(`${cfg.baseUrl}/api/fs/remove`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: token },
+    body: JSON.stringify({ dir, names }),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  const payload = (await res.json().catch(() => null)) as { code?: number; message?: string } | null;
+  if (!res.ok) throw new AlistError(res.status, "REMOVE", dir);
+  if (payload && payload.code !== 200) {
+    throw new Error(`AList 删除失败 (${dir})${payload.message ? `: ${payload.message}` : ""}`);
+  }
+}
+
+/** 递归删除目录：先删子项（自底向上），最后删目录本身 */
+async function removeTree(cfg: AlistConfig, token: string, absPath: string, depth = 0): Promise<void> {
+  if (depth > MAX_PRUNE_DEPTH) throw new Error(`目录层级超过 ${MAX_PRUNE_DEPTH} 层，放弃递归删除：${absPath}`);
+  const items = await fsList(cfg, token, absPath);
+  const files = items.filter((i) => !i.is_dir).map((i) => i.name);
+  if (files.length > 0) await fsRemove(cfg, token, absPath, files);
+  for (const dir of items.filter((i) => i.is_dir)) {
+    await removeTree(cfg, token, joinFsPath(absPath, dir.name), depth + 1);
+    await fsRemove(cfg, token, absPath, [dir.name]);
+  }
+}
+
 async function fetchWholeFile(cfg: AlistConfig, safePath: string): Promise<Buffer | null> {
   const target = joinFsPath(cfg.basePath, safePath);
   const token = await login(cfg);
@@ -255,8 +289,41 @@ async function fetchWholeFile(cfg: AlistConfig, safePath: string): Promise<Buffe
   return Buffer.from(await fileRes.arrayBuffer());
 }
 
+const MAX_PRUNE_DEPTH = 8;
+
 export const alistRepository: BackupRepository = {
   name: "AList 网盘",
+
+  supportsRunDirs: true,
+
+  /**
+   * 版本化备份的远端保留策略：basePath 下每个 runDir 是一份完整快照，
+   * 只保留最新 keepLastN 份，其余递归删除。删除权限不足时记入 failures 而不抛错。
+   */
+  async pruneRuns(config: Record<string, unknown>, keepLastN: number): Promise<PruneRunsResult> {
+    // 关键：清理视角必须站在「父目录」上，所以丢掉调用方可能带上的 runDir
+    const { runDir: _ignored, ...parentConfig } = config;
+    const cfg = requireConfig(parentConfig);
+    const keep = Math.max(1, Math.floor(keepLastN) || 1);
+    const token = await login(cfg);
+    const items = await fsList(cfg, token, cfg.basePath);
+    const runs = items
+      .filter((i) => i.is_dir && RUN_DIR_PATTERN.test(i.name))
+      .map((i) => i.name)
+      .sort()
+      .reverse();
+    const result: PruneRunsResult = { deleted: [], kept: Math.min(runs.length, keep), failures: [] };
+    for (const name of runs.slice(keep)) {
+      try {
+        await removeTree(cfg, token, joinFsPath(cfg.basePath, name));
+        await fsRemove(cfg, token, cfg.basePath, [name]);
+        result.deleted.push(name);
+      } catch (err) {
+        result.failures.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return result;
+  },
 
   async testConnection(config: Record<string, unknown>): Promise<{ success: boolean; message: string }> {
     const cfg = parseConfig(config);

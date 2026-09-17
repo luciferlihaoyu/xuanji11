@@ -22,6 +22,7 @@ vi.mock("../queries/connection", () => ({
 }));
 
 import { applyRetention } from "./backup-scheduler";
+import { registerBackupRepository, type BackupRepository } from "../backup-repositories/base";
 import { getDb } from "../queries/connection";
 
 interface FakeJob {
@@ -119,3 +120,65 @@ describe("applyRetention N+1 批量化", () => {
 // 极简断言：条件对象存在即可（具体表达式由 drizzle 内部处理）
 function deleteFilesArgs0HasIdArray(_cond: unknown): boolean { return true; }
 function deleteJobsArgs0HasIdArray(_cond: unknown): boolean { return true; }
+
+describe("远端版本化快照清理", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function fakeRepo(overrides: Partial<BackupRepository> = {}): BackupRepository {
+    return {
+      name: "Fake Repo",
+      testConnection: vi.fn().mockResolvedValue({ success: true, message: "ok" }),
+      ensureBasePath: vi.fn().mockResolvedValue(undefined),
+      uploadFile: vi.fn().mockResolvedValue(undefined),
+      readFile: vi.fn().mockResolvedValue(null),
+      deleteFile: vi.fn().mockResolvedValue(undefined),
+      listFiles: vi.fn().mockResolvedValue([]),
+      ...overrides,
+    };
+  }
+
+  const schedule: FakeJob = {
+    id: 7,
+    target: "alist",
+    sourcePath: "/data/app",
+    status: "pending",
+    completedAt: new Date("2026-09-17T02:00:00Z"),
+    keepLastN: 3,
+  };
+
+  it("按 keepLastN 触发远端快照清理", async () => {
+    const pruneRuns = vi.fn().mockResolvedValue({ deleted: ["2026-09-15T02-00-00"], kept: 2, failures: [] });
+    registerBackupRepository("alist", fakeRepo({ pruneRuns }));
+    const { db } = makeFakeDb(schedule, []);
+    vi.mocked(getDb).mockReturnValue(db as never);
+
+    await applyRetention(7);
+
+    expect(pruneRuns).toHaveBeenCalledTimes(1);
+    expect(pruneRuns.mock.calls[0][1]).toBe(3);
+  });
+
+  it("删除权限不足（failures）不影响 applyRetention 正常返回", async () => {
+    const pruneRuns = vi.fn().mockResolvedValue({
+      deleted: [],
+      kept: 3,
+      failures: ["2026-09-15T02-00-00: permission denied"],
+    });
+    registerBackupRepository("alist", fakeRepo({ pruneRuns }));
+    const { db } = makeFakeDb(schedule, []);
+    vi.mocked(getDb).mockReturnValue(db as never);
+
+    await expect(applyRetention(7)).resolves.toBeUndefined();
+    expect(pruneRuns).toHaveBeenCalledTimes(1);
+  });
+
+  it("远端清理抛错被吞掉（不连带备份失败）", async () => {
+    const pruneRuns = vi.fn().mockRejectedValue(new Error("AList 连接失败"));
+    registerBackupRepository("alist", fakeRepo({ pruneRuns }));
+    const { db } = makeFakeDb(schedule, []);
+    vi.mocked(getDb).mockReturnValue(db as never);
+
+    await expect(applyRetention(7)).resolves.toBeUndefined();
+    expect(pruneRuns).toHaveBeenCalledTimes(1);
+  });
+});

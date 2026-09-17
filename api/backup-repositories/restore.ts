@@ -32,6 +32,15 @@ interface RestoreManifest {
   readonly files?: readonly ManifestFileEntry[];
 }
 
+/**
+ * 版本化备份：该次运行的快照目录记录在作业 manifest.remoteDir 上，
+ * 恢复时必须回到同一目录读文件，否则会读到别的版本或空目录。
+ */
+function withRunDir(config: Record<string, unknown>, manifest: unknown): Record<string, unknown> {
+  const remoteDir = (manifest as { remoteDir?: unknown } | null | undefined)?.remoteDir;
+  return typeof remoteDir === "string" && remoteDir.length > 0 ? { ...config, runDir: remoteDir } : config;
+}
+
 function parseManifest(buffer: Buffer): RestoreManifest | null {
   try {
     const obj = JSON.parse(buffer.toString("utf8")) as unknown;
@@ -220,7 +229,10 @@ export async function executeRestore(restoreJobId: number): Promise<void> {
     let stats: RestoreStats;
     const repo = getBackupRepository(backupJob.target);
     if (repo) {
-      const config = effectiveRepoConfig(backupJob.target, backupJob.id, backupJob.config ?? {});
+      const config = withRunDir(
+        effectiveRepoConfig(backupJob.target, backupJob.id, backupJob.config ?? {}),
+        backupJob.manifest
+      );
       const manifestBuf = await repo.readFile(config, "manifest.json");
       let resolvedManifest: RestoreManifest | null = null;
       if (manifestBuf) {

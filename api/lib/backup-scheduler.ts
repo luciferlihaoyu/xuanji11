@@ -1,7 +1,9 @@
 import { eq, and, inArray, lte, desc } from "drizzle-orm";
 import { getDb } from "../queries/connection";
 import { backupJobs, backupJobFiles } from "@db/schema";
-import { executeBackup } from "../backup-repositories/execution";
+import { executeBackup, effectiveRepoConfig } from "../backup-repositories/execution";
+import { getBackupRepository } from "../backup-repositories/base";
+import type { BackupJob } from "@db/schema";
 
 function parseCronField(field: string, min: number, max: number): number[] {
   if (field === "*") {
@@ -60,10 +62,36 @@ async function executeBackupJob(jobId: number, connectorConfig: Record<string, u
   await executeBackup(jobId, connectorConfig);
 }
 
+/**
+ * 远端版本化快照清理：basePath 下每个 runDir 是一份完整快照，只保留最新 keepLastN 份。
+ * 删除需要网盘删除权限；任何失败只告警——备份本身已经成功，清理不该把它变成失败。
+ */
+async function pruneRemoteRuns(schedule: BackupJob, keepLastN: number): Promise<void> {
+  const repo = getBackupRepository(schedule.target);
+  if (!repo?.pruneRuns) return;
+  try {
+    const config = effectiveRepoConfig(schedule.target, schedule.id, schedule.config ?? {});
+    const result = await repo.pruneRuns(config, keepLastN);
+    if (result.deleted.length > 0) {
+      console.log(`[BackupScheduler] 远端快照清理：删除 ${result.deleted.length} 份，保留 ${result.kept} 份`);
+    }
+    if (result.failures.length > 0) {
+      console.warn(
+        `[BackupScheduler] 远端快照删除失败 ${result.failures.length} 份（通常为网盘账号缺少删除权限）：${result.failures.join("; ")}`
+      );
+    }
+  } catch (err) {
+    console.warn(`[BackupScheduler] 远端快照清理异常（不影响备份结果）：${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 export async function applyRetention(scheduleJobId: number): Promise<void> {
   const db = getDb();
   const [schedule] = await db.select().from(backupJobs).where(eq(backupJobs.id, scheduleJobId));
   if (!schedule || !schedule.keepLastN || schedule.keepLastN <= 0) return;
+
+  // 远端快照先清理（与本地记录清理相互独立）
+  await pruneRemoteRuns(schedule, schedule.keepLastN);
 
   const completed = await db.select().from(backupJobs)
     .where(
