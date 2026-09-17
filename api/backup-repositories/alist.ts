@@ -222,6 +222,36 @@ async function ensureDir(cfg: AlistConfig, token: string, dir: string): Promise<
   ensuredDirs.add(cacheKey);
 }
 
+/** 裸取远端单个文件（不做分片探测）：readFile / deleteFile 共用，杜绝递归自探 */
+async function fetchWholeFile(cfg: AlistConfig, safePath: string): Promise<Buffer | null> {
+  const target = joinFsPath(cfg.basePath, safePath);
+  const token = await login(cfg);
+  await assertEgressAllowed(cfg.baseUrl);
+  // 恢复是慢速下行：给足 5 分钟（分片 ≤10MB，整文件路径也够用）
+  const downloadTimeout = Math.max(TIMEOUT_MS, 5 * 60_000);
+  const res = await fetch(`${cfg.baseUrl}/api/fs/get`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: token },
+    body: JSON.stringify({ path: target }),
+    signal: AbortSignal.timeout(downloadTimeout),
+  });
+  if (!res.ok) throw new AlistError(res.status, "GET", safePath);
+  const payload = (await res.json()) as { code?: number; message?: string; data?: { raw_url?: string } };
+  if (payload.code !== 200) {
+    if (/not found|不存在/i.test(payload.message ?? "")) return null;
+    throw new Error(`AList 读取失败 (${safePath})${payload.message ? `: ${payload.message}` : ""}`);
+  }
+  const rawUrl = payload.data?.raw_url;
+  if (!rawUrl) return null;
+  await assertEgressAllowed(rawUrl);
+  const fileRes = await fetch(rawUrl, { signal: AbortSignal.timeout(downloadTimeout) });
+  if (!fileRes.ok) {
+    if (fileRes.status === 404) return null;
+    throw new AlistError(fileRes.status, "GET", safePath);
+  }
+  return Buffer.from(await fileRes.arrayBuffer());
+}
+
 export const alistRepository: BackupRepository = {
   name: "AList 网盘",
 
@@ -336,51 +366,36 @@ export const alistRepository: BackupRepository = {
     const cfg = requireConfig(config);
     const safePath = sanitizeRelativePath(remoteRelPath);
 
-    // 先查分片清单：大文件以 file.partNNN + file.xjmanifest 存储
-    const manifestBuf = await this.readFile(config, `${safePath}${PARTS_MANIFEST_SUFFIX}`);
+    // 先查分片清单：大文件以 file.partNNN + file.xjmanifest 存储。
+    // 必须用 fetchWholeFile（裸取）：若递归 readFile，探清单的动作本身又会去探
+    // `<清单>.xjmanifest`，无限递归直至栈溢出（实测恢复路径 100% 崩）
+    let manifestBuf: Buffer | null = null;
+    try {
+      manifestBuf = await fetchWholeFile(cfg, `${safePath}${PARTS_MANIFEST_SUFFIX}`);
+    } catch {
+      manifestBuf = null; // 无清单/清单不可读 → 按整文件处理
+    }
     if (manifestBuf) {
+      let parts = 0;
       try {
         const meta = JSON.parse(manifestBuf.toString("utf8")) as { parts?: number };
-        const n = typeof meta.parts === "number" ? meta.parts : 0;
-        if (n > 0) {
-          const chunks: Buffer[] = [];
-          for (let i = 1; i <= n; i++) {
-            const part = await this.readFile(config, `${safePath}.part${String(i).padStart(3, "0")}`);
-            if (!part) throw new Error(`分片缺失: ${safePath}.part${String(i).padStart(3, "0")}`);
-            chunks.push(part);
-          }
-          return Buffer.concat(chunks);
+        parts = typeof meta.parts === "number" ? meta.parts : 0;
+      } catch {
+        parts = 0; // 清单损坏 → 按整文件处理
+      }
+      if (parts > 0) {
+        const chunks: Buffer[] = [];
+        for (let i = 1; i <= parts; i++) {
+          const partName = `${safePath}.part${String(i).padStart(3, "0")}`;
+          const part = await fetchWholeFile(cfg, partName);
+          if (!part) throw new Error(`分片缺失: ${partName}`);
+          chunks.push(part);
         }
-      } catch (err) {
-        if (err instanceof Error && err.message.startsWith("分片缺失")) throw err;
-        // manifest 解析失败按整文件继续
+        return Buffer.concat(chunks);
       }
     }
 
-    const target = joinFsPath(cfg.basePath, safePath);
-    const token = await login(cfg);
-    await assertEgressAllowed(cfg.baseUrl);
-    const res = await fetch(`${cfg.baseUrl}/api/fs/get`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: token },
-      body: JSON.stringify({ path: target }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    if (!res.ok) throw new AlistError(res.status, "GET", safePath);
-    const payload = (await res.json()) as { code?: number; message?: string; data?: { raw_url?: string } };
-    if (payload.code !== 200) {
-      if (/not found|不存在/i.test(payload.message ?? "")) return null;
-      throw new Error(`AList 读取失败 (${safePath})${payload.message ? `: ${payload.message}` : ""}`);
-    }
-    const rawUrl = payload.data?.raw_url;
-    if (!rawUrl) return null;
-    await assertEgressAllowed(rawUrl);
-    const fileRes = await fetch(rawUrl, { signal: AbortSignal.timeout(TIMEOUT_MS) });
-    if (!fileRes.ok) {
-      if (fileRes.status === 404) return null;
-      throw new AlistError(fileRes.status, "GET", safePath);
-    }
-    return Buffer.from(await fileRes.arrayBuffer());
+    return fetchWholeFile(cfg, safePath);
   },
 
   async deleteFile(config: Record<string, unknown>, remoteRelPath: string): Promise<void> {
@@ -391,10 +406,24 @@ export const alistRepository: BackupRepository = {
     const name = target.slice(target.lastIndexOf("/") + 1);
     const token = await login(cfg);
     await assertEgressAllowed(cfg.baseUrl);
+
+    // 分片文件连带删除（先读清单拿片数；清单不可读不影响主删除）
+    const names = [name];
+    try {
+      const manifestBuf = await fetchWholeFile(cfg, `${safePath}${PARTS_MANIFEST_SUFFIX}`);
+      if (manifestBuf) {
+        const meta = JSON.parse(manifestBuf.toString("utf8")) as { parts?: number };
+        names.push(`${name}${PARTS_MANIFEST_SUFFIX}`);
+        for (let i = 1; i <= (meta.parts ?? 0); i++) {
+          names.push(`${name}.part${String(i).padStart(3, "0")}`);
+        }
+      }
+    } catch { /* 清单不可读 → 只删主文件 */ }
+
     const res = await fetch(`${cfg.baseUrl}/api/fs/remove`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: token },
-      body: JSON.stringify({ dir, names: [name] }),
+      body: JSON.stringify({ dir, names }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (!res.ok) throw new AlistError(res.status, "REMOVE", safePath);
@@ -403,23 +432,6 @@ export const alistRepository: BackupRepository = {
     if (payload && payload.code !== 200 && !/not found|不存在/i.test(payload.message ?? "")) {
       throw new Error(`AList 删除失败 (${safePath})${payload.message ? `: ${payload.message}` : ""}`);
     }
-    // 分片文件连带删除（读 manifest 得片数；失败不阻塞主删除）
-    try {
-      const manifestBuf = await this.readFile(config, `${safePath}${PARTS_MANIFEST_SUFFIX}`);
-      if (manifestBuf) {
-        const meta = JSON.parse(manifestBuf.toString("utf8")) as { parts?: number };
-        const names = [`${name}${PARTS_MANIFEST_SUFFIX}`];
-        for (let i = 1; i <= (meta.parts ?? 0); i++) {
-          names.push(`${name}.part${String(i).padStart(3, "0")}`);
-        }
-        await fetch(`${cfg.baseUrl}/api/fs/remove`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: token },
-          body: JSON.stringify({ dir, names }),
-          signal: AbortSignal.timeout(TIMEOUT_MS),
-        });
-      }
-    } catch { /* 分片清理失败不阻塞 */ }
   },
 
   async listFiles(config: Record<string, unknown>, remoteRelPath?: string): Promise<string[]> {

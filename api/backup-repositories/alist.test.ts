@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { alistRepository } from "./alist";
 
+// 这些用例把 fetch 全量 mock，真实 DNS 与 egress 策略与断言无关；
+// 不做这个 mock 时沙箱内 DNS 解析失败会把用例整体打成 environmental failure。
+vi.mock("../lib/egress", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/egress")>();
+  return { ...actual, assertEgressAllowed: vi.fn(async () => undefined) };
+});
+
 let seq = 0;
 
 /** 每个用例独立用户名，避免模块级 token 缓存跨用例复用导致 login 请求缺失 */
@@ -104,7 +111,7 @@ describe("alist REST backup repository", () => {
     expect(putInit.body).toEqual(new Uint8Array(Buffer.from("data")));
   });
 
-  it("uploadFile surfaces server error message without credentials", async () => {
+  it("uploadFile surfaces server error message without credentials", { timeout: 20000 }, async () => {
     routeFetch(fetchMock, { "/api/fs/put": () => json({ code: 500, message: "permission denied" }) });
     const caught = await alistRepository.uploadFile(config(), "file.txt", Buffer.from("data")).then(
       () => null,
@@ -113,6 +120,8 @@ describe("alist REST backup repository", () => {
     const message = caught instanceof Error ? caught.message : String(caught);
     expect(message).toContain("permission denied");
     expect(message).not.toContain("secret");
+    // 小文件上传现在走 putWithRetry：偶发 5xx 不再一次失败就放弃整个备份
+    expect(callsTo(fetchMock, "/api/fs/put")).toHaveLength(3);
   });
 
   it("readFile resolves raw_url then downloads; returns null when not found", async () => {
@@ -122,8 +131,9 @@ describe("alist REST backup repository", () => {
     });
     const content = await alistRepository.readFile(config(), "dir/file.txt");
     expect(content?.toString()).toBe("file-content");
-    const [, getInit] = callsTo(fetchMock, "/api/fs/get")[0];
-    expect(JSON.parse(String(getInit.body))).toMatchObject({ path: "/dir/file.txt" });
+    // 先探 `<path>.xjmanifest` 判断是否分片，再取整文件（顺序即新行为）
+    const getCalls = callsTo(fetchMock, "/api/fs/get").map(([, init]) => JSON.parse(String(init.body)));
+    expect(getCalls.map((b) => b.path)).toEqual(["/dir/file.txt.xjmanifest", "/dir/file.txt"]);
 
     routeFetch(fetchMock, { "/api/fs/get": () => json({ code: 500, message: "object not found" }) });
     expect(await alistRepository.readFile(config(), "missing.txt")).toBeNull();
@@ -227,5 +237,61 @@ describe("alist REST backup repository", () => {
     routeFetch(fetchMock);
     await expect(alistRepository.uploadFile(config(), "../escape.txt", Buffer.from("x"))).rejects.toThrow();
     expect(callsTo(fetchMock, "/api/fs/put")).toHaveLength(0);
+  });
+});
+
+describe("分片文件读取（回归：readFile 曾因自探清单而无限递归栈溢出）", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("按 .xjmanifest 清单拼接分片，且只发起 清单+分片 次读取（无递归自探）", async () => {
+    const partBodies: Record<string, string> = { "big.bin.part001": "AAAA", "big.bin.part002": "BB" };
+    fetchMock.mockImplementation((url: string, init: RequestInit) => {
+      if (url.includes("/api/auth/login")) return Promise.resolve(loginOk());
+      if (url.includes("/api/fs/get")) {
+        const path = JSON.parse(String(init.body)).path as string;
+        if (path.endsWith(".xjmanifest")) {
+          return Promise.resolve(json({ code: 200, message: "success", data: { raw_url: "https://alist.example.com/d/manifest" } }));
+        }
+        return Promise.resolve(
+          json({ code: 200, message: "success", data: { raw_url: `https://alist.example.com/d/${path.split("/").pop()}` } })
+        );
+      }
+      if (url.endsWith("/d/manifest")) return Promise.resolve(new Response(JSON.stringify({ parts: 2, size: 6 })));
+      const name = url.split("/d/")[1] ?? "";
+      return Promise.resolve(new Response(partBodies[name] ?? ""));
+    });
+
+    const buf = await alistRepository.readFile(config(), "big.bin");
+
+    expect(buf?.toString()).toBe("AAAABB");
+    // 1 次清单 + 2 次分片；递归版本会无限膨胀到栈溢出
+    expect(callsTo(fetchMock, "/api/fs/get")).toHaveLength(3);
+  });
+
+  it("远端无分片清单时回退为整文件读取", async () => {
+    fetchMock.mockImplementation((url: string, init: RequestInit) => {
+      if (url.includes("/api/auth/login")) return Promise.resolve(loginOk());
+      if (url.includes("/api/fs/get")) {
+        const path = JSON.parse(String(init.body)).path as string;
+        if (path.endsWith(".xjmanifest")) {
+          return Promise.resolve(json({ code: 404, message: "not found", data: null }));
+        }
+        return Promise.resolve(json({ code: 200, message: "success", data: { raw_url: "https://alist.example.com/d/small" } }));
+      }
+      return Promise.resolve(new Response("hello"));
+    });
+
+    const buf = await alistRepository.readFile(config(), "small.txt");
+
+    expect(buf?.toString()).toBe("hello");
   });
 });
