@@ -67,7 +67,12 @@ async function walkStagingFiles(dir: string): Promise<BackupBundleFile[]> {
   return files.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-async function copyTree(srcDir: string, destDir: string, excludeDirs: ReadonlySet<string> = new Set()): Promise<void> {
+async function copyTree(
+  srcDir: string,
+  destDir: string,
+  excludeDirs: ReadonlySet<string> = new Set(),
+  excludeNames: ReadonlySet<string> = new Set()
+): Promise<void> {
   const entries = await fsp.readdir(srcDir, { withFileTypes: true });
   for (const entry of entries) {
     const srcPath = path.join(srcDir, entry.name);
@@ -75,7 +80,9 @@ async function copyTree(srcDir: string, destDir: string, excludeDirs: ReadonlySe
     if (entry.isDirectory()) {
       // 排除备份暂存区（默认 /data/app/backups），防止把 staging 目录复制进自身
       if (excludeDirs.has(path.resolve(srcPath))) continue;
-      await copyTree(srcPath, destPath, excludeDirs);
+      // 排除派生数据目录（如 zvec 向量索引，可由重建索引再生，单份 1.8GB）
+      if (excludeNames.has(entry.name)) continue;
+      await copyTree(srcPath, destPath, excludeDirs, excludeNames);
     } else if (entry.isFile()) {
       await fsp.mkdir(path.dirname(destPath), { recursive: true });
       await fsp.copyFile(srcPath, destPath);
@@ -100,7 +107,9 @@ async function assembleContent(stagingDir: string, sourcePath: string, uploadDir
     path.resolve(env.backupTempDir),
     path.resolve(stagingDir),
   ]);
-  await copyTree(sourcePath, stagingDir, excludeDirs);
+  // zvec：旧向量引擎遗留目录，属派生数据（向量已在 SQLite 中），备它等于每份白传 1.8GB
+  const excludeNames = new Set<string>(["zvec"]);
+  await copyTree(sourcePath, stagingDir, excludeDirs, excludeNames);
 }
 
 export async function buildBackupBundle(

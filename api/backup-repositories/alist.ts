@@ -49,6 +49,27 @@ interface AlistConfig {
 /** 带状态码的错误；消息不含任何凭据。 */
 
 /** 单文件 PUT（动态超时：30s + 5s/MB，封顶 15 分钟） */
+/** 带重试的单文件上传：AList 偶发 5xx/Go panic/网络抖动不该拖垮整个备份 */
+async function putWithRetry(
+  cfg: AlistConfig,
+  token: string,
+  safePath: string,
+  content: Buffer | Uint8Array,
+  attempts: number = PART_MAX_ATTEMPTS
+): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await putOne(cfg, token, safePath, content as Buffer);
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < attempts) await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
+  throw lastErr;
+}
+
 async function putOne(
   cfg: AlistConfig,
   token: string,
@@ -263,10 +284,10 @@ export const alistRepository: BackupRepository = {
         if (lastErr) throw lastErr;
       }
       const manifest = Buffer.from(JSON.stringify({ parts, size: content.length }));
-      await putOne(cfg, token, `${safePath}${PARTS_MANIFEST_SUFFIX}`, manifest);
+      await putWithRetry(cfg, token, `${safePath}${PARTS_MANIFEST_SUFFIX}`, manifest);
       return;
     }
-    await putOne(cfg, token, safePath, content);
+    await putWithRetry(cfg, token, safePath, content);
   },
 
   async uploadBigFile(config: Record<string, unknown>, remoteRelPath: string, localPath: string): Promise<void> {
@@ -279,7 +300,7 @@ export const alistRepository: BackupRepository = {
       const stat = await fh.stat();
       if (stat.size <= CHUNK_THRESHOLD) {
         const buf = await fh.readFile();
-        await putOne(cfg, token, safePath, buf);
+        await putWithRetry(cfg, token, safePath, buf);
         return;
       }
       const parts = Math.ceil(stat.size / CHUNK_SIZE);
