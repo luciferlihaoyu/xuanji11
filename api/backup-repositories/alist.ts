@@ -80,7 +80,10 @@ async function putOne(
   const parentDir = target.slice(0, target.lastIndexOf("/")) || "/";
   await ensureDir(cfg, token, parentDir);
   await assertEgressAllowed(cfg.baseUrl);
-  const uploadTimeoutMs = Math.min(15 * 60_000, TIMEOUT_MS + Math.floor(content.length / 1048576) * 5_000);
+  // 115 经 Cloudflare 的实传速率在 0.3~0.7MB/s 大幅波动（还会被限速），
+  // 原先 30s + 5s/MB（10MB 分片仅 80s）预算过紧 → 大文件整批超时。
+  // 改为 5 分钟基础 + 10s/MB：10MB 分片 ≈ 6.7 分钟预算，仍留有硬上限防挂死。
+  const uploadTimeoutMs = Math.min(20 * 60_000, 5 * 60_000 + Math.floor(content.length / 1048576) * 10_000);
   const res = await fetch(`${cfg.baseUrl}/api/fs/put`, {
     method: "PUT",
     headers: {
@@ -341,6 +344,7 @@ export const alistRepository: BackupRepository = {
         const part = sliceBuf.subarray(0, bytesRead);
         const partPath = `${safePath}.part${String(i + 1).padStart(3, "0")}`;
         let lastErr: unknown;
+        const partStart = Date.now();
         for (let attempt = 1; attempt <= PART_MAX_ATTEMPTS; attempt++) {
           try {
             await putOne(cfg, token, partPath, part as Buffer);
@@ -348,12 +352,20 @@ export const alistRepository: BackupRepository = {
             break;
           } catch (err) {
             lastErr = err;
+            const secs = ((Date.now() - partStart) / 1000).toFixed(1);
+            console.warn(
+              `[Backup] 分片重试 ${partPath} 第 ${attempt}/${PART_MAX_ATTEMPTS} 次失败（已耗时 ${secs}s）: ${err instanceof Error ? err.message : String(err)}`
+            );
             if (attempt < PART_MAX_ATTEMPTS) {
               await new Promise((r) => setTimeout(r, 2000 * attempt));
             }
           }
         }
         if (lastErr) throw lastErr;
+        const elapsed = (Date.now() - partStart) / 1000;
+        console.log(
+          `[Backup] ${safePath} 分片 ${i + 1}/${parts} 完成 ${(bytesRead / 1048576).toFixed(1)}MB / ${elapsed.toFixed(1)}s（${(bytesRead / 1048576 / elapsed).toFixed(2)} MB/s）`
+        );
       }
       const manifest = Buffer.from(JSON.stringify({ parts, size: stat.size }));
       await putOne(cfg, token, `${safePath}${PARTS_MANIFEST_SUFFIX}`, manifest);
