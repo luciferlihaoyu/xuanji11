@@ -52,7 +52,11 @@ interface RenderEdge {
 
 export default function KnowledgeGraph() {
   const canvasRef = useRef<KnowledgeGraphCanvasHandle>(null);
-  const [controlPanelOpen, setControlPanelOpen] = useState(false);
+  const controlPanelRef = useRef<HTMLDivElement>(null);
+  // 桌面端默认展开（屏幕够大），移动端默认收起（避免挡住画布）
+  const [controlPanelOpen, setControlPanelOpen] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
+  );
   const containerRef = useRef<HTMLDivElement>(null);
   const { agents, graphBgImage, graphBgScale } = useAppStore();
   const {
@@ -413,22 +417,31 @@ export default function KnowledgeGraph() {
         </div>
       )}
 
-      {/* Obsidian 风格 Canvas */}
+      {/* Obsidian 风格 Canvas（点击图区空白处即收起侧边栏） */}
       {!isGraphLoading && (
-        <KnowledgeGraphCanvas
-          ref={canvasRef}
-          nodes={canvasNodes}
-          edges={canvasEdges}
-          selectedNodeId={selectedNodeId}
-          edgeMode={edgeMode === 'source'}
-          viewMode={viewMode}
-          gravityStrength={gravityStrength}
-          nodeSpacing={nodeSpacing}
-          categoryColors={CATEGORY_COLORS}
-          onNodeClick={handleCanvasNodeClick}
-          onNodeContextMenu={handleCanvasContextMenu}
-          onSavePositions={handleSavePositions}
-        />
+        <div
+          className="absolute inset-0"
+          onPointerDown={() => {
+            // 连线模式下保留面板（面板里有"点击目标节点完成连线"的提示），其余情况点图区即收起
+            if (edgeMode) return;
+            setControlPanelOpen(false);
+          }}
+        >
+          <KnowledgeGraphCanvas
+            ref={canvasRef}
+            nodes={canvasNodes}
+            edges={canvasEdges}
+            selectedNodeId={selectedNodeId}
+            edgeMode={edgeMode === 'source'}
+            viewMode={viewMode}
+            gravityStrength={gravityStrength}
+            nodeSpacing={nodeSpacing}
+            categoryColors={CATEGORY_COLORS}
+            onNodeClick={handleCanvasNodeClick}
+            onNodeContextMenu={handleCanvasContextMenu}
+            onSavePositions={handleSavePositions}
+          />
+        </div>
       )}
 
       {/* 缩放按钮（移动端友好） */}
@@ -453,16 +466,24 @@ export default function KnowledgeGraph() {
         知识图谱 · {renderNodes.length} 节点 · {renderEdges.length} 连接
       </div>
 
-      {/* Control Panel（移动端可折叠） */}
-      <div className={`absolute left-2 sm:left-4 top-16 z-10 transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-5'}`}>
+      {/* Control Panel（全端可折叠：点按钮呼出/收起，点图区收起） */}
+      <div
+        ref={controlPanelRef}
+        className={`absolute left-2 sm:left-4 top-16 z-10 flex flex-col items-start transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-5'}`}
+      >
         <button
-          onClick={() => setControlPanelOpen(!controlPanelOpen)}
-          className="md:hidden mb-2 px-2.5 py-1.5 rounded-lg border text-[11px] flex items-center gap-1"
-          style={{ backgroundColor: 'rgba(255,255,255,0.85)', borderColor: 'rgba(30,40,60,0.15)', color: '#5a6472' }}
+          onClick={() => setControlPanelOpen((v) => !v)}
+          aria-expanded={controlPanelOpen}
+          aria-label={controlPanelOpen ? '收起控制面板' : '展开控制面板'}
+          title={controlPanelOpen ? '收起控制面板' : '展开控制面板'}
+          className="mb-2 px-2.5 py-1.5 rounded-lg border text-[11px] flex items-center gap-1 active:scale-95 transition-transform"
+          style={{ backgroundColor: 'rgba(255,255,255,0.88)', borderColor: 'rgba(30,40,60,0.15)', color: '#5a6472' }}
         >
           {controlPanelOpen ? '收起面板 ▴' : '控制面板 ▾'}
         </button>
-        <div className={`panel-floating p-2 mb-3 w-[200px] max-w-[calc(100vw-2rem)] ${controlPanelOpen ? '' : 'hidden md:block'}`}>
+        {/* 折叠区：三块内容一起收起（此前只收了第一块，大会员面板与背景图上传始终可见） */}
+        <div className={`max-h-[calc(100vh-10rem)] overflow-y-auto pb-1 ${controlPanelOpen ? 'block' : 'hidden'}`}>
+        <div className="panel-floating p-2 mb-3 w-[200px] max-w-[calc(100vw-2rem)]">
           <div className="flex gap-2">
             <button
               onClick={() => setShowAddModal(true)}
@@ -521,6 +542,7 @@ export default function KnowledgeGraph() {
         {/* Background Upload */}
         <div className="mt-3 panel-floating p-3 w-[200px]">
           <BgImageUpload />
+        </div>
         </div>
       </div>
 
