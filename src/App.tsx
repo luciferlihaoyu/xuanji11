@@ -21,6 +21,7 @@ const APICenter = lazy(() => import('@/pages/APICenter'));
 const DataSources = lazy(() => import('@/pages/DataSources'));
 const UploadPage = lazy(() => import('@/pages/UploadPage'));
 const SearchResults = lazy(() => import('@/pages/SearchResults'));
+const SearchTestbed = lazy(() => import('@/pages/SearchTestbed'));
 const DocumentDetail = lazy(() => import('@/pages/DocumentDetail'));
 const Settings = lazy(() => import('@/pages/Settings'));
 const Login = lazy(() => import('@/pages/Login'));
@@ -59,6 +60,7 @@ function App() {
           <Route path="/sources" element={<DataSources />} />
           <Route path="/upload" element={<UploadPage />} />
           <Route path="/search" element={<SearchResults />} />
+          <Route path="/search-testbed" element={<SearchTestbed />} />
           <Route path="/analytics" element={<AnalysisDashboard />} />
           <Route path="/audit" element={<AuditLog />} />
           <Route path="/doc/:id" element={<DocumentDetail />} />

@@ -30,6 +30,8 @@ export interface MergedHit {
   sources: Source[];
   ranks: Partial<Record<Source, number>>;
   score: number;
+  /** LLM 重排分（0~10）；仅 rerank 开启且打分成功时存在 */
+  llmScore?: number;
   evidence?: EvidenceChunk[];
 }
 

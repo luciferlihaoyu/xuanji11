@@ -20,6 +20,7 @@ import { analyticsRouter } from "./analytics-router";
 import { mcpClientRouter } from "./mcp-client-router";
 import { tianshuRouter } from "./tianshu-router";
 import { reviewRouter } from "./review-router";
+import { searchEvalRouter } from "./search-eval-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -41,6 +42,7 @@ export const appRouter = createRouter({
   mcpClient: mcpClientRouter,
   tianshu: tianshuRouter,
   review: reviewRouter,
+  searchEval: searchEvalRouter,
 });
 
 export { zvecRouter };

@@ -21,6 +21,7 @@ const COMMANDS: Command[] = [
   { id: 'api-center', label: 'API 中心', description: '接口文档与调试', icon: '\u{1F527}', path: '/api', category: 'page' },
   { id: 'settings', label: '系统设置', description: '主题、偏好设置', icon: '\u2699\uFE0F', path: '/settings/theme', category: 'page' },
   { id: 'search', label: '全局搜索', description: '全文 + 向量语义搜索', icon: '\u{1F50D}', path: '/search', category: 'page' },
+  { id: 'search-testbed', label: '检索测试台', description: '分数分解 + 评测集（recall@K / MRR）', icon: '\u{1F9EA}', path: '/search-testbed', category: 'page' },
   { id: 'login', label: '退出登录', description: '返回登录页', icon: '\u{1F6AA}', path: '/login', category: 'action' },
 ];
 

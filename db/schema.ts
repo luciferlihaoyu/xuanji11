@@ -299,6 +299,20 @@ export const kbSearchEvents = sqliteTable("kb_search_events", {
 
 export type KbReviewItem = typeof kbReviewItems.$inferSelect;
 
+// ========== 检索评测用例（测试台固化「查询 → 期望文档」，供回归评测） ==========
+export const kbEvalCases = sqliteTable("kb_eval_cases", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  query: text("query").notNull(),
+  expectedDocIds: text("expectedDocIds").notNull(), // JSON 数组字符串，如 "[1922,1923]"
+  note: text("note"),
+  createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+}, (table) => [
+  index("kbEvalCases_query_idx").on(table.query),
+]);
+
+export type KbEvalCase = typeof kbEvalCases.$inferSelect;
+export type InsertKbEvalCase = typeof kbEvalCases.$inferInsert;
+
 // ========== 工作流表 ==========
 export const localAccounts = sqliteTable("local_accounts", {
   id: integer("id").primaryKey({ autoIncrement: true }),

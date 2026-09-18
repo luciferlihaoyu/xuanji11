@@ -34,13 +34,46 @@ export interface AskHistoryItem {
   readonly content: string;
 }
 
+/** 问答链路的检索参数（由系统设置驱动，不再硬编码） */
+export interface AskRetrievalOptions {
+  readonly mode: "hybrid";
+  readonly limit: number;
+  readonly rerank: boolean;
+}
+
+/**
+ * 解析问答检索策略：读系统设置 ask_retrieval_rerank（"true" 开启 LLM 重排）。
+ * 缺省/脏值/DB 异常一律兜底 false（重排慢 1~3 秒，默认关）。
+ */
+export async function resolveAskRetrievalOptions(): Promise<AskRetrievalOptions> {
+  let rerank = false;
+  try {
+    const { getDb } = await import("../queries/connection");
+    const { systemSettings } = await import("@db/schema");
+    const { eq } = await import("drizzle-orm");
+    const [row] = await getDb().select({ value: systemSettings.value }).from(systemSettings)
+      .where(eq(systemSettings.key, "ask_retrieval_rerank"));
+    if (row?.value === "true") rerank = true;
+  } catch {
+    // DB 不可用（启动早期等）：保持默认 false
+  }
+  return { mode: "hybrid", limit: MAX_EVIDENCE, rerank };
+}
+
 export async function askKnowledgeBase(
   query: string,
   history: readonly AskHistoryItem[] = [],
   onToken?: (token: string) => void,
+  retrievalOverride?: Partial<Pick<AskRetrievalOptions, "limit" | "rerank">>,
 ): Promise<AskResult> {
-  // 1. 混合检索取证
-  const search = await executeHybridSearch({ query, mode: "hybrid", limit: MAX_EVIDENCE, rerank: false });
+  // 1. 混合检索取证（rerank 由设置驱动；调用方可用 override 显式控制，优先级最高）
+  const retrieval = { ...(await resolveAskRetrievalOptions()), ...retrievalOverride };
+  const search = await executeHybridSearch({
+    query,
+    mode: retrieval.mode,
+    limit: retrieval.limit,
+    rerank: retrieval.rerank,
+  });
   const docs = search.results.filter((r) => r.type === "document" && r.snippet.trim().length > 0);
 
   if (docs.length < MIN_EVIDENCE) {

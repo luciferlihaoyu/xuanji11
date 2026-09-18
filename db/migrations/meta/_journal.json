@@ -50,6 +50,13 @@
       "when": 1789556828756,
       "tag": "0006_fine_calypso",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1789735151758,
+      "tag": "0007_rapid_sir_ram",
+      "breakpoints": true
     }
   ]
 }

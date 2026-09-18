@@ -15,6 +15,7 @@ import {
   mergeResults,
   applyFilters,
   buildFacets,
+  rrfScore,
 } from "./hybrid-search-utils";
 
 export const searchModeSchema = z.enum(["keyword", "vector", "hybrid"]);
@@ -52,6 +53,13 @@ export interface SearchResult {
   readonly reasons: readonly string[];
   /** 证据片段（同文档的多个命中 chunk，展开查看用） */
   readonly evidence: readonly EvidenceChunk[];
+  /** 分数分解（测试台用）：keyword/vector = 各路 RRF 分量，rrf = 融合总分，llmRerank = 重排分 */
+  readonly scoreBreakdown?: {
+    readonly keyword?: number;
+    readonly vector?: number;
+    readonly rrf?: number;
+    readonly llmRerank?: number;
+  };
 }
 
 export interface Facets {
@@ -100,6 +108,12 @@ function toSearchResult(hit: MergedHit, query: string): SearchResult {
       return true;
     })
     .slice(0, 5);
+  // 分数分解（测试台/评测用）：与 score 同口径（RRF 分量与融合总分）
+  const r3 = (n: number) => Math.round(n * 1000) / 1000;
+  const scoreBreakdown: NonNullable<SearchResult["scoreBreakdown"]> = { rrf: r3(hit.score) };
+  if (hit.ranks.keyword !== undefined) scoreBreakdown.keyword = r3(rrfScore(hit.ranks.keyword));
+  if (hit.ranks.vector !== undefined) scoreBreakdown.vector = r3(rrfScore(hit.ranks.vector));
+  if (hit.llmScore !== undefined) scoreBreakdown.llmRerank = hit.llmScore;
   return {
     id: hit.id,
     title: hit.title,
@@ -111,6 +125,7 @@ function toSearchResult(hit: MergedHit, query: string): SearchResult {
     folderId: hit.folderId,
     reasons,
     evidence,
+    scoreBreakdown,
   };
 }
 
@@ -293,9 +308,9 @@ async function rerankWithLlm(query: string, hits: MergedHit[], limit: number): P
       llmScore: typeof scores[i] === "number" ? (scores[i] as number) : 0,
     }));
     scored.sort((a, b) => b.llmScore - a.llmScore);
-    // 重排后的候选放前面，超出 20 的尾部保持原序接在后面
+    // 重排后的候选放前面（携带 llmScore 供分数分解展示），超出 20 的尾部保持原序接在后面
     const tail = hits.slice(candidates.length);
-    return [...scored.map((s) => s.hit), ...tail].slice(0, limit * 2);
+    return [...scored.map((s) => ({ ...s.hit, llmScore: s.llmScore })), ...tail].slice(0, limit * 2);
   } catch {
     return hits;
   }
