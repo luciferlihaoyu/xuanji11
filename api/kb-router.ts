@@ -3,6 +3,7 @@ import { eq, desc, like, isNull, inArray } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { kbFolders, kbDocuments, kbDocumentVersions, kbSearchEvents, documentChunks } from "@db/schema";
+import { getChunkContext } from "./lib/chunk-context";
 import { clean } from "./lib/clean";
 import { logAudit, logAction } from "./lib/audit";
 import { vectorEngine } from "./lib/vector";
@@ -217,6 +218,14 @@ export const kbRouter = createRouter({
       const results = await db.select().from(kbDocuments).where(eq(kbDocuments.id, input.id));
       return results[0] ?? null;
     }),
+
+  /**
+   * 命中块上下文：引用锚点（documentId + chunkIndex）→ 该块原文与总块数。
+   * 供「点引用跳转并高亮」使用；块不存在返回 null（不做近似匹配）。
+   */
+  getChunkContext: authedQuery
+    .input(z.object({ documentId: z.number(), chunkIndex: z.number().int().min(0) }))
+    .query(async ({ input }) => getChunkContext(input.documentId, input.chunkIndex)),
 
   /**
    * 入库分拣建议：文档创建后调用，LLM 给出 folderId/tags/概念实体建议。

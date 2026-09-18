@@ -8,12 +8,21 @@
  */
 import { executeHybridSearch } from "./hybrid-search";
 import { chatCompletionStream, hasLlmAvailable, type ChatMessage } from "./llm-chat";
+import { buildAnchor, resolveLatestVersionIds, type CitationAnchor } from "./citation-anchor";
 
 export interface AskCitation {
   readonly n: number;
   readonly documentId: string;
   readonly title: string;
   readonly snippet: string;
+  /** 版本溯源：该文档当前最新版本 id（无版本记录时为 null，不伪造） */
+  readonly versionId: number | null;
+  /** 定位锚点：块序号 + 块内字符区间 + 所属标题 */
+  readonly anchor: CitationAnchor;
+  /** 该文档的融合检索分 */
+  readonly score?: number;
+  /** 命中来源（keyword / vector），供用户判断「为什么会引用它」 */
+  readonly retrievedBy: readonly string[];
 }
 
 export interface AskResult {
@@ -94,13 +103,26 @@ export async function askKnowledgeBase(
     };
   }
 
-  // 2. 证据编号
-  const citations: AskCitation[] = docs.map((d, i) => ({
-    n: i + 1,
-    documentId: d.id,
-    title: d.title,
-    snippet: d.snippet,
-  }));
+  // 2. 证据编号 + 溯源（版本 + 段落锚点 + 分数 + 来源）
+  const versionIds = await resolveLatestVersionIds(
+    docs.map((d) => Number(d.id)).filter((n) => Number.isFinite(n)),
+  );
+  const citations: AskCitation[] = docs.map((d, i) => {
+    const topEvidence = d.evidence?.[0];
+    const chunkText = topEvidence?.snippet ?? "";
+    const chunkIndex = typeof topEvidence?.chunkIndex === "number" ? topEvidence.chunkIndex : null;
+    const numericId = Number(d.id);
+    return {
+      n: i + 1,
+      documentId: d.id,
+      title: d.title,
+      snippet: d.snippet,
+      versionId: Number.isFinite(numericId) ? (versionIds.get(numericId) ?? null) : null,
+      anchor: buildAnchor(chunkText, query, chunkIndex),
+      score: d.score,
+      retrievedBy: [...(d.sources ?? [])],
+    };
+  });
 
   const evidenceText = citations
     .map((c) => `[${c.n}] ${c.title}\n${c.snippet}`)

@@ -166,11 +166,11 @@ async function fetchKeywordResults(query: string, limit: number): Promise<Intern
         byDoc.set(h.documentId, {
           rank: h.rank,
           content: h.content,
-          evidence: [{ snippet: h.content, source: "keyword", rank: h.rank }],
+          evidence: [{ snippet: h.content, source: "keyword", rank: h.rank, chunkIndex: h.chunkIndex }],
         });
       } else {
         if (h.rank < cur.rank) { cur.rank = h.rank; cur.content = h.content; }
-        if (cur.evidence.length < 3) cur.evidence.push({ snippet: h.content, source: "keyword", rank: h.rank });
+        if (cur.evidence.length < 3) cur.evidence.push({ snippet: h.content, source: "keyword", rank: h.rank, chunkIndex: h.chunkIndex });
       }
     }
     const docIds = [...byDoc.keys()];
@@ -236,6 +236,14 @@ async function fetchVectorResults(query: string, limit: number): Promise<Interna
     const type = typeof metadata.type === "string" ? metadata.type : "document";
     const docId = documentIdFromMetadata(metadata) ?? result.id;
     const rank = index + 1;
+    // 分块序号（索引器写入向量 metadata）；缺失时不猜
+    const chunkIndex = typeof metadata.chunkIndex === "number" ? metadata.chunkIndex : undefined;
+    const evidenceChunk = (): EvidenceChunk => ({
+      snippet: content,
+      source: "vector",
+      rank,
+      ...(chunkIndex !== undefined ? { chunkIndex } : {}),
+    });
     const existing = byDoc.get(docId);
     if (!existing) {
       byDoc.set(docId, {
@@ -247,10 +255,10 @@ async function fetchVectorResults(query: string, limit: number): Promise<Interna
         folderId: null,
         source: "vector" as Source,
         rank,
-        evidence: content ? [{ snippet: content, source: "vector", rank }] : [],
+        evidence: content ? [evidenceChunk()] : [],
       });
     } else if (content && existing.evidence.length < 3) {
-      existing.evidence.push({ snippet: content, source: "vector", rank });
+      existing.evidence.push(evidenceChunk());
     }
   }
   return [...byDoc.values()].slice(0, limit);

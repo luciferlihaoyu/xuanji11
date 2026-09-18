@@ -88,3 +88,20 @@
 ### wave1 前端（t3）— 2026-09-18，碧霄亲自实施
 - 交付物：`src/pages/SearchTestbed.tsx`（检索控件 mode/rerank/topK + metadata 条 + 分数分解四列表 + 评测用例管理 + 评测报告三指标卡）；App.tsx 注册 `/search-testbed`（lazy chunk）；CommandPalette 加「检索测试台」入口
 - 验证：`npx tsc --noEmit` exit 0；`npx vite build` exit 0，产物 `dist/public/assets/SearchTestbed-BE2tM8bL.js`（16.95 kB / gzip 4.36 kB）
+
+### wave1 线上验证 — 2026-09-18（e3afdd7，commit 后等 RUNNING 再验）
+- `/health` 502 约 3 分钟后转 200（容器切换期），随后 `searchEval.listCases` → HTTP 200，确认新版上线
+- `searchEval.createCase` → id=2；`runEval` → **caseCount=1 recall@5=1 mrr=1**，命中列表 `[1922, 118, 711, 1876, 1923]`（期望的 1922 排第一）
+- `/api/search` 结果带 `scoreBreakdown` = `{"rrf":0.033,"keyword":0.016}`；metadata 含 mode/durationMs/keywordResults/vectorResults
+- `setting.set(ask_retrieval_rerank=true)` → `getByKey` 回读 `'true'`；ask 流式端点在重排开启下正常返回带引用答案
+- 脚本缺陷修正：tRPC GET 的 `input` 必须 superjson 包装（`{"json":{...}}`），否则带参 GET 报 400
+- 清理：设置回 false、临时评测用例删除
+
+### wave2 引用可定位（t4+t5）— 2026-09-18，碧霄亲自实施
+- 新增 `api/lib/citation-anchor.ts`：`findHeadingBefore` / `buildAnchor` / `resolveLatestVersionIds`（9 用例）
+- 新增 `api/lib/chunk-context.ts`：`extractChunkHeading` / `highlightSpan` / `getChunkContext`（11 用例）
+- `AskCitation` 扩展：`versionId`（最新版本 id，缺失为 null）、`anchor{chunkIndex,heading,charStart,charEnd}`、`score`、`retrievedBy`
+- 检索层透传块序号：`EvidenceChunk.chunkIndex`（bm25 走 `c.chunkIndex`，向量走索引器写入的 `metadata.chunkIndex`）
+- 新过程 `kb.getChunkContext`（薄封装，块不存在返回 null 不做近似匹配）
+- 前端：搜索结果引用变可点击（`/doc/:id?q=..&chunk#chunk-N` + 块号/章节/分数/版本/来源）；DocumentDetail 新增「引用定位」面板（命中块原文 + 查询词高亮 + 关闭）
+- 验证：`npx tsc --noEmit` exit 0；`npx vite build` exit 0；回归 5 文件 **61/61 通过**

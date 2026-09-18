@@ -56,6 +56,8 @@ export interface Bm25Hit {
   readonly documentId: number;
   readonly content: string;
   readonly rank: number; // bm25 原始名次（1 起，越小越好）
+  /** document_chunks.chunkIndex（供引用定位锚点使用） */
+  readonly chunkIndex: number;
 }
 
 /**
@@ -70,18 +72,19 @@ export function bm25Search(query: string, limit: number): Bm25Hit[] {
   const rows = raw
     .prepare(
       `SELECT f.rowid AS chunkId, c.documentId AS documentId, c.content AS content,
-              bm25(${FTS_TABLE}) AS score
+              c.chunkIndex AS chunkIndex, bm25(${FTS_TABLE}) AS score
        FROM ${FTS_TABLE} f
        JOIN document_chunks c ON c.id = f.rowid
        WHERE ${FTS_TABLE} MATCH ?
        ORDER BY score
        LIMIT ?`
     )
-    .all(`"${safe}"`, limit) as Array<{ chunkId: number; documentId: number; content: string; score: number }>;
+    .all(`"${safe}"`, limit) as Array<{ chunkId: number; documentId: number; content: string; chunkIndex: number; score: number }>;
   return rows.map((r, i) => ({
     chunkId: r.chunkId,
     documentId: r.documentId,
     content: r.content,
+    chunkIndex: typeof r.chunkIndex === "number" ? r.chunkIndex : 0,
     rank: i + 1,
   }));
 }

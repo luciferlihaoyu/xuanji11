@@ -97,7 +97,15 @@ export default function SearchResults() {
   const [chatHistory, setChatHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
   const [streaming, setStreaming] = useState('');
   const [asking, setAsking] = useState(false);
-  const [askMeta, setAskMeta] = useState<{ insufficient: boolean; evidenceCount: number; model?: string; citations: Array<{ n: number; documentId: string; title: string }> } | null>(null);
+  const [askMeta, setAskMeta] = useState<{ insufficient: boolean; evidenceCount: number; model?: string; citations: Array<{
+    n: number;
+    documentId: string;
+    title: string;
+    versionId?: number | null;
+    score?: number;
+    retrievedBy?: readonly string[];
+    anchor?: { chunkIndex: number | null; heading?: string; charStart?: number; charEnd?: number };
+  }> } | null>(null);
   const handleAsk = () => {
     if (trimmed.length < 2 || asking) return;
     setAskTriggered(true);
@@ -292,16 +300,34 @@ export default function SearchResults() {
             )}
           </div>
           {askMeta && askMeta.citations.length > 0 && (
-            <div className="mt-3 pt-3 border-t space-y-1" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="text-[10px] font-medium mb-1" style={{ color: 'var(--text-muted)' }}>引用来源：</div>
-              {askMeta.citations.map((c) => (
-                <div key={c.n} className="text-xs flex items-start gap-2">
-                  <span className="shrink-0 font-mono" style={{ color: '#a78bfa' }}>[{c.n}]</span>
-                  <Link to={`/doc/${c.documentId}`} className="hover:underline truncate" style={{ color: 'var(--accent-cyan)' }}>
-                    {c.title}
-                  </Link>
-                </div>
-              ))}
+            <div className="mt-3 pt-3 border-t space-y-1.5" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="text-[10px] font-medium mb-1" style={{ color: 'var(--text-muted)' }}>引用来源（可点击跳转到命中段落）：</div>
+              {askMeta.citations.map((c) => {
+                const chunk = c.anchor?.chunkIndex;
+                const hasChunk = typeof chunk === 'number';
+                return (
+                  <div key={c.n} className="text-xs flex items-start gap-2">
+                    <span className="shrink-0 font-mono" style={{ color: '#a78bfa' }}>[{c.n}]</span>
+                    <div className="min-w-0 flex-1">
+                      <Link
+                        to={hasChunk ? `/doc/${c.documentId}?q=${encodeURIComponent(trimmed)}#chunk-${chunk}` : `/doc/${c.documentId}`}
+                        className="hover:underline"
+                        style={{ color: 'var(--accent-cyan)' }}
+                        title={hasChunk ? `定位到第 ${chunk + 1} 块` : '该文档无块级定位信息'}
+                      >
+                        {c.title}
+                      </Link>
+                      <span className="ml-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                        {hasChunk ? `第 ${chunk + 1} 块` : '文档级'}
+                        {c.anchor?.heading ? ` · ${c.anchor.heading}` : ''}
+                        {typeof c.score === 'number' ? ` · 分 ${c.score.toFixed(3)}` : ''}
+                        {c.versionId ? ` · v${c.versionId}` : ''}
+                        {c.retrievedBy && c.retrievedBy.length > 0 ? ` · ${c.retrievedBy.join('+')}` : ''}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

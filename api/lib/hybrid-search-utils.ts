@@ -6,6 +6,8 @@ export interface EvidenceChunk {
   readonly snippet: string;
   readonly source: Source;
   readonly rank: number;
+  /** 分块序号（块级命中时可得；LIKE 回退等无块级信息时为 undefined） */
+  readonly chunkIndex?: number;
 }
 
 export interface InternalHit {
