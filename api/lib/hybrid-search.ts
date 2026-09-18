@@ -110,10 +110,12 @@ function toSearchResult(hit: MergedHit, query: string): SearchResult {
     .slice(0, 5);
   // 分数分解（测试台/评测用）：与 score 同口径（RRF 分量与融合总分）
   const r3 = (n: number) => Math.round(n * 1000) / 1000;
-  const scoreBreakdown: NonNullable<SearchResult["scoreBreakdown"]> = { rrf: r3(hit.score) };
-  if (hit.ranks.keyword !== undefined) scoreBreakdown.keyword = r3(rrfScore(hit.ranks.keyword));
-  if (hit.ranks.vector !== undefined) scoreBreakdown.vector = r3(rrfScore(hit.ranks.vector));
-  if (hit.llmScore !== undefined) scoreBreakdown.llmRerank = hit.llmScore;
+  const scoreBreakdown = {
+    rrf: r3(hit.score),
+    ...(hit.ranks.keyword !== undefined ? { keyword: r3(rrfScore(hit.ranks.keyword)) } : {}),
+    ...(hit.ranks.vector !== undefined ? { vector: r3(rrfScore(hit.ranks.vector)) } : {}),
+    ...(hit.llmScore !== undefined ? { llmRerank: hit.llmScore } : {}),
+  };
   return {
     id: hit.id,
     title: hit.title,
@@ -166,11 +168,11 @@ async function fetchKeywordResults(query: string, limit: number): Promise<Intern
         byDoc.set(h.documentId, {
           rank: h.rank,
           content: h.content,
-          evidence: [{ snippet: h.content, source: "keyword", rank: h.rank, chunkIndex: h.chunkIndex }],
+          evidence: [{ snippet: h.content, source: "keyword", rank: h.rank, ...(h.chunkIndex !== undefined ? { chunkIndex: h.chunkIndex } : {}) }],
         });
       } else {
         if (h.rank < cur.rank) { cur.rank = h.rank; cur.content = h.content; }
-        if (cur.evidence.length < 3) cur.evidence.push({ snippet: h.content, source: "keyword", rank: h.rank, chunkIndex: h.chunkIndex });
+        if (cur.evidence.length < 3) cur.evidence.push({ snippet: h.content, source: "keyword", rank: h.rank, ...(h.chunkIndex !== undefined ? { chunkIndex: h.chunkIndex } : {}) });
       }
     }
     const docIds = [...byDoc.keys()];

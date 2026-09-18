@@ -252,9 +252,11 @@ async function fsRemove(cfg: AlistConfig, token: string, dir: string, names: str
 async function removeTree(cfg: AlistConfig, token: string, absPath: string, depth = 0): Promise<void> {
   if (depth > MAX_PRUNE_DEPTH) throw new Error(`目录层级超过 ${MAX_PRUNE_DEPTH} 层，放弃递归删除：${absPath}`);
   const items = await fsList(cfg, token, absPath);
-  const files = items.filter((i) => !i.is_dir).map((i) => i.name);
+  // AList 返回的 name 是可选的；没有名字的条目无法寻址（不能删、不能进子目录），直接跳过
+  const named = items.filter((i): i is FsItem & { name: string } => typeof i.name === "string" && i.name.length > 0);
+  const files = named.filter((i) => !i.is_dir).map((i) => i.name);
   if (files.length > 0) await fsRemove(cfg, token, absPath, files);
-  for (const dir of items.filter((i) => i.is_dir)) {
+  for (const dir of named.filter((i) => i.is_dir)) {
     await removeTree(cfg, token, joinFsPath(absPath, dir.name), depth + 1);
     await fsRemove(cfg, token, absPath, [dir.name]);
   }
@@ -308,7 +310,8 @@ export const alistRepository: BackupRepository = {
     const token = await login(cfg);
     const items = await fsList(cfg, token, cfg.basePath);
     const runs = items
-      .filter((i) => i.is_dir && RUN_DIR_PATTERN.test(i.name))
+      // 同上：无名条目不可寻址；顺带避免 RUN_DIR_PATTERN.test(undefined) 把 "undefined" 当目录名去测
+      .filter((i): i is FsItem & { name: string } => !!i.is_dir && typeof i.name === "string" && RUN_DIR_PATTERN.test(i.name))
       .map((i) => i.name)
       .sort()
       .reverse();

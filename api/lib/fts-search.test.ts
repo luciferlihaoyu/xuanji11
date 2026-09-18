@@ -1,4 +1,13 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, vi } from "vitest";
+
+// 本文件用真实 SQLite（不 mock connection），而 connection 导入期会经 env.ts 强校验环境变量：
+// 缺失即 process.exit(1)，整个测试文件会静默变成「无法运行」→ 零保护。故在导入前注入占位值。
+vi.hoisted(() => {
+  process.env.DATABASE_URL ||= "file::memory:";
+  process.env.ADMIN_USERNAME ||= "test";
+  process.env.ADMIN_PASSWORD ||= "test-password";
+});
+
 import Database from "better-sqlite3";
 import { _setDbForTests, _resetDbForTests } from "../queries/connection";
 

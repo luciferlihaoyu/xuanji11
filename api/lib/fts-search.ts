@@ -56,8 +56,8 @@ export interface Bm25Hit {
   readonly documentId: number;
   readonly content: string;
   readonly rank: number; // bm25 原始名次（1 起，越小越好）
-  /** document_chunks.chunkIndex（供引用定位锚点使用） */
-  readonly chunkIndex: number;
+  /** document_chunks.chunkIndex（供引用定位锚点使用）；列缺失/异常时为 undefined，不伪造为 0 */
+  readonly chunkIndex?: number;
 }
 
 /**
@@ -84,7 +84,7 @@ export function bm25Search(query: string, limit: number): Bm25Hit[] {
     chunkId: r.chunkId,
     documentId: r.documentId,
     content: r.content,
-    chunkIndex: typeof r.chunkIndex === "number" ? r.chunkIndex : 0,
+    ...(typeof r.chunkIndex === "number" ? { chunkIndex: r.chunkIndex } : {}),
     rank: i + 1,
   }));
 }

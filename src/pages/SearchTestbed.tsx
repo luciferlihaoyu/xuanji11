@@ -18,14 +18,15 @@ interface EvalCaseRow {
   query: string;
   expectedDocIds: string;
   note: string | null;
-  createdAt: string;
+  /** tRPC 经 superjson 还原为 Date（仅类型标注用，不直接渲染） */
+  createdAt: Date | string;
 }
 
 interface EvalResultRow {
   caseId: number;
   query: string;
-  expectedDocIds: number[];
-  hitDocIds: number[];
+  expectedDocIds: readonly number[];
+  hitDocIds: readonly number[];
   recallAtK: number;
   reciprocalRank: number;
   error?: string;
@@ -75,7 +76,7 @@ export default function SearchTestbed() {
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [evalNote, setEvalNote] = useState('');
   const [evalReport, setEvalReport] = useState<{
-    results: EvalResultRow[];
+    results: readonly EvalResultRow[];
     metrics: { caseCount: number; meanRecallAtK: number; mrr: number; failedCount: number };
     durationMs: number;
   } | null>(null);

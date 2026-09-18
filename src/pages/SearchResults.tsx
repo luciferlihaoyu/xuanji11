@@ -322,7 +322,7 @@ export default function SearchResults() {
                         {hasChunk ? `第 ${chunk + 1} 块` : '文档级'}
                         {c.anchor?.heading ? ` · ${c.anchor.heading}` : ''}
                         {typeof c.score === 'number' ? ` · 分 ${c.score.toFixed(3)}` : ''}
-                        {c.versionNumber ? ` · v${c.versionNumber}` : ''}
+                        {c.versionNumber != null ? ` · v${c.versionNumber}` : ''}
                         {c.retrievedBy && c.retrievedBy.length > 0 ? ` · ${c.retrievedBy.join('+')}` : ''}
                       </span>
                     </div>

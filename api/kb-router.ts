@@ -224,7 +224,7 @@ export const kbRouter = createRouter({
    * 供「点引用跳转并高亮」使用；块不存在返回 null（不做近似匹配）。
    */
   getChunkContext: authedQuery
-    .input(z.object({ documentId: z.number(), chunkIndex: z.number().int().min(0) }))
+    .input(z.object({ documentId: z.number().int().min(1), chunkIndex: z.number().int().min(0) }))
     .query(async ({ input }) => getChunkContext(input.documentId, input.chunkIndex)),
 
   /**

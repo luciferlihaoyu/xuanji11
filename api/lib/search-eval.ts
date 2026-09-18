@@ -18,6 +18,8 @@ export interface EvalCaseResult {
   readonly recallAtK: number;
   /** 首个命中期望文档的名次倒数，无命中记 0 */
   readonly reciprocalRank: number;
+  /** 该条检索失败时的错误摘要（仅失败项存在；失败项不计入指标） */
+  readonly error?: string;
 }
 
 export interface EvalMetrics {

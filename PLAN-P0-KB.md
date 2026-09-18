@@ -1,6 +1,8 @@
 # 璇玑知识库 P0 实施计划（依据 docs/reports/xuanji-knowledge-base-analysis-and-roadmap.md）
 
-> 纪律：每任务先写失败测试（RED）→ 最小实现（GREEN）→ 重构；`npx tsc --noEmit` 干净；本容器只跑**单文件** vitest（禁止全量套件）；完成后走部署 + 线上验证 + 独立审查。
+> 纪律：每任务先写失败测试（RED）→ 最小实现（GREEN）→ 重构；**类型门禁 = `npm run check`（`tsc -b`）**；本容器只跑**单文件** vitest（禁止全量套件）；完成后走部署 + 线上验证 + 独立审查。
+>
+> ⚠️ 口径更正（2026-09-18，天演审查实证）：根 `tsconfig.json` 是 `files: []` + references，**`npx tsc --noEmit` 是零文件检查、恒 exit 0 的空转**——本文件早期记录的「tsc 零错」从未覆盖任何代码。真实门禁是 `npm run check`（`tsc -b`，含 app/node/server 三项目）。已修：我引入的类型错误 + 存量 alist 7 处 → **2026-09-18 `npm run check` 首次 exit 0**。
 > 环境：仓库 `/data/dsh/璇玑/xuanji11-review`，SQLite（`db/schema.ts` sqliteTable），boot 自动执行 `db/migrations`（`api/boot.ts:45`），生成迁移用 `npm run db:generate`。
 > 历史计划见 `PLAN.md`（审查修复 Round 1，已执行完毕，勿改）。
 
@@ -17,7 +19,7 @@
 - **change**:
   - `kbEvalCases`: `id PK, query TEXT NOT NULL, expectedDocIds TEXT NOT NULL (JSON 数组字符串), note TEXT, createdAt timestamp_ms`。
   - `search-eval.ts**: `export interface EvalCaseResult { caseId: number, query: string, expectedDocIds: number[], hitDocIds: number[], recallAtK: number, reciprocalRank: number }`；`export function computeEvalMetrics(cases: EvalCaseResult[]): { caseCount: number, meanRecallAtK: number, mrr: number }`（纯函数：MRR=首个命中期望文档的排名倒数，无命中记 0）；`export async function runEval(opts: { mode, rerank, topK }): Promise<{ results: EvalCaseResult[], metrics, durationMs }>`——逐条调 `executeHybridSearch`，命中集合取 `results.filter(r => r.type === "document")` 的 `id`（id 为 string，与 expected 的 number 对比需 Number() 转换）。
-- **verify**: `npx vitest run api/lib/search-eval.test.ts` 全绿（含空集/全命中/部分命中的 recall、MRR 手算断言）；`npx tsc --noEmit` 无错误。
+- **verify**: `npx vitest run api/lib/search-eval.test.ts` 全绿（含空集/全命中/部分命中的 recall、MRR 手算断言）；`npm run check`（`tsc -b`）无错误。
 
 ## t2 评测路由 + 问答重排策略化（后端）
 
@@ -29,7 +31,7 @@
 - **change**:
   - 路由：`listCases: authedQuery`；`createCase/deleteCase: adminQuery`（zod：`query: z.string().min(1)`、`expectedDocIds: z.array(z.number().int()).min(1)`、`note: z.string().optional()`）；`runEval: adminQuery`（`{ mode: z.enum(["keyword","vector","hybrid"]).default("hybrid"), rerank: z.boolean().default(false), topK: z.number().int().min(1).max(20).default(5) }`）调 `runEval` 返回逐条结果与汇总。
   - `ask-rag.ts`: 新增 `export async function resolveAskRetrievalOptions(): Promise<{ mode: "hybrid"; limit: number; rerank: boolean }>`——读 `systemSettings.key = "ask_retrieval_rerank"`（"true"/"false"，缺省与异常兜底 false；读法照 `api/lib/egress.ts:107-111`）；`askKnowledgeBase` 用它替换 `api/lib/ask-rag.ts:43` 的硬编码，并新增可选参数 `retrievalOverride?: Partial<{ limit: number; rerank: boolean }>`（调用方/测试可显式控制，优先级最高）。
-- **verify**: `npx vitest run api/ask-rag.test.ts` 全绿（断言：设置 "true" 时传给 executeHybridSearch 的 rerank=true；无设置 false；override 覆盖一切）；`npx tsc --noEmit` 干净。
+- **verify**: `npx vitest run api/ask-rag.test.ts` 全绿（断言：设置 "true" 时传给 executeHybridSearch 的 rerank=true；无设置 false；override 覆盖一切）；`npm run check`（`tsc -b`）干净。
 
 ## t3 检索测试台前端
 
@@ -40,7 +42,7 @@
   - 「存为评测用例」：勾选结果中文档 → `searchEval.createCase`；用例列表可删。
   - 「跑评测集」：`searchEval.runEval`（当前 mode/rerank/topK）→ meanRecallAtK、MRR、逐条 recall/首个命中排名。
   - 样式沿用 `SearchResults.tsx` 的 Tailwind + CSS 变量（`var(--text-primary)` 等）。
-- **verify**: `npx vite build` 成功且 `ls dist/public/assets | grep -i testbed` 有产物；`npx tsc --noEmit` 干净；部署后线上 `/search-testbed` 完成一次检索并显示分数分解。
+- **verify**: `npx vite build` 成功且 `ls dist/public/assets | grep -i testbed` 有产物；`npm run check`（`tsc -b`）干净；部署后线上 `/search-testbed` 完成一次检索并显示分数分解。
 
 ## t4 Citation 2.0 后端（P0-1）
 
@@ -81,13 +83,13 @@
 ### wave1 后端（t1+t2）— 2026-09-18，碧霄亲自实施（子代理通道两批四任均停滞，改亲手 TDD）
 - RED：`npx vitest run api/lib/search-eval.test.ts api/ask-rag.test.ts` → 6 failed / 3 passed（缺模块与策略化，证明测试有效）
 - GREEN：同命令 → **18/18 通过**；邻接回归 `api/hybrid-search.test.ts` + 上述两文件 → **36/36 通过**（期间修复 rrfScore 未导入的真 bug）
-- `npx tsc --noEmit` exit 0；`npx vite build` exit 0（10.91s）
+- ~~`npx tsc --noEmit` exit 0~~（**空转，无效证据**，见顶部口径更正）；`npx vite build` exit 0（10.91s）
 - 迁移：`db/migrations/0007_rapid_sir_ram.sql`（kb_eval_cases 表 + query 索引，boot 自动执行）
 - 交付物：`api/lib/search-eval.ts`、`api/lib/search-eval.test.ts`、`api/search-eval-router.ts`（router.ts 已注册 searchEval）、`api/ask-rag.test.ts`；`SearchResult.scoreBreakdown{keyword,vector,rrf,llmRerank}`、`MergedHit.llmScore`、`ask-rag.resolveAskRetrievalOptions()`（设置 ask_retrieval_rerank 驱动，替换 :43 硬编码）+ `retrievalOverride` 参数
 
 ### wave1 前端（t3）— 2026-09-18，碧霄亲自实施
 - 交付物：`src/pages/SearchTestbed.tsx`（检索控件 mode/rerank/topK + metadata 条 + 分数分解四列表 + 评测用例管理 + 评测报告三指标卡）；App.tsx 注册 `/search-testbed`（lazy chunk）；CommandPalette 加「检索测试台」入口
-- 验证：`npx tsc --noEmit` exit 0；`npx vite build` exit 0，产物 `dist/public/assets/SearchTestbed-BE2tM8bL.js`（16.95 kB / gzip 4.36 kB）
+- 验证：~~`npx tsc --noEmit` exit 0~~（空转）；`npx vite build` exit 0，产物 `dist/public/assets/SearchTestbed-BE2tM8bL.js`（16.95 kB / gzip 4.36 kB）
 
 ### wave1 线上验证 — 2026-09-18（e3afdd7，commit 后等 RUNNING 再验）
 - `/health` 502 约 3 分钟后转 200（容器切换期），随后 `searchEval.listCases` → HTTP 200，确认新版上线
@@ -104,7 +106,7 @@
 - 检索层透传块序号：`EvidenceChunk.chunkIndex`（bm25 走 `c.chunkIndex`，向量走索引器写入的 `metadata.chunkIndex`）
 - 新过程 `kb.getChunkContext`（薄封装，块不存在返回 null 不做近似匹配）
 - 前端：搜索结果引用变可点击（`/doc/:id?q=..&chunk#chunk-N` + 块号/章节/分数/版本/来源）；DocumentDetail 新增「引用定位」面板（命中块原文 + 查询词高亮 + 关闭）
-- 验证：`npx tsc --noEmit` exit 0；`npx vite build` exit 0；回归 5 文件 **61/61 通过**
+- 验证：~~`npx tsc --noEmit` exit 0~~（空转）；`npx vite build` exit 0；回归 5 文件 **61/61 通过**
 
 ### wave2 线上验证 — 2026-09-18（c5306f1）
 - `kb.getChunkContext(1922, 0)` → 返回真实块原文，`totalChunks=119`，`heading=璇玑个人知识库：现状评估与完善路径`
@@ -118,6 +120,15 @@
 - 阶段二代码质量 PASS + 6 minor；测试真实性经变异验证（改 rerank 恒 true → 3 红；改 RR 公式 → 4 红）
 - 本轮已修 minor：① 测试台改参数不再打出请求风暴（草稿态 + 点击生效，按钮提示「参数已改」）② 删除用例失败不再静默 ③ `runEval` 单条检索失败不再毁全盘报告（标 error + `failedCount` 且失败项不计入指标）④ 布尔设置口径与 egress 对齐（接受 "true"/"1"）⑤ 补 TopNavbar「检索测试台」导航入口 ⑥ 补测试：runEval 容错、布尔 "1"、版本号标注
 - 未修（记录在案）：`api/kb-backup.test.ts` 2 例失败为**存量**问题——在 e0d2f5b（本波次之前）上同样失败，与 P0 无关，另行处理
+
+### 独立审查（天演，审 c5306f1 + 41ebcbf）— 2026-09-18
+- 阶段一规格符合度 **7/7 PASS**（含块序号透传链路真实性、LIKE 回退诚实留空、测试真实性经变异验证）
+- 阶段二 **1 critical + 11 minor**：
+  - **C1（critical，我引入）**：`EvalCaseResult` 漏声明 `error?: string`（我上轮批量替换打偏），真实门禁 `tsc -b` 报 4 错；vitest 不查类型故测试照绿 → **已修**
+  - **C2（critical，流程）**：`npx tsc --noEmit` 空转（见顶部口径更正）→ 已把门禁改为 `npm run check` 并修到 exit 0
+  - 已修 minor：M4（bm25 chunkIndex 缺失不再伪造为 0）· M7（补 `resolveLatestVersions` 6 例直接测试，**变异 M2 实证由「存活」转「杀死」**）· M9（kb.getChunkContext zod 对称 `.int().min(1)`）· M10（版本号 `!= null` 判空）
+  - 记录不修：M2/M3（详情页 anchor 状态随路由重置——当前入口单一，风险低）· M5/M6（Unicode/代码围栏标题边界）· M8（全量 select 可优化为双条件+count，119 块无碍）· M1（建议补 totalCases/degraded，非阻塞）
+- 顺带修复两处「验证基建失效」：`api/lib/fts-search.test.ts` 因缺环境变量在导入期 `process.exit(1)` → 该文件此前**根本无法运行**（零保护），已补 `vi.hoisted` 环境桩，现 5/5 通过；仓库扫描确认无同类死文件
 
 ### 已知存量问题（非本波次引入）
 - `api/kb-backup.test.ts > imports valid backup data` / `REST imports with knowledge:write scope`：mock 未实现 drizzle 的 `insert().values()` 链，报 `db.insert(...).values is not a function`；证据：e0d2f5b 与 c5306f1 上均 2 例失败
