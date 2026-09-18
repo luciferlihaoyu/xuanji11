@@ -71,6 +71,11 @@ describe("resolveAskRetrievalOptions（设置驱动）", () => {
     expect(o).toEqual({ mode: "hybrid", limit: 8, rerank: true });
   });
 
+  it("设置值为 '1' 也视为开启（与 egress 布尔设置口径对齐）", async () => {
+    vi.mocked(getDb).mockReturnValue(settingsDb([{ value: "1" }]) as never);
+    expect((await resolveAskRetrievalOptions()).rerank).toBe(true);
+  });
+
   it("无设置行 → rerank false", async () => {
     vi.mocked(getDb).mockReturnValue(settingsDb([]) as never);
     expect((await resolveAskRetrievalOptions()).rerank).toBe(false);
@@ -150,7 +155,8 @@ describe("Citation 2.0（引用可定位）", () => {
     expect(r.insufficient).toBe(false);
     const c = r.citations[0];
     expect(c.documentId).toBe("1922");
-    expect(c.versionId).toBe(105);
+    expect(c.versionId).toBe(105);       // 版本行 id（供溯源/深链）
+    expect(c.versionNumber).toBe(3);    // 人类可读版本号（UI 显示 v3，不是 v105）
     expect(c.anchor.chunkIndex).toBe(3);
     expect(c.anchor.charStart).toBeGreaterThanOrEqual(0);
     expect(c.anchor.charEnd).toBeGreaterThan(c.anchor.charStart ?? 0);
@@ -163,6 +169,7 @@ describe("Citation 2.0（引用可定位）", () => {
     vi.mocked(getDb).mockReturnValue(fakeDb({ versions: [] }) as never);
     const r = await askKnowledgeBase("引用可定位说明");
     expect(r.citations[0].versionId).toBeNull();
+    expect(r.citations[0].versionNumber).toBeNull();
   });
 
   it("无块级证据 → anchor 对象仍存在且 chunkIndex 为 null、charStart 缺省", async () => {

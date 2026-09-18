@@ -8,15 +8,17 @@
  */
 import { executeHybridSearch } from "./hybrid-search";
 import { chatCompletionStream, hasLlmAvailable, type ChatMessage } from "./llm-chat";
-import { buildAnchor, resolveLatestVersionIds, type CitationAnchor } from "./citation-anchor";
+import { buildAnchor, resolveLatestVersions, type CitationAnchor } from "./citation-anchor";
 
 export interface AskCitation {
   readonly n: number;
   readonly documentId: string;
   readonly title: string;
   readonly snippet: string;
-  /** 版本溯源：该文档当前最新版本 id（无版本记录时为 null，不伪造） */
+  /** 版本溯源：该文档当前最新版本**行 id**（供精确溯源/深链；无记录为 null，不伪造） */
   readonly versionId: number | null;
+  /** 该版本的人类可读版本号（UI 显示 v{versionNumber}；无记录为 null） */
+  readonly versionNumber: number | null;
   /** 定位锚点：块序号 + 块内字符区间 + 所属标题 */
   readonly anchor: CitationAnchor;
   /** 该文档的融合检索分 */
@@ -62,7 +64,8 @@ export async function resolveAskRetrievalOptions(): Promise<AskRetrievalOptions>
     const { eq } = await import("drizzle-orm");
     const [row] = await getDb().select({ value: systemSettings.value }).from(systemSettings)
       .where(eq(systemSettings.key, "ask_retrieval_rerank"));
-    if (row?.value === "true") rerank = true;
+    // 与 egress 布尔设置口径一致：接受 "true" 与 "1"
+    if (row?.value === "true" || row?.value === "1") rerank = true;
   } catch {
     // DB 不可用（启动早期等）：保持默认 false
   }
@@ -104,7 +107,7 @@ export async function askKnowledgeBase(
   }
 
   // 2. 证据编号 + 溯源（版本 + 段落锚点 + 分数 + 来源）
-  const versionIds = await resolveLatestVersionIds(
+  const latestVersions = await resolveLatestVersions(
     docs.map((d) => Number(d.id)).filter((n) => Number.isFinite(n)),
   );
   const citations: AskCitation[] = docs.map((d, i) => {
@@ -112,12 +115,14 @@ export async function askKnowledgeBase(
     const chunkText = topEvidence?.snippet ?? "";
     const chunkIndex = typeof topEvidence?.chunkIndex === "number" ? topEvidence.chunkIndex : null;
     const numericId = Number(d.id);
+    const version = Number.isFinite(numericId) ? latestVersions.get(numericId) : undefined;
     return {
       n: i + 1,
       documentId: d.id,
       title: d.title,
       snippet: d.snippet,
-      versionId: Number.isFinite(numericId) ? (versionIds.get(numericId) ?? null) : null,
+      versionId: version?.id ?? null,
+      versionNumber: version?.versionNumber ?? null,
       anchor: buildAnchor(chunkText, query, chunkIndex),
       score: d.score,
       retrievedBy: [...(d.sources ?? [])],

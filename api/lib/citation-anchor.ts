@@ -43,12 +43,19 @@ export function buildAnchor(chunkText: string, query: string, chunkIndex: number
   return anchor;
 }
 
+export interface LatestVersion {
+  /** 版本行 id（供精确溯源/深链） */
+  readonly id: number;
+  /** 人类可读版本号（UI 显示 v{versionNumber}，注意它通常 ≠ 行 id） */
+  readonly versionNumber: number;
+}
+
 /**
- * 批量解析每个文档的最新版本 id（取 versionNumber 最大者）。
+ * 批量解析每个文档的最新版本（取 versionNumber 最大者；同号取行 id 大者）。
  * 失败时返回空 Map（不阻塞问答），版本信息缺失即 null。
  */
-export async function resolveLatestVersionIds(documentIds: readonly number[]): Promise<Map<number, number>> {
-  const latest = new Map<number, { id: number; versionNumber: number }>();
+export async function resolveLatestVersions(documentIds: readonly number[]): Promise<Map<number, LatestVersion>> {
+  const latest = new Map<number, LatestVersion>();
   const ids = [...new Set(documentIds.filter((n) => Number.isFinite(n)))];
   if (ids.length === 0) return new Map();
   try {
@@ -73,5 +80,5 @@ export async function resolveLatestVersionIds(documentIds: readonly number[]): P
   } catch {
     // DB 不可用：版本溯源缺失但不影响回答
   }
-  return new Map([...latest.entries()].map(([docId, v]) => [docId, v.id]));
+  return latest;
 }

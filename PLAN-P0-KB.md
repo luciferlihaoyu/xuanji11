@@ -105,3 +105,19 @@
 - 新过程 `kb.getChunkContext`（薄封装，块不存在返回 null 不做近似匹配）
 - 前端：搜索结果引用变可点击（`/doc/:id?q=..&chunk#chunk-N` + 块号/章节/分数/版本/来源）；DocumentDetail 新增「引用定位」面板（命中块原文 + 查询词高亮 + 关闭）
 - 验证：`npx tsc --noEmit` exit 0；`npx vite build` exit 0；回归 5 文件 **61/61 通过**
+
+### wave2 线上验证 — 2026-09-18（c5306f1）
+- `kb.getChunkContext(1922, 0)` → 返回真实块原文，`totalChunks=119`，`heading=璇玑个人知识库：现状评估与完善路径`
+- 不存在的块（99999）→ `null`（不做近似匹配）✅
+- `/api/ask/stream` 引用 7 条：`anchor={chunkIndex:0}`、`retrievedBy=['vector']`、`score=0.016`、`versionId` 字段存在、`n/documentId/title/snippet` 向后兼容 ✅
+- **端到端闭环**：引用给出的 `chunkIndex=0` 回查 `getChunkContext` 命中同文档同块 ✅
+- 线上数据暴露一处标注缺陷并已修：`versionId` 是版本**行 id**，UI 曾显示成 `v1`（多版本文档会显示成 `v31` 这类误导标签）→ 新增 `versionNumber` 字段，UI 改显 `v{versionNumber}`
+
+### 独立审查（天演，审 e3afdd7）— 2026-09-18
+- 阶段一规格符合度 6/7 PASS + **1 critical**：`0007_rapid_sir_ram.sql` 被 `.gitignore` 吞掉未入库，而 `meta/_journal.json` 已引用它 → 干净环境 `readMigrationFiles` 抛错、启动即崩（天演在纯净 worktree 实证）。**该 critical 与线上 12:55 停机事故同源**，已由 d219953/98c95f6 修复，本轮变基继承
+- 阶段二代码质量 PASS + 6 minor；测试真实性经变异验证（改 rerank 恒 true → 3 红；改 RR 公式 → 4 红）
+- 本轮已修 minor：① 测试台改参数不再打出请求风暴（草稿态 + 点击生效，按钮提示「参数已改」）② 删除用例失败不再静默 ③ `runEval` 单条检索失败不再毁全盘报告（标 error + `failedCount` 且失败项不计入指标）④ 布尔设置口径与 egress 对齐（接受 "true"/"1"）⑤ 补 TopNavbar「检索测试台」导航入口 ⑥ 补测试：runEval 容错、布尔 "1"、版本号标注
+- 未修（记录在案）：`api/kb-backup.test.ts` 2 例失败为**存量**问题——在 e0d2f5b（本波次之前）上同样失败，与 P0 无关，另行处理
+
+### 已知存量问题（非本波次引入）
+- `api/kb-backup.test.ts > imports valid backup data` / `REST imports with knowledge:write scope`：mock 未实现 drizzle 的 `insert().values()` 链，报 `db.insert(...).values is not a function`；证据：e0d2f5b 与 c5306f1 上均 2 例失败

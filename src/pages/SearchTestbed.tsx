@@ -8,7 +8,7 @@
  * 面向两类用户：人（调参看效果）、Agent/开发者（改检索逻辑前后跑同一评测集自证）。
  */
 import { useState } from 'react';
-import { FlaskConical, Play, Save, Trash2, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
+import { FlaskConical, Play, Save, Trash2, RefreshCw, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import { trpc } from '@/providers/trpc';
 
 type Mode = 'keyword' | 'vector' | 'hybrid';
@@ -28,6 +28,7 @@ interface EvalResultRow {
   hitDocIds: number[];
   recallAtK: number;
   reciprocalRank: number;
+  error?: string;
 }
 
 function parseExpected(raw: string): number[] {
@@ -40,21 +41,29 @@ function parseExpected(raw: string): number[] {
 }
 
 export default function SearchTestbed() {
-  // ── 检索控件 ──
+  // ── 检索控件（草稿态：改参数不发请求，点「检索」才生效，避免拖动滑块打出请求风暴）──
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<Mode>('hybrid');
   const [rerank, setRerank] = useState(false);
   const [topK, setTopK] = useState(10);
-  const [submitted, setSubmitted] = useState('');
+
+  // ── 已提交参数（真正发起查询的那一份）──
+  const [submitted, setSubmitted] = useState<{ query: string; mode: Mode; rerank: boolean; topK: number } | null>(null);
 
   const trimmed = query.trim();
+  const dirty = submitted !== null && (submitted.mode !== mode || submitted.rerank !== rerank || submitted.topK !== topK);
+  const runSearch = () => {
+    if (!trimmed) return;
+    setSubmitted({ query: trimmed, mode, rerank, topK });
+  };
+
   const {
     data: searchData,
     isLoading,
     error,
   } = trpc.kb.hybridSearch.useQuery(
-    { query: submitted, mode, limit: topK, rerank },
-    { enabled: submitted.length > 0, retry: 1 }
+    { query: submitted?.query ?? '', mode: submitted?.mode ?? 'hybrid', limit: submitted?.topK ?? 10, rerank: submitted?.rerank ?? false },
+    { enabled: !!submitted, retry: 1 }
   );
 
   // ── 评测用例 ──
@@ -67,7 +76,7 @@ export default function SearchTestbed() {
   const [evalNote, setEvalNote] = useState('');
   const [evalReport, setEvalReport] = useState<{
     results: EvalResultRow[];
-    metrics: { caseCount: number; meanRecallAtK: number; mrr: number };
+    metrics: { caseCount: number; meanRecallAtK: number; mrr: number; failedCount: number };
     durationMs: number;
   } | null>(null);
   const [message, setMessage] = useState('');
@@ -112,9 +121,10 @@ export default function SearchTestbed() {
   const handleDeleteCase = async (id: number) => {
     try {
       await deleteCase.mutateAsync({ id });
+      setMessage('用例已删除');
       void refetchCases();
-    } catch {
-      /* 列表刷新即自愈 */
+    } catch (e) {
+      setMessage(`删除失败：${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -135,7 +145,7 @@ export default function SearchTestbed() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && trimmed && setSubmitted(trimmed)}
+          onKeyDown={(e) => e.key === 'Enter' && runSearch()}
           placeholder="查询词，如：引用可定位"
           className="flex-1 min-w-64 px-3 py-1.5 rounded text-sm outline-none border"
           style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)', borderColor: 'var(--border-subtle)' }}
@@ -159,11 +169,11 @@ export default function SearchTestbed() {
           <input type="range" min={1} max={20} value={topK} onChange={(e) => setTopK(Number(e.target.value))} className="w-24" />
         </label>
         <button
-          onClick={() => trimmed && setSubmitted(trimmed)}
+          onClick={runSearch}
           disabled={!trimmed || isLoading}
           className="flex items-center gap-1.5 px-4 py-1.5 rounded text-sm font-medium text-white bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40"
         >
-          <Play size={14} /> 检索
+          <Play size={14} /> 检索{dirty ? '（参数已改）' : ''}
         </button>
       </div>
 
@@ -325,18 +335,22 @@ export default function SearchTestbed() {
                   <div className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
                     {evalReport.metrics.caseCount}/{evalReport.durationMs}ms
                   </div>
+                  <div className="text-[10px]" style={{ color: evalReport.metrics.failedCount > 0 ? '#fb7185' : 'var(--text-muted)' }}>
+                    {evalReport.metrics.failedCount > 0 ? `${evalReport.metrics.failedCount} 条检索失败（不计入指标）` : '全部成功'}
+                  </div>
                 </div>
               </div>
               <div className="space-y-1 max-h-48 overflow-y-auto">
                 {evalReport.results.map((r) => {
-                  const good = r.recallAtK >= 0.999;
-                  const bad = r.recallAtK === 0;
+                  const failed = !!r.error;
+                  const good = !failed && r.recallAtK >= 0.999;
+                  const bad = !failed && r.recallAtK === 0;
                   return (
                     <div key={r.caseId} className="flex items-center gap-2 text-xs px-2 py-1 rounded" style={{ background: 'var(--bg-secondary)' }}>
-                      {good ? <CheckCircle2 size={13} className="text-emerald-400 shrink-0" /> : bad ? <XCircle size={13} className="text-rose-400 shrink-0" /> : <span className="shrink-0 w-[13px] text-center" style={{ color: 'var(--text-muted)' }}>◐</span>}
+                      {failed ? <AlertTriangle size={13} className="text-rose-400 shrink-0" /> : good ? <CheckCircle2 size={13} className="text-emerald-400 shrink-0" /> : bad ? <XCircle size={13} className="text-rose-400 shrink-0" /> : <span className="shrink-0 w-[13px] text-center" style={{ color: 'var(--text-muted)' }}>◐</span>}
                       <span className="flex-1 min-w-0 truncate" style={{ color: 'var(--text-primary)' }}>{r.query}</span>
                       <span className="font-mono shrink-0" style={{ color: 'var(--text-muted)' }}>
-                        recall {r.recallAtK} · rr {r.reciprocalRank} · 命中 [{r.hitDocIds.join(', ')}]
+                        {failed ? `检索失败：${r.error}` : `recall ${r.recallAtK} · rr ${r.reciprocalRank} · 命中 [${r.hitDocIds.join(', ')}]`}
                       </span>
                     </div>
                   );

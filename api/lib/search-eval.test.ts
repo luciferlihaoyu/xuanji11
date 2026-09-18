@@ -66,7 +66,7 @@ describe("evaluateSingleCase（单用例打分）", () => {
 
 describe("computeEvalMetrics（汇总）", () => {
   it("空集返回全 0", () => {
-    expect(computeEvalMetrics([])).toEqual({ caseCount: 0, meanRecallAtK: 0, mrr: 0 });
+    expect(computeEvalMetrics([])).toEqual({ caseCount: 0, meanRecallAtK: 0, mrr: 0, failedCount: 0 });
   });
 
   it("三用例手算：meanRecall=(0.5+0+1)/3=0.5，mrr=(1+0+0.5)/3=0.5", () => {
@@ -77,6 +77,35 @@ describe("computeEvalMetrics（汇总）", () => {
     expect(m.caseCount).toBe(3);
     expect(m.meanRecallAtK).toBe(0.5);
     expect(m.mrr).toBe(0.5);
+  });
+});
+
+describe("runEval 容错（单条失败不毁全盘报告）", () => {
+  it("某条检索抛错 → 该条标 error 且不计入指标，其余照常出分", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDbWithCases([
+      { id: 1, query: "会炸的查询", expectedDocIds: "[11]", note: null },
+      { id: 2, query: "正常查询", expectedDocIds: "[22]", note: null },
+    ]) as never);
+    searchMock.executeHybridSearch
+      .mockRejectedValueOnce(new Error("embedding 服务挂了"))
+      .mockResolvedValueOnce({
+        results: [docResult(22)],
+        facets: { types: {}, tags: {}, folders: {} },
+        metadata: { mode: "hybrid", query: "正常查询", limit: 5, total: 1, keywordResults: 1, vectorResults: 1, durationMs: 1, cached: false },
+      });
+
+    const r = await runEval();
+    expect(r.results).toHaveLength(2);
+    const failed = r.results.find((x) => x.caseId === 1);
+    const okCase = r.results.find((x) => x.caseId === 2);
+    expect(failed?.error).toContain("embedding");
+    expect(okCase?.error).toBeUndefined();
+    expect(okCase?.recallAtK).toBe(1);
+    // 指标只统计成功用例（失败项不污染 recall/MRR），另报 failedCount
+    expect(r.metrics.caseCount).toBe(1);
+    expect(r.metrics.failedCount).toBe(1);
+    expect(r.metrics.meanRecallAtK).toBe(1);
+    expect(r.metrics.mrr).toBe(1);
   });
 });
 

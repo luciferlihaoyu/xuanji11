@@ -18,6 +18,7 @@ const navItems = [
   { label: '数据源', path: '/sources' },
   { label: '上传', path: '/upload' },
   { label: '分析', path: '/analytics' },
+  { label: '检索测试台', path: '/search-testbed' },
   { label: '审计', path: '/audit' },
 ];
 

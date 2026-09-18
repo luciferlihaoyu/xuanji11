@@ -21,9 +21,12 @@ export interface EvalCaseResult {
 }
 
 export interface EvalMetrics {
+  /** 参与打分的成功用例数（失败用例不计入） */
   readonly caseCount: number;
   readonly meanRecallAtK: number;
   readonly mrr: number;
+  /** 检索失败的用例数 */
+  readonly failedCount: number;
 }
 
 export interface RunEvalOptions {
@@ -64,15 +67,21 @@ export function evaluateSingleCase(
   };
 }
 
-/** 汇总指标（纯函数）：meanRecall@K 与 MRR，空集全 0 */
+/**
+ * 汇总指标（纯函数）：meanRecall@K 与 MRR。
+ * 失败用例（error 非空）不计入分母——检索挂掉不该被算成「没召回」，否则指标会骗人。
+ */
 export function computeEvalMetrics(cases: readonly EvalCaseResult[]): EvalMetrics {
-  if (cases.length === 0) return { caseCount: 0, meanRecallAtK: 0, mrr: 0 };
-  const meanRecall = cases.reduce((s, c) => s + c.recallAtK, 0) / cases.length;
-  const mrr = cases.reduce((s, c) => s + c.reciprocalRank, 0) / cases.length;
+  const scored = cases.filter((c) => !c.error);
+  const failedCount = cases.length - scored.length;
+  if (scored.length === 0) return { caseCount: 0, meanRecallAtK: 0, mrr: 0, failedCount };
+  const meanRecall = scored.reduce((s, c) => s + c.recallAtK, 0) / scored.length;
+  const mrr = scored.reduce((s, c) => s + c.reciprocalRank, 0) / scored.length;
   return {
-    caseCount: cases.length,
+    caseCount: scored.length,
     meanRecallAtK: round3(meanRecall),
     mrr: round3(mrr),
+    failedCount,
   };
 }
 
@@ -99,12 +108,25 @@ export async function runEval(opts: RunEvalOptions = {}): Promise<RunEvalReport>
 
   const results: EvalCaseResult[] = [];
   for (const row of rows) {
-    const search = await executeHybridSearch({ query: row.query, mode, limit: topK, rerank });
-    const hitDocIds = search.results
-      .filter((r) => r.type === "document")
-      .map((r) => Number(r.id))
-      .filter((n) => Number.isFinite(n));
-    results.push(evaluateSingleCase(row.id, row.query, parseExpectedDocIds(row.expectedDocIds), hitDocIds));
+    try {
+      const search = await executeHybridSearch({ query: row.query, mode, limit: topK, rerank });
+      const hitDocIds = search.results
+        .filter((r) => r.type === "document")
+        .map((r) => Number(r.id))
+        .filter((n) => Number.isFinite(n));
+      results.push(evaluateSingleCase(row.id, row.query, parseExpectedDocIds(row.expectedDocIds), hitDocIds));
+    } catch (e) {
+      // 单条失败（嵌入服务抖动、超时等）不该让整份评测报告消失
+      results.push({
+        caseId: row.id,
+        query: row.query,
+        expectedDocIds: parseExpectedDocIds(row.expectedDocIds),
+        hitDocIds: [],
+        recallAtK: 0,
+        reciprocalRank: 0,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
 
   return { results, metrics: computeEvalMetrics(results), durationMs: Date.now() - startedAt };
