@@ -16,7 +16,7 @@
 
 **认证方式**：所有请求带 Header `Authorization: Bearer <你的API Key>`
 
-**端点前缀**：`https://xuanjj29.zeabur.app/api/trpc/`
+**端点前缀**：`https://xuanji.xianrealme.com/api/trpc/`
 
 ### 知识图谱
 
@@ -132,7 +132,7 @@ GET /api/files/:id
 {
   "mcpServers": {
     "xuanji": {
-      "url": "https://xuanjj29.zeabur.app/api/mcp",
+      "url": "https://xuanji.xianrealme.com/api/mcp",
       "headers": {
         "Authorization": "Bearer xu_sk_你的密钥"
       }
@@ -342,15 +342,15 @@ API Key 的权限继承自创建时绑定的 Agent：
 
 ```bash
 # 测试服务健康（无需鉴权）
-curl -s https://xuanjj29.zeabur.app/health
+curl -s https://xuanji.xianrealme.com/health
 
 # 测试 MCP 握手（无需鉴权）
-curl -s -X POST https://xuanjj29.zeabur.app/api/mcp \
+curl -s -X POST https://xuanji.xianrealme.com/api/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test"},"capabilities":{}}}'
 
 # 使用 API Key 调用 REST 接口（需鉴权）
-curl -s -X POST "https://xuanjj29.zeabur.app/api/trpc/knowledge.listNodes?input={}" \
+curl -s -X POST "https://xuanji.xianrealme.com/api/trpc/knowledge.listNodes?input={}" \
   -H "Authorization: Bearer xu_sk_你的密钥" \
   -H "X-Requested-With: XMLHttpRequest"
 ```

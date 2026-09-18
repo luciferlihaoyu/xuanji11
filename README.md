@@ -1,6 +1,6 @@
 # 璇玑智脑（Xuanji Brain）
 
-璇玑智脑是一个部署在 Zeabur 的全栈智能知识库与工作流平台，提供知识图谱、Obsidian 风格文档管理、Agent 权限管理、数据源接入、文件上传与本地管理员认证。当前线上地址：<https://xuanjj29.zeabur.app/>。
+璇玑智脑是一个部署在 Zeabur 的全栈智能知识库与工作流平台，提供知识图谱、Obsidian 风格文档管理、Agent 权限管理、数据源接入、文件上传与本地管理员认证。当前线上地址：<https://xuanji.xianrealme.com/>。
 
 ## 核心功能
 
