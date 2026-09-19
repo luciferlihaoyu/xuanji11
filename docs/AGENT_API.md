@@ -201,7 +201,7 @@ GET /api/files/:id
 
 - `task_get`（只读）：`{"taskId": "..."}` → `{taskId, kind, refId, status, progress, startedAt, finishedAt?, error?, meta, cancelRequested}`
   - `kind`：`backup`（`refId` = 本次运行行 backup_jobs.id）或 `reindex`
-  - 进度/状态**以业务真相为准**：备份读 `backup_jobs` 行（`meta.filesTotal/filesDone/filesFailed`），回填读索引器进度——进程重启后句柄依然准确，不会永远停在 running
+  - 进度/状态**以业务真相为准**：备份读 `backup_jobs` 行（`meta.filesTotal/filesDone/filesFailed`），回填读索引器进度——**同一进程生命周期内**句柄不会永远停在 running（业务已结束就会被读时收口）；句柄本身不跨重启，重启后按下方「边界」处理
 - `task_get` 是**有意的惰性收口点**：只读注解指它不改业务数据，但句柄若停在 running 而业务早已结束，读一次会把它落成终态（同一进程内让状态收敛，而不是永远漂着）
 - `task_cancel`：`{"taskId": "..."}` → `{taskId, accepted, status, reason?}`
   - **两段式语义**：`accepted: true` 只表示取消请求已记录（执行方在安全点收手：备份在文件之间、回填在文档之间），`status` 仍为 `running`；执行方确认后状态才会变 `cancelled`
@@ -212,7 +212,11 @@ GET /api/files/:id
   - 「状态以业务真相为准」说的是**同一次进程生命周期内**：句柄只存身份，进度/终态每次都从 `backup_jobs` 行或索引器实况重新读，所以不会出现「业务早已结束、句柄永远 running」的漂移
   - 重启后要查历史：备份用 `backup_list`（`refId` = 运行行 id，可直接对上）；回填可重新触发（`kb.reindex_all` 幂等）
   - 若一次备份运行的行在进程重启时仍停在 `pending`/`running`（进程被杀），它不会有人再来收尾：请以 `backup_list` 的行状态为准，必要时重新触发
-- 幂等入口：回填已在运行时再调 `kb.reindex_all` **不会新造句柄**，而是复用/认领正在跑的那个（返回 `reused: true`）；否则会给出一个没人轮询的句柄，取消它也是空转。UI 直接发起的回填没有句柄，MCP 调用会**认领**它，认领之后即可取消
+- 幂等入口：回填已在运行时再调 `kb.reindex_all` **不会新起运行**，而是复用/认领正在跑的那次，响应里：
+  - `reused: true` = 本次调用没有新起回填（已有运行在跑）
+  - `adopted: true` = 这次运行原本没有句柄（例如控制台直接发起的），本次调用把它纳入了句柄管理，此后可 `task_cancel`
+  - 两者都为 `false` = 本次调用真的启动了一次新回填
+  - 若不做这个复用，第二次调用会拿到一个没人轮询的句柄，取消它也是空转
 - 未提供服务端强制中断：取消是协作式的，单次长上传/单篇索引会跑完当前单元才停
 
 - `backup_trigger` 的边界：`backup_jobs` 是双职表（调度行 + 每次运行行），**运行行（cron 为空）会被拒绝**——否则会悄悄多派生一份备份；触发走「按 id 直取」，不会改 `enabled`，所以停用的调度也能手动触发一次（无需先启用），也不会把行弄成 due

@@ -169,7 +169,13 @@
   - 归属校验：别的回填在跑时，不拿全局进度给**不属于它**的句柄收口
 - **Q8**：`backup_trigger` 改为「读行 → 必须是调度行（有 cron）→ `runDueBackupSchedules({scheduleId, force:true})` 按 id 直取」，不再无条件写 `enabled=true`+`nextRunAt=now`（原来一旦传入运行行，它会变成 due 被 tick 当调度再跑一份）
 - **Q10**：取消的部分快照纳入 `keepLastN` retention
-- 新增测试：`api/lib/task-sync.test.ts`（10 例纯函数规则）+ `api/mcp-tasks.test.ts` 补 4 例（幂等复用/新建、enabled 不被改、运行行拒绝）共 13 例；变异自证 3 处（判定规则退回旧口径 → 变红；退回无条件 enable → 变红）；门禁 `npm run check` exit 0；批次 7 文件 56/56
+- 新增测试：`api/lib/task-sync.test.ts`（10 例纯函数规则）+ `api/mcp-tasks.test.ts`（幂等复用/新建/认领、enabled 不被改、运行行拒绝）；变异自证 3 处（判定规则退回旧口径 → 变红；退回无条件 enable → 变红）；门禁 `npm run check` exit 0
+
+**天演复核 f5b0f37（2026-09-19）：Q1–Q10 → 9 已修 1 部分修，结论「可收」**，遗留 1 残句 + 2 个 LOW 观察项，本次一并收口：
+- Q4 残句：`AGENT_API.md` 里「进程重启后句柄依然准确」改为「**同一进程生命周期内**不会永远停在 running；句柄不跨重启，重启后按边界段处理」——旧的错误承诺彻底删除（上次只新增了正确段落，没删旧句）
+- N1 抢跑回退只认**在跑**句柄：已终结的旧句柄不再冒充「刚触发」返回 `reused:true`，改为 isError 并报出最近句柄 id/状态（该分支为防御性代码，无测试覆盖，已在报告里声明）
+- N2 `reused`/`adopted` 语义如实：`reused` = 本次调用没有新起回填；`adopted` = 把原本没有句柄的运行（控制台发起）纳入句柄管理。`adopted` 的联合语义此前会让人误以为「认领也返回 reused:true」
+- 复核测试证据：门禁 exit 0；6 文件 48/48；变异 3 组全红（进度丢失改判 completed / 退回无条件 createTask / force 退回 due 过滤 5 例全红）；工作区逐字节复原
 
 **设计取舍（记录在案）**
 - 句柄存进程内存：**不跨进程重启**——重启后旧句柄查不到（返回 `Task not found`，不假装成功）；「以业务真相为准」的作用域是**同一次进程生命周期内**（避免业务早结束后句柄永远 running 的漂移），重启后的历史看 `backup_list`，回填可幂等重跑

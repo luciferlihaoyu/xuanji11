@@ -26,7 +26,7 @@ import * as relations from "@db/relations";
 import { eq } from "drizzle-orm";
 import { executeBackup } from "./backup-repositories/execution";
 import { createTask, getTask, isCancelRequested, listTasks, resetTaskRegistryForTest } from "./lib/task-registry";
-import { getActiveReindexTaskId } from "./lib/document-indexer";
+import { getActiveReindexTaskId, getReindexProgress } from "./lib/document-indexer";
 
 vi.mock("./lib/auth", async () => {
   const actual = await vi.importActual<typeof import("./lib/auth")>("./lib/auth");
@@ -259,10 +259,11 @@ describe("P0-4 长任务句柄", () => {
     const running = createTask({ kind: "reindex" });
     vi.mocked(getActiveReindexTaskId).mockReturnValue(running.taskId);
 
-    const r = JSON.parse(resultText(await callTool("kb.reindex_all", {}, 150))) as { taskId: string; reused: boolean };
+    const r = JSON.parse(resultText(await callTool("kb.reindex_all", {}, 150))) as { taskId: string; reused: boolean; adopted: boolean };
 
     expect(r.taskId).toBe(running.taskId);
-    expect(r.reused).toBe(true);
+    expect(r.reused).toBe(true); // 已有运行在跑，本次没有新起
+    expect(r.adopted).toBe(false); // 句柄本来就有，无需认领
     // 关键：没有产生第二个回填句柄（修复前这里会是 2 个 → 那个新句柄没人轮询，取消它也是空转）
     expect(listTasks({ kind: "reindex" })).toHaveLength(1);
     // 复用句柄的取消依然是有效信号
@@ -304,14 +305,30 @@ describe("P0-4 长任务句柄", () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("无在跑回填时，kb.reindex_all 正常新建句柄（reused=false）", async () => {
+  it("无在跑回填时，kb.reindex_all 真的启动一次：reused=false / adopted=false", async () => {
     vi.mocked(getDb).mockReturnValue(createTestDb());
     vi.mocked(getActiveReindexTaskId).mockReturnValue(undefined);
+    vi.mocked(getReindexProgress).mockReturnValue({ running: false, total: 0, done: 0, failed: 0, chunksTotal: 0 });
 
-    const r = JSON.parse(resultText(await callTool("kb.reindex_all", {}, 160))) as { taskId: string; reused: boolean };
+    const r = JSON.parse(resultText(await callTool("kb.reindex_all", {}, 160))) as { taskId: string; reused: boolean; adopted: boolean };
 
     expect(r.taskId).toMatch(/^tsk_reindex_/);
     expect(r.reused).toBe(false);
+    expect(r.adopted).toBe(false);
+    expect(listTasks({ kind: "reindex" })).toHaveLength(1);
+  });
+
+  it("控制台直接发起的回填（无句柄）被认领：adopted=true，且此后可取消", async () => {
+    vi.mocked(getDb).mockReturnValue(createTestDb());
+    // 运行在跑但没有句柄（UI 走 kb.reindexAll 直接 startReindexAll()）
+    vi.mocked(getActiveReindexTaskId).mockReturnValue(undefined);
+    vi.mocked(getReindexProgress).mockReturnValue({ running: true, total: 4, done: 2, failed: 0, chunksTotal: 0 });
+
+    const r = JSON.parse(resultText(await callTool("kb.reindex_all", {}, 170))) as { taskId: string; reused: boolean; adopted: boolean };
+
+    expect(r.taskId).toMatch(/^tsk_reindex_/);
+    expect(r.reused).toBe(true); // 没新起运行
+    expect(r.adopted).toBe(true); // 认领了原本没有句柄的那次运行
     expect(listTasks({ kind: "reindex" })).toHaveLength(1);
   });
 });

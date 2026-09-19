@@ -370,13 +370,17 @@ async function handleKbReindexAll(auth: AuthInfo): Promise<McpToolResult> {
   // P0-4：重建索引同样走统一句柄（全库回填是典型长任务）
   // 幂等：已在回填时不新造句柄（否则新句柄无人轮询，task_cancel 会 accepted 却无效），
   // 而是复用/认领正在跑的那个句柄
+  const wasRunning = getReindexProgress().running;
   const existing = getActiveReindexTaskId();
   const task = existing === undefined ? createTask({ kind: "reindex" }) : undefined;
   const progressNow = startReindexAll(task?.taskId);
   const taskId = getActiveReindexTaskId() ?? task?.taskId;
   return textResult({
     taskId: taskId ?? null,
-    reused: existing !== undefined,
+    // reused：本次调用没有新起回填（已有运行在跑）
+    reused: wasRunning,
+    // adopted：这次运行原本没有句柄（如控制台直接发起），本次调用把它纳入句柄管理
+    adopted: wasRunning && existing === undefined,
     ...progressNow,
   });
 }
@@ -415,13 +419,20 @@ async function handleBackupTrigger(args: Record<string, unknown>, auth: AuthInfo
   const handles = await runDueBackupSchedules({ scheduleId: input.jobId, force: true });
   const handle = handles[0];
   if (!handle) {
-    // 抢跑：tick 刚把这次运行领走 → 回读该调度在跑/最近的句柄，而不是谎报「没有可执行调度」
-    const recent = listTasks({ kind: "backup" })
-      .find((t) => t.meta?.scheduleId === input.jobId);
-    if (recent) {
+    // 抢跑：tick 刚把这次运行领走。只认**在跑**的句柄——已终结的旧句柄冒充「刚触发」会误导调用方
+    const recent = listTasks({ kind: "backup" }).find((t) => t.meta?.scheduleId === input.jobId);
+    if (recent?.status === "running") {
       return textResult({ taskId: recent.taskId, scheduleId: input.jobId, runJobId: recent.refId, status: recent.status, reused: true });
     }
-    return { content: [{ type: "text", text: `没有可执行的备份调度：${input.jobId}` }], isError: true };
+    return {
+      content: [{
+        type: "text",
+        text: recent
+          ? `调度 ${input.jobId} 本次没有新建运行；最近一次运行句柄 ${recent.taskId}（状态 ${recent.status}），可 task_get 查询或用 backup_list 看运行记录`
+          : `没有可执行的备份调度：${input.jobId}`,
+      }],
+      isError: true,
+    };
   }
   return textResult({ taskId: handle.taskId, scheduleId: handle.scheduleId, runJobId: handle.runJobId, status: "running" });
 }
