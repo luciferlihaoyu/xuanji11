@@ -79,3 +79,26 @@ describe("SqliteVecEngine", () => {
     expect(h.dimension).toBe(dim);
   });
 });
+
+describe("countByDocumentId（供破坏性操作 dryRun 预览真实计数）", () => {
+  it("按 documentId 计数，未知 id 为 0，删除后归零", async () => {
+    const { getVectorEngine, _resetVectorEngineForTests } = await import("./vector-engine");
+    _resetVectorEngineForTests();
+    const engine = getVectorEngine(dim);
+    engine.clear();
+    const v = [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2];
+    await engine.insertBatch([
+      { id: "d7-1", vector: v, metadata: { documentId: "7" } },
+      { id: "d7-2", vector: v, metadata: { documentId: "7" } },
+      { id: "d7-3", vector: v, metadata: { documentId: "7" } },
+      { id: "d8-1", vector: v, metadata: { documentId: "8" } },
+      { id: "d8-2", vector: v, metadata: { documentId: "8" } },
+    ]);
+    expect(await engine.countByDocumentId("7")).toBe(3);
+    expect(await engine.countByDocumentId(8)).toBe(2);
+    expect(await engine.countByDocumentId("999")).toBe(0);
+    await engine.deleteByDocumentId("7");
+    expect(await engine.countByDocumentId("7")).toBe(0);
+    expect(await engine.countByDocumentId(8)).toBe(2);
+  });
+});

@@ -121,6 +121,19 @@
 - 本轮已修 minor：① 测试台改参数不再打出请求风暴（草稿态 + 点击生效，按钮提示「参数已改」）② 删除用例失败不再静默 ③ `runEval` 单条检索失败不再毁全盘报告（标 error + `failedCount` 且失败项不计入指标）④ 布尔设置口径与 egress 对齐（接受 "true"/"1"）⑤ 补 TopNavbar「检索测试台」导航入口 ⑥ 补测试：runEval 容错、布尔 "1"、版本号标注
 - 未修（记录在案）：`api/kb-backup.test.ts` 2 例失败为**存量**问题——在 e0d2f5b（本波次之前）上同样失败，与 P0 无关，另行处理
 
+### wave3 P0-3 MCP 现代化（t10 注解 / t11 分页 / t12 dryRun）— 2026-09-18
+- **t10 工具注解**：`annotations {title, readOnlyHint, destructiveHint, idempotentHint, openWorldHint}` 补齐 **全部 29 个工具**（核心 15 + zvec 6 + hybrid 1 + kb-backup 2 + keyword 2 + relation 2 + analytics 1）；`McpTool.annotations` 设为**必填**，6 个模块各自的 `McpTool` 副本改为从 `mcp-server` 类型导入——从此新增工具漏写注解会被 `tsc -b` 拦下
+- **t11 cursor 分页**：新增 `api/lib/mcp-pagination.ts`（不透明 base64url cursor，`DEFAULT=50/MAX=200`，非法 cursor 抛 `InvalidCursorError`）；`folder_list`/`backup_list`/`workflow_list` 改为 `{items, nextCursor, total}` 信封；排序补 id 兜底防漏项重项
+- **t12 dryRun**：`document_delete` 增 `dryRun`（默认 false 保持向后兼容）；新增 `previewDocumentDeletion`（与级联删除同源计数，`vectors` 由新增的 `vectorEngine.countByDocumentId` 真实统计，不用 chunks 近似）
+- **对外的破坏性变更**：三个列表工具返回值由裸数组改为信封 → 已更新 `docs/AGENT_API.md`（含迁移指引与 dryRun/注解说明）
+- **验证**：`npm run check` exit 0；`vite build` 成功；MCP 相关 12 文件 **81/81 通过**；新测试 12（分页纯函数）+ 11（MCP 端到端）+ 4（预览）+ 1（向量计数）
+- **RED 证据**：分页用朴素桩实现跑出 6 failed 后才写实现；注解/分页/dryRun 的 MCP 端到端 8 failed → 实现后 11 passed
+- **变异自证**：`countByDocumentId` 改为恒 0 → 测试变红（1 failed）；`resolveLatestVersions` 改按行 id → 测试变红（1 failed）
+- **顺带修复既有验证腐化**（均以 HEAD worktree 版本对照证明是存量、非本波次引入）：
+  - `api/lib/document-removal.test.ts`：手写 DDL 缺 `deletedAt`（dd7eef6 软删除字段）→ 3 例失败，已补齐
+  - `api/mcp-folder-tools.test.ts` / `api/mcp-document-upsert.test.ts`：同类 DDL 腐化 → 共 4 例失败，已补齐
+  - `api/mcp-reindex.test.ts` / `api/mcp-client-router.test.ts` / `api/mcp-kb-backup.test.ts`：测试替身仍是 MySQL 口径（`insertId`/`affectedRows`），而生产侧已统一 better-sqlite3（`lastInsertRowid`/`changes`）→ 断言拿到 NaN/null 而失败，共 4 例；已把替身改为 SQLite 口径（反查确认生产代码无残留 MySQL 口径，故非生产缺陷）
+
 ### 独立审查（天演，审 c5306f1 + 41ebcbf）— 2026-09-18
 - 阶段一规格符合度 **7/7 PASS**（含块序号透传链路真实性、LIKE 回退诚实留空、测试真实性经变异验证）
 - 阶段二 **1 critical + 11 minor**：

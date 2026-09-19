@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "@db/schema";
 import * as relations from "@db/relations";
-import { deleteDocumentCascade } from "./document-removal";
+import { deleteDocumentCascade, previewDocumentDeletion } from "./document-removal";
 
 /**
  * document-removal 真实级联删除单测（内存 SQLite，真 drizzle 事务路径）。
@@ -14,6 +14,7 @@ import { deleteDocumentCascade } from "./document-removal";
 vi.mock("./vector", () => ({
   vectorEngine: {
     deleteByDocumentId: vi.fn().mockResolvedValue(2),
+    countByDocumentId: vi.fn().mockResolvedValue(2),
   },
 }));
 
@@ -32,7 +33,11 @@ function createDb() {
       metadata TEXT,
       createdBy INTEGER,
       createdAt INTEGER NOT NULL DEFAULT 0,
-      updatedAt INTEGER NOT NULL DEFAULT 0
+      updatedAt INTEGER NOT NULL DEFAULT 0,
+      -- dd7eef6 加入软删除字段（手写 DDL 必须与 @db/schema 对齐，否则 insert 直接报 no column）
+      deletedAt INTEGER,
+      deletedReason TEXT,
+      mergedIntoId INTEGER
     );
     CREATE TABLE document_chunks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -170,5 +175,64 @@ describe("deleteDocumentCascade", () => {
     expect(r.deletedEdges).toBe(0);
     expect(r.deletedChunks).toBe(2);
     expect(db.select().from(schema.kbDocuments).all()).toHaveLength(0);
+  });
+});
+
+describe("previewDocumentDeletion（破坏性操作 dryRun：只报数，不改数据）", () => {
+  beforeEach(() => {
+    vi.mocked(vectorEngine.deleteByDocumentId).mockClear();
+    vi.mocked(vectorEngine.deleteByDocumentId).mockResolvedValue(2);
+    vi.mocked(vectorEngine.countByDocumentId).mockClear();
+    vi.mocked(vectorEngine.countByDocumentId).mockResolvedValue(2);
+  });
+
+  it("报告将删除的 chunks/vectors/图谱节点边，且一行都不删", async () => {
+    const db = createDb();
+    const docId = seedDocument(db, true);
+    const snapshot = () => ({
+      docs: db.select().from(schema.kbDocuments).all().length,
+      chunks: db.select().from(schema.documentChunks).all().length,
+      nodes: db.select().from(schema.knowledgeNodes).all().length,
+      edges: db.select().from(schema.knowledgeEdges).all().length,
+    });
+    const before = snapshot();
+
+    const preview = await previewDocumentDeletion(db, vectorEngine, docId);
+
+    expect(preview.id).toBe(docId);
+    expect(preview.title).toBe("t");
+    expect(preview.format).toBe("markdown");
+    expect(preview.wouldDelete).toEqual({ chunks: 2, vectors: 2, graphNodes: 1, graphEdges: 2 });
+    // 核心不变量：预览绝不修改数据，也不调用破坏性向量删除
+    expect(snapshot()).toEqual(before);
+    expect(vectorEngine.deleteByDocumentId).not.toHaveBeenCalled();
+  });
+
+  it("预览数字与真实级联删除结果逐项一致（不谎报）", async () => {
+    const db = createDb();
+    const docId = seedDocument(db, true);
+    const preview = await previewDocumentDeletion(db, vectorEngine, docId);
+    const real = await deleteDocumentCascade(db, vectorEngine, docId);
+    expect(preview.wouldDelete).toEqual({
+      chunks: real.deletedChunks,
+      vectors: real.deletedVectors,
+      graphNodes: real.deletedNodes,
+      graphEdges: real.deletedEdges,
+    });
+  });
+
+  it("文档不存在 → 抛 Document not found（与级联删除同口径），且不查向量", async () => {
+    const db = createDb();
+    await expect(previewDocumentDeletion(db, vectorEngine, 999)).rejects.toThrow("Document not found: 999");
+    expect(vectorEngine.countByDocumentId).not.toHaveBeenCalled();
+  });
+
+  it("无图谱节点时 nodes/edges 为 0，向量计数照实调用", async () => {
+    const db = createDb();
+    const docId = seedDocument(db, false);
+    vi.mocked(vectorEngine.countByDocumentId).mockResolvedValue(0);
+    const preview = await previewDocumentDeletion(db, vectorEngine, docId);
+    expect(preview.wouldDelete).toEqual({ chunks: 2, vectors: 0, graphNodes: 0, graphEdges: 0 });
+    expect(vectorEngine.countByDocumentId).toHaveBeenCalledWith(docId);
   });
 });

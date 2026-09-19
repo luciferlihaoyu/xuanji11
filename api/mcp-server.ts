@@ -10,6 +10,8 @@ import {
   type User,
 } from "@db/schema";
 import { clean } from "./lib/clean";
+import { paginate, InvalidCursorError } from "./lib/mcp-pagination";
+import { previewDocumentDeletion } from "./lib/document-removal";
 import { runDueBackupSchedules } from "./lib/backup-scheduler";
 import { executeWorkflow } from "./lib/workflow-runtime";
 import { zvecTools, handleZvecTool } from "./mcp-zvec-tools";
@@ -34,9 +36,25 @@ interface McpToolCall {
   readonly arguments: Record<string, unknown>;
 }
 
-interface McpTool {
+/** MCP 工具注解（MCP 2025-06-18 spec）：给调用方判断「能不能自动批准」用 */
+export interface McpToolAnnotations {
+  /** 人类可读的工具名（UI 展示用） */
+  readonly title: string;
+  /** 不修改任何状态 */
+  readonly readOnlyHint: boolean;
+  /** 可能造成不可逆删除 */
+  readonly destructiveHint: boolean;
+  /** 重复调用与单次调用效果相同 */
+  readonly idempotentHint: boolean;
+  /** 会触达外部系统（远端网盘、外部模型端点等） */
+  readonly openWorldHint: boolean;
+}
+
+export interface McpTool {
   readonly name: string;
   readonly description: string;
+  /** 必填：新增工具时类型门禁会强制补齐注解，避免注解长期不全 */
+  readonly annotations: McpToolAnnotations;
   readonly inputSchema: {
     readonly type: "object";
     readonly properties: Record<string, { type: string; description: string; enum?: string[] }>;
@@ -64,21 +82,21 @@ const toolCallSchema = z.object({
 });
 
 const tools: readonly McpTool[] = [
-  { name: "knowledge_search", description: "Search knowledge graph nodes and edges", inputSchema: { type: "object", properties: { query: { type: "string", description: "Title, content, or edge label search text" }, type: { type: "string", description: "Optional node type filter", enum: knowledgeTypeSchema.options } } } },
-  { name: "knowledge_create", description: "Create a new knowledge graph node", inputSchema: { type: "object", properties: { title: { type: "string", description: "Node title" }, content: { type: "string", description: "Node content" }, type: { type: "string", description: "Node type", enum: knowledgeTypeSchema.options } }, required: ["title"] } },
-  { name: "document_read", description: "Read a knowledge base document", inputSchema: { type: "object", properties: { id: { type: "number", description: "Document id" } }, required: ["id"] } },
-  { name: "document_write", description: "Create or update a knowledge base document. Content is automatically chunked and indexed into the vector store.", inputSchema: { type: "object", properties: { id: { type: "number", description: "Existing document id; omit to create" }, folderId: { type: "number", description: "Folder id" }, title: { type: "string", description: "Document title; required when creating" }, content: { type: "string", description: "Document content" }, format: { type: "string", description: "Document format", enum: documentFormatSchema.options } } } },
-  { name: "document_delete", description: "Delete a knowledge base document and cascade-clean chunks, vectors, and linked knowledge graph nodes/edges", inputSchema: { type: "object", properties: { id: { type: "number", description: "Document id" } }, required: ["id"] } },
-  { name: "document_set_folder", description: "Assign a document to a folder (or null to remove). Lightweight; does not re-chunk or re-vectorize", inputSchema: { type: "object", properties: { id: { type: "number", description: "Document id" }, folderId: { type: "number", description: "Folder id; null to remove" } }, required: ["id", "folderId"] } },
-  { name: "document_upsert", description: "Create a document or update the earliest existing document with the same normalized title (bracket prefixes, case, and whitespace ignored). Idempotent for sync writers", inputSchema: { type: "object", properties: { title: { type: "string", description: "Document title (1-500 chars)" }, content: { type: "string", description: "Document content" }, format: { type: "string", description: "Document format", enum: documentFormatSchema.options }, tags: { type: "array", description: "Document tags" }, metadata: { type: "object", description: "Document metadata" }, folderId: { type: "number", description: "Folder id" } }, required: ["title"] } },
-  { name: "folder_create", description: "Create a knowledge base folder (optionally under a parent folder)", inputSchema: { type: "object", properties: { name: { type: "string", description: "Folder name (1-255 chars)" }, parentId: { type: "number", description: "Parent folder id; omit or null for root" } }, required: ["name"] } },
-  { name: "folder_list", description: "List knowledge base folders with document counts", inputSchema: { type: "object", properties: {} } },
-  { name: "kb.reindex_all", description: "Start a full reindex of all knowledge base documents into the vector store (runs in background, idempotent). Returns initial progress.", inputSchema: { type: "object", properties: {} } },
-  { name: "kb.reindex_status", description: "Get the progress of the running or last reindex-all job plus current vector store size", inputSchema: { type: "object", properties: {} } },
-  { name: "backup_list", description: "List backup jobs and status", inputSchema: { type: "object", properties: { status: { type: "string", description: "Optional backup status filter" } } } },
-  { name: "backup_trigger", description: "Trigger a scheduled backup job immediately", inputSchema: { type: "object", properties: { jobId: { type: "number", description: "Scheduled backup job id" } }, required: ["jobId"] } },
-  { name: "workflow_list", description: "List workflows", inputSchema: { type: "object", properties: { status: { type: "string", description: "Optional workflow status filter" } } } },
-  { name: "workflow_execute", description: "Execute a workflow", inputSchema: { type: "object", properties: { id: { type: "number", description: "Workflow id" }, input: { type: "object", description: "Workflow input payload" } }, required: ["id"] } },
+  { name: "knowledge_search", description: "Search knowledge graph nodes and edges", annotations: { title: "检索知识图谱", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: { query: { type: "string", description: "Title, content, or edge label search text" }, type: { type: "string", description: "Optional node type filter", enum: knowledgeTypeSchema.options } } } },
+  { name: "knowledge_create", description: "Create a new knowledge graph node", annotations: { title: "新建图谱节点", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, inputSchema: { type: "object", properties: { title: { type: "string", description: "Node title" }, content: { type: "string", description: "Node content" }, type: { type: "string", description: "Node type", enum: knowledgeTypeSchema.options } }, required: ["title"] } },
+  { name: "document_read", description: "Read a knowledge base document", annotations: { title: "读取知识库文档", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: { id: { type: "number", description: "Document id" } }, required: ["id"] } },
+  { name: "document_write", description: "Create or update a knowledge base document. Content is automatically chunked and indexed into the vector store.", annotations: { title: "写入知识库文档", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, inputSchema: { type: "object", properties: { id: { type: "number", description: "Existing document id; omit to create" }, folderId: { type: "number", description: "Folder id" }, title: { type: "string", description: "Document title; required when creating" }, content: { type: "string", description: "Document content" }, format: { type: "string", description: "Document format", enum: documentFormatSchema.options } } } },
+  { name: "document_delete", description: "Delete a knowledge base document and cascade-clean chunks, vectors, and linked knowledge graph nodes/edges", annotations: { title: "删除知识库文档", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }, inputSchema: { type: "object", properties: { id: { type: "number", description: "Document id" } , dryRun: { type: "boolean", description: "Preview exactly what would be deleted (counts) without deleting anything" }}, required: ["id"] } },
+  { name: "document_set_folder", description: "Assign a document to a folder (or null to remove). Lightweight; does not re-chunk or re-vectorize", annotations: { title: "移动文档到文件夹", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: { id: { type: "number", description: "Document id" }, folderId: { type: "number", description: "Folder id; null to remove" } }, required: ["id", "folderId"] } },
+  { name: "document_upsert", description: "Create a document or update the earliest existing document with the same normalized title (bracket prefixes, case, and whitespace ignored). Idempotent for sync writers", annotations: { title: "按标题同步文档", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: { title: { type: "string", description: "Document title (1-500 chars)" }, content: { type: "string", description: "Document content" }, format: { type: "string", description: "Document format", enum: documentFormatSchema.options }, tags: { type: "array", description: "Document tags" }, metadata: { type: "object", description: "Document metadata" }, folderId: { type: "number", description: "Folder id" } }, required: ["title"] } },
+  { name: "folder_create", description: "Create a knowledge base folder (optionally under a parent folder)", annotations: { title: "新建文件夹", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, inputSchema: { type: "object", properties: { name: { type: "string", description: "Folder name (1-255 chars)" }, parentId: { type: "number", description: "Parent folder id; omit or null for root" } }, required: ["name"] } },
+  { name: "folder_list", description: "List knowledge base folders with document counts", annotations: { title: "列出文件夹", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: { cursor: { type: "string", description: "Opaque cursor taken verbatim from a previous response's nextCursor; omit for the first page" }, limit: { type: "number", description: "Page size, 1-200 (default 50)" } } } },
+  { name: "kb.reindex_all", description: "Start a full reindex of all knowledge base documents into the vector store (runs in background, idempotent). Returns initial progress.", annotations: { title: "全量重建索引", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: {} } },
+  { name: "kb.reindex_status", description: "Get the progress of the running or last reindex-all job plus current vector store size", annotations: { title: "查询重建进度", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: {} } },
+  { name: "backup_list", description: "List backup jobs and status", annotations: { title: "列出备份任务", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: { status: { type: "string", description: "Optional backup status filter" }, cursor: { type: "string", description: "Opaque cursor taken verbatim from a previous response's nextCursor; omit for the first page" }, limit: { type: "number", description: "Page size, 1-200 (default 50)" } } } },
+  { name: "backup_trigger", description: "Trigger a scheduled backup job immediately", annotations: { title: "立即触发备份", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }, inputSchema: { type: "object", properties: { jobId: { type: "number", description: "Scheduled backup job id" } }, required: ["jobId"] } },
+  { name: "workflow_list", description: "List workflows", annotations: { title: "列出工作流", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: { status: { type: "string", description: "Optional workflow status filter" }, cursor: { type: "string", description: "Opaque cursor taken verbatim from a previous response's nextCursor; omit for the first page" }, limit: { type: "number", description: "Page size, 1-200 (default 50)" } } } },
+  { name: "workflow_execute", description: "Execute a workflow", annotations: { title: "执行工作流", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }, inputSchema: { type: "object", properties: { id: { type: "number", description: "Workflow id" }, input: { type: "object", description: "Workflow input payload" } }, required: ["id"] } },
   ...zvecTools,
   hybridSearchTool,
   ...kbBackupTools,
@@ -97,6 +115,19 @@ function err(id: JsonRpcId, code: number, message: string, data?: unknown): Json
 
 function textResult(value: unknown): McpToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+}
+
+/**
+ * 列表工具统一分页信封：{ items, nextCursor, total }。
+ * cursor 非法时返回 isError（不静默重发第一页，否则调用方会重复处理数据却毫无察觉）。
+ */
+function paginatedResult<T>(rows: readonly T[], opts: { cursor?: string; limit?: number }): McpToolResult {
+  try {
+    return textResult(paginate(rows, opts));
+  } catch (e) {
+    if (e instanceof InvalidCursorError) return { content: [{ type: "text", text: e.message }], isError: true };
+    throw e;
+  }
 }
 
 async function authenticate(headers: Headers): Promise<AuthenticatedIdentity | undefined> {
@@ -172,8 +203,13 @@ async function handleDocumentWrite(args: Record<string, unknown>, user: User, au
 
 async function handleDocumentDelete(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
   assertScope(auth, "documents:write");
-  const input = z.object({ id: z.number().int().positive() }).parse(args);
+  const input = z.object({ id: z.number().int().positive(), dryRun: z.boolean().default(false) }).parse(args);
   try {
+    if (input.dryRun) {
+      // dryRun：只报影响面，绝不落任何删除（含向量清理）
+      const preview = await previewDocumentDeletion(getDb(), vectorEngine, input.id);
+      return textResult({ dryRun: true, ...preview });
+    }
     const r = await deleteDocumentCascade(getDb(), vectorEngine, input.id);
     return textResult({ success: true, id: input.id, ...r });
   } catch (e) {
@@ -292,8 +328,9 @@ async function handleFolderCreate(args: Record<string, unknown>, user: User, aut
   return textResult({ id: Number(result.lastInsertRowid), name: input.name, parentId });
 }
 
-async function handleFolderList(auth: AuthInfo): Promise<McpToolResult> {
+async function handleFolderList(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
   assertScope(auth, "documents:read");
+  const input = z.object({ cursor: z.string().optional(), limit: z.number().optional() }).parse(args);
   const rows = await getDb()
     .select({
       id: kbFolders.id,
@@ -309,7 +346,7 @@ async function handleFolderList(auth: AuthInfo): Promise<McpToolResult> {
     .leftJoin(kbDocuments, eq(kbDocuments.folderId, kbFolders.id))
     .groupBy(kbFolders.id)
     .orderBy(kbFolders.sortOrder);
-  return textResult(rows);
+  return paginatedResult(rows, input);
 }
 
 async function handleKbReindexAll(auth: AuthInfo): Promise<McpToolResult> {
@@ -324,10 +361,11 @@ async function handleKbReindexStatus(auth: AuthInfo): Promise<McpToolResult> {
 
 async function handleBackupList(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
   assertScope(auth, "backups:read");
-  const input = z.object({ status: backupStatusSchema.optional() }).parse(args);
-  const query = getDb().select().from(backupJobs).orderBy(desc(backupJobs.createdAt));
+  const input = z.object({ status: backupStatusSchema.optional(), cursor: z.string().optional(), limit: z.number().optional() }).parse(args);
+  // 排序必须稳定（createdAt 同值用 id 兜底），否则分页会漏项/重项
+  const query = getDb().select().from(backupJobs).orderBy(desc(backupJobs.createdAt), desc(backupJobs.id));
   const jobs = input.status ? await query.where(eq(backupJobs.status, input.status)) : await query;
-  return textResult(jobs);
+  return paginatedResult(jobs, input);
 }
 
 async function handleBackupTrigger(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
@@ -340,10 +378,10 @@ async function handleBackupTrigger(args: Record<string, unknown>, auth: AuthInfo
 
 async function handleWorkflowList(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
   assertScope(auth, "workflows:read");
-  const input = z.object({ status: workflowStatusSchema.optional() }).parse(args);
-  const query = getDb().select().from(workflows).orderBy(desc(workflows.updatedAt));
+  const input = z.object({ status: workflowStatusSchema.optional(), cursor: z.string().optional(), limit: z.number().optional() }).parse(args);
+  const query = getDb().select().from(workflows).orderBy(desc(workflows.updatedAt), desc(workflows.id));
   const rows = input.status ? await query.where(eq(workflows.status, input.status)) : await query;
-  return textResult(rows);
+  return paginatedResult(rows, input);
 }
 
 async function handleWorkflowExecute(args: Record<string, unknown>, user: User, auth: AuthInfo): Promise<McpToolResult> {
@@ -363,7 +401,7 @@ async function callTool(call: McpToolCall, user: User, auth: AuthInfo): Promise<
     case "document_set_folder": return handleDocumentSetFolder(call.arguments, auth);
     case "document_upsert": return handleDocumentUpsert(call.arguments, user, auth);
     case "folder_create": return handleFolderCreate(call.arguments, user, auth);
-    case "folder_list": return handleFolderList(auth);
+    case "folder_list": return handleFolderList(call.arguments, auth);
     case "kb.reindex_all": return handleKbReindexAll(auth);
     case "kb.reindex_status": return handleKbReindexStatus(auth);
     case "backup_list": return handleBackupList(call.arguments, auth);

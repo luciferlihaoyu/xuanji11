@@ -14,6 +14,8 @@ export interface VectorEngine {
     baseMetadata?: Record<string, unknown>,
   ): Promise<number>;
   deleteByDocumentId(documentId: number | string): Promise<number>;
+  /** 按 documentId 统计条目数（用于破坏性操作的 dryRun 预览，不修改任何数据）。 */
+  countByDocumentId(documentId: number | string): Promise<number>;
   search(queryVector: number[], topK?: number): Promise<VectorSearchHit[]>;
   searchByText(query: string, topK?: number): Promise<VectorSearchHit[]>;
   embedText(text: string): Promise<number[]>;
@@ -98,6 +100,10 @@ class MemoryVectorEngine implements VectorEngine {
       if (String(this.store[i].metadata.documentId) === target) this.store.splice(i, 1);
     }
     return before - this.store.length;
+  }
+  async countByDocumentId(documentId: number | string): Promise<number> {
+    const target = String(documentId);
+    return this.store.filter((e) => String(e.metadata.documentId) === target).length;
   }
   async search(queryVector: number[], topK: number = 10): Promise<VectorSearchHit[]> {
     const v = this.normalize(queryVector);
@@ -199,6 +205,11 @@ class SqliteVecEngine implements VectorEngine {
     return chunks.length;
   }
 
+  async countByDocumentId(documentId: number | string): Promise<number> {
+    const raw = getRawDb();
+    const row = raw.prepare(`SELECT COUNT(*) AS n FROM ${META_TABLE} WHERE documentId = ?`).get(String(documentId)) as { n?: number } | undefined;
+    return Number(row?.n ?? 0);
+  }
   async deleteByDocumentId(documentId: number | string): Promise<number> {
     const raw = getRawDb();
     const target = String(documentId);

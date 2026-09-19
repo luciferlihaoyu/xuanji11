@@ -141,7 +141,7 @@ GET /api/files/:id
 }
 ```
 
-### 可用工具（8 个）
+### 可用工具（本节列 8 个核心工具；实际共 29 个，`tools/list` 为准）
 
 | 工具名             | 功能                 | 参数                                                                                                                                                                                 | 必填                                         |
 | ------------------ | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------- |
@@ -149,12 +149,45 @@ GET /api/files/:id
 | `knowledge_create` | 创建知识节点         | `title` 节点标题<br>`content` 节点内容<br>`type` 节点类型（默认 `concept`）                                                                                                          | `title` 必填<br>`content`/`type` 可选        |
 | `document_read`    | 读取文档内容         | `id` 文档 ID                                                                                                                                                                         | `id` 必填                                    |
 | `document_write`   | 创建或更新文档       | `id` 已有文档 ID（更新时传入）<br>`folderId` 文件夹 ID<br>`title` 文档标题（创建时必填）<br>`content` 文档内容<br>`format` 格式（默认 `markdown`，可选 `text`/`json`/`html`/`code`） | `id` 可选<br>其余可选（创建时 `title` 必填） |
-| `backup_list`      | 查看备份任务列表     | `status` 状态过滤（可选：`pending`/`running`/`completed`/`failed`/`partial`）                                                                                                        | `status` 可选                                |
+| `backup_list`      | 查看备份任务列表     | `status` 状态过滤（可选：`pending`/`running`/`completed`/`failed`/`partial`）<br>`cursor` 分页游标（上次响应的 `nextCursor`）<br>`limit` 页大小（1-200，默认 50）                        | 均可选                                       |
 | `backup_trigger`   | 立即触发备份任务     | `jobId` 备份任务 ID                                                                                                                                                                  | `jobId` 必填                                 |
-| `workflow_list`    | 查看工作流列表       | `status` 状态过滤（可选：`draft`/`active`/`paused`/`error`/`archived`）                                                                                                              | `status` 可选                                |
+| `workflow_list`    | 查看工作流列表       | `status` 状态过滤（可选：`draft`/`active`/`paused`/`error`/`archived`）<br>`cursor` 分页游标<br>`limit` 页大小（1-200，默认 50）                                                      | 均可选                                       |
 | `workflow_execute` | 执行工作流           | `id` 工作流 ID<br>`input` 工作流输入 payload（对象，默认 `{}`）                                                                                                                      | `id` 必填<br>`input` 可选                    |
 
 > 注：`document_write` 在代码层面还接受 `tags`（字符串数组）和 `metadata`（对象）用于扩展文档属性，可直接在参数中传入。
+
+#### document_delete 的 dryRun（v2 新增，破坏性操作先预览）
+
+`document_delete` 增参 `dryRun`（布尔，默认 `false`）：
+
+```json
+{"method": "tools/call", "params": {"name": "document_delete", "arguments": {"id": 1922, "dryRun": true}}}
+```
+
+返回（**不删除任何数据**，含向量）：
+
+```json
+{"dryRun": true, "id": 1922, "title": "…", "format": "markdown", "folderId": null,
+ "wouldDelete": {"chunks": 119, "vectors": 119, "graphNodes": 1, "graphEdges": 0}}
+```
+
+`wouldDelete` 各项与真实级联删除同源计数（`vectors` 由向量引擎真实统计，不用 chunks 近似）。文档不存在时与真删返回同样的 `isError`。
+
+#### 列表工具的分页信封（v2 变更，**破坏性变更**）
+
+`folder_list` / `backup_list` / `workflow_list` 的返回值由「裸数组」改为分页信封：
+
+```json
+{"items": [ … ], "nextCursor": "bzoxMA", "total": 137}
+```
+
+- `nextCursor` 为 `null` 表示已到末页；请求下一页时把该字符串**原样**传回 `cursor`
+- `cursor` 非法（伪造/过期）→ `isError`，**不会静默返回第一页**（避免调用方重复处理数据却毫无察觉）
+- 迁移指引：把原来的「直接当数组用」改成读 `items`；只取前 N 条时传 `limit`
+
+#### 工具注解（v2 新增）
+
+`tools/list` 返回的每个工具都带 `annotations`（MCP 2025-06-18）：`title`、`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`。客户端可据此决定是否自动批准：例如 `knowledge_search`/`folder_list` 为只读；`document_delete`、`zvec.deleteCollection` 标 `destructiveHint: true`；`backup_trigger`、`workflow_execute` 会触达外部系统（`openWorldHint: true`）。
 
 ---
 

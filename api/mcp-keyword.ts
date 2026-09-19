@@ -3,15 +3,10 @@ import { hasScope } from "./lib/auth";
 import { extractInputSchema, extractKeywords } from "./lib/keyword-extractor";
 import { autoTagInputSchema, autoTagDocument } from "./lib/keyword-auto-tag";
 
-export interface McpTool {
-  readonly name: string;
-  readonly description: string;
-  readonly inputSchema: {
-    readonly type: "object";
-    readonly properties: Record<string, { type: string; description: string; enum?: string[] }>;
-    readonly required?: string[];
-  };
-}
+// 工具类型统一来自 mcp-server（类型导入编译期擦除，不构成运行时循环依赖）。
+// 单一来源的好处：annotations 为必填，新增工具漏写注解会被类型门禁拦下。
+import type { McpTool } from "./mcp-server";
+export type { McpTool };
 
 interface McpToolResult {
   readonly content: Array<{ type: "text"; text: string }>;
@@ -48,7 +43,7 @@ export const keywordTools: readonly McpTool[] = [
   {
     name: "keywords.extract",
     description: "Extract keywords from text using internal frequency analysis or LLM when configured. Returns ranked keywords with scores.",
-    inputSchema: {
+    annotations: { title: "抽取关键词", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: {
       type: "object",
       properties: {
         text: { type: "string", description: "Text to extract keywords from" },
@@ -61,7 +56,7 @@ export const keywordTools: readonly McpTool[] = [
   {
     name: "keywords.autoTag",
     description: "Extract keywords from a knowledge base document and create tag nodes linked to the document.",
-    inputSchema: {
+    annotations: { title: "自动打标签", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, inputSchema: {
       type: "object",
       properties: {
         documentId: { type: "number", description: "Knowledge base document id" },

@@ -97,7 +97,8 @@ function createFakeDb(seed: readonly McpServerRow[] = []) {
             updatedAt: new Date("2026-01-01T00:00:00Z"),
           });
         }
-        return Promise.resolve([{ insertId }]);
+        // 生产侧读 better-sqlite3 的 lastInsertRowid（原 [{ insertId }] 是 MySQL 口径遗留）
+        return Promise.resolve({ lastInsertRowid: insertId, changes: 1 });
       }),
     })),
     update: vi.fn(() => ({

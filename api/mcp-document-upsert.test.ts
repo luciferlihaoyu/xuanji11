@@ -89,7 +89,10 @@ function createTestDb() {
       metadata TEXT,
       createdBy INTEGER,
       createdAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      updatedAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      updatedAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      deletedAt INTEGER,
+      deletedReason TEXT,
+      mergedIntoId INTEGER
     );
     CREATE TABLE kb_folders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

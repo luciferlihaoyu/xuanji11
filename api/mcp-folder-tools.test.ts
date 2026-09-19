@@ -96,7 +96,10 @@ function createTestDb() {
       metadata TEXT,
       createdBy INTEGER,
       createdAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      updatedAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      updatedAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      deletedAt INTEGER,
+      deletedReason TEXT,
+      mergedIntoId INTEGER
     );
     CREATE TABLE kb_folders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -292,12 +295,17 @@ describe("MCP folder tools", () => {
 
     expect("result" in res).toBe(true);
     if ("result" in res) {
-      const list = JSON.parse(resultText(res as { result: unknown })) as Array<{
-        id: number;
-        name: string;
-        parentId: number | null;
-        documentCount: number;
-      }>;
+      // P0-3：列表工具改为分页信封 { items, nextCursor, total }
+      const list = (JSON.parse(resultText(res as { result: unknown })) as {
+        items: Array<{
+          id: number;
+          name: string;
+          parentId: number | null;
+          documentCount: number;
+        }>;
+        nextCursor: string | null;
+        total: number;
+      }).items;
       const target = list.find((f) => f.id === folderId);
       expect(target).toBeDefined();
       expect(target?.documentCount).toBe(2);

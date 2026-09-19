@@ -73,6 +73,13 @@ interface FakeDbOptions {
   readonly insertAffectedRows?: number;
 }
 
+/** better-sqlite3 口径的写入结果：{ changes }，且支持 drizzle 的 onConflictDoNothing 链式调用 */
+function makeInsertResult(changes: number) {
+  const p = Promise.resolve({ changes }) as Promise<{ changes: number }> & { onConflictDoNothing?: () => unknown };
+  p.onConflictDoNothing = () => p;
+  return p;
+}
+
 function createFakeDb(options: FakeDbOptions = {}) {
   const nodes = options.nodes ?? [];
   const insertAffectedRows = options.insertAffectedRows ?? 0;
@@ -87,9 +94,10 @@ function createFakeDb(options: FakeDbOptions = {}) {
       }),
     })),
     insert: vi.fn(() => ({
-      ignore: vi.fn(() => ({
-        values: vi.fn(() => Promise.resolve([{ affectedRows: insertAffectedRows }])),
-      })),
+      // kb.import 走 await db.insert(t).values(v).onConflictDoNothing()：
+      // values() 必须返回「可 await 且带 onConflictDoNothing 的链式对象」
+      values: vi.fn(() => makeInsertResult(insertAffectedRows)),
+      ignore: vi.fn(() => ({ values: vi.fn(() => makeInsertResult(insertAffectedRows)) })),
     })),
   };
 }

@@ -2,15 +2,10 @@ import type { AuthInfo } from "./lib/auth";
 import { hasScope } from "./lib/auth";
 import { getAnalyticsData } from "./analytics-router";
 
-export interface McpTool {
-  readonly name: string;
-  readonly description: string;
-  readonly inputSchema: {
-    readonly type: "object";
-    readonly properties: Record<string, { type: string; description: string; enum?: string[] }>;
-    readonly required?: string[];
-  };
-}
+// 工具类型统一来自 mcp-server（类型导入编译期擦除，不构成运行时循环依赖）
+// 单一来源的好处：annotations 为必填，新增工具漏写注解会被类型门禁拦下
+import type { McpTool } from "./mcp-server";
+export type { McpTool };
 
 interface McpToolResult {
   readonly content: Array<{ type: "text"; text: string }>;
@@ -28,7 +23,7 @@ function textResult(value: unknown): McpToolResult {
 export const analyticsTool: McpTool = {
   name: "analytics.get",
   description: "Get knowledge base analytics including totals, top tags, recent nodes, and orphan nodes.",
-  inputSchema: {
+  annotations: { title: "知识库统计", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: {
     type: "object",
     properties: {},
     required: [],

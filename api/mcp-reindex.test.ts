@@ -90,8 +90,10 @@ function createFakeDb() {
         where: vi.fn(() => Promise.resolve()),
       })),
     })),
+    // 应用已迁到 better-sqlite3：insert 结果读 lastInsertRowid（原 [{insertId}] 是 MySQL 口径遗留，
+    // 会让 Number(undefined) → NaN，JSON 序列化成 null，测试于是断言到 id:null）
     insert: vi.fn(() => ({
-      values: vi.fn(() => Promise.resolve([{ insertId: 77 }])),
+      values: vi.fn(() => Promise.resolve({ lastInsertRowid: 77, changes: 1 })),
     })),
   };
 }

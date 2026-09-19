@@ -2,15 +2,10 @@ import type { AuthInfo } from "./lib/auth";
 import { hasScope } from "./lib/auth";
 import { executeHybridSearch, searchInputSchema } from "./lib/hybrid-search";
 
-interface McpTool {
-  readonly name: string;
-  readonly description: string;
-  readonly inputSchema: {
-    readonly type: "object";
-    readonly properties: Record<string, { type: string; description: string; enum?: string[] }>;
-    readonly required?: string[];
-  };
-}
+// 工具类型统一来自 mcp-server（类型导入编译期擦除，不构成运行时循环依赖）。
+// 单一来源的好处：annotations 为必填，新增工具漏写注解会被类型门禁拦下。
+import type { McpTool } from "./mcp-server";
+export type { McpTool };
 
 interface McpToolResult {
   readonly content: Array<{ type: "text"; text: string }>;
@@ -29,7 +24,7 @@ export const hybridSearchTool: McpTool = {
   name: "search.hybrid",
   description:
     "Hybrid search across knowledge graph nodes and indexed document chunks. Uses keyword DB search and vector semantic search with Reciprocal Rank Fusion.",
-  inputSchema: {
+  annotations: { title: "混合检索（关键词+向量）", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true }, inputSchema: {
     type: "object",
     properties: {
       query: { type: "string", description: "Search query text (max 500 chars)" },

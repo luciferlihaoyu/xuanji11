@@ -6,15 +6,10 @@ import { discoverInputSchema, discoverRelations } from "./lib/relation-analyzer"
 import { getDb } from "./queries/connection";
 import { clean } from "./lib/clean";
 
-export interface McpTool {
-  readonly name: string;
-  readonly description: string;
-  readonly inputSchema: {
-    readonly type: "object";
-    readonly properties: Record<string, { type: string; description: string; enum?: string[] }>;
-    readonly required?: string[];
-  };
-}
+// 工具类型统一来自 mcp-server（类型导入编译期擦除，不构成运行时循环依赖）。
+// 单一来源的好处：annotations 为必填，新增工具漏写注解会被类型门禁拦下。
+import type { McpTool } from "./mcp-server";
+export type { McpTool };
 
 interface McpToolResult {
   readonly content: Array<{ type: "text"; text: string }>;
@@ -56,7 +51,7 @@ export const relationTools: readonly McpTool[] = [
     name: "relations.discover",
     description:
       "Discover hidden relationships for a knowledge base document using co-occurrence, vector, and reference strategies.",
-    inputSchema: {
+    annotations: { title: "发现图谱关系", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: {
       type: "object",
       properties: {
         documentId: { type: "number", description: "Knowledge base document id" },
@@ -73,7 +68,7 @@ export const relationTools: readonly McpTool[] = [
     name: "relations.create",
     description:
       "Create an edge (relationship) between two knowledge graph nodes.",
-    inputSchema: {
+    annotations: { title: "建立图谱关系", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, inputSchema: {
       type: "object",
       properties: {
         sourceId: { type: "number", description: "Source knowledge node id" },
