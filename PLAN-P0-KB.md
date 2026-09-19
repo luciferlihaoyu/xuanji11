@@ -157,8 +157,22 @@
 - **门禁抓错（真实收益）**：`npm run check` 首次 exit 2，抓出 `backup_jobs.status` 枚举缺 `cancelled`、`progress` 可为 null 未兜底、假仓库缺 `listFiles` 等问题 → 修完 exit 0
 - 批次回归：9 文件 **65/65** 通过
 
+**审查后续修（天演审 498396c 后，见下一节）**
+- 幂等入口孤儿句柄：回填在跑时再调 `kb.reindex_all` 曾会新造一个无人轮询的句柄（其取消 accepted 却无效）→ 改为**复用/认领**正在跑的句柄（`getActiveReindexTaskId`），循环每轮读模块态句柄，UI 起的回填也能被后到的 MCP 句柄认领后取消。新增 3 例测试（MCP 层 2 例断言「不产生第二个句柄」+ 索引器 1 例断言认领后可取消），并做变异自证（退回旧实现 → 变红）
+- 取消收尾不再回写 `progress`：原来会把运行开始时读到的旧 `job.progress` 覆盖上传循环已推进的进度
+- 前端补 `cancelled` 徽标（「已取消」，避免新状态落到灰色英文兜底）
+- 文档口径纠偏：句柄不跨重启 vs「以业务真相为准」的作用域；`backup_list` 的 `status` 过滤补 `cancelled`；`backup_trigger` 只认调度行；保留策略纳入 cancelled
+- **Q2/Q7 终态判定单点化**：新增 `api/lib/task-sync.ts`（纯函数 + 可辨识联合 + 重载）
+  - `decideReindexOutcome`：取消优先 → running → **进度丢失（本进程无运行痕迹）判 failed 而非 completed（原来会谎报成功）** → 有失败即 failed（**不再附加 lastError 条件**，这是「同一事实两个终态」的根因）→ completed
+  - `decideBackupOutcome(row, {settled})`：`settled` 区分「执行方已收手」（pending/running=异常→failed）与「读时收口」（=还在跑）；meta 计数统一 `?? 0` 兜底
+  - 执行方（调度器 `.then`、索引器 `finally`）与读时收口（`task_get`/`task_cancel`）共用同一函数；`settled:true`/`running:false` 有重载，编译器保证收口处拿不到 running
+  - 归属校验：别的回填在跑时，不拿全局进度给**不属于它**的句柄收口
+- **Q8**：`backup_trigger` 改为「读行 → 必须是调度行（有 cron）→ `runDueBackupSchedules({scheduleId, force:true})` 按 id 直取」，不再无条件写 `enabled=true`+`nextRunAt=now`（原来一旦传入运行行，它会变成 due 被 tick 当调度再跑一份）
+- **Q10**：取消的部分快照纳入 `keepLastN` retention
+- 新增测试：`api/lib/task-sync.test.ts`（10 例纯函数规则）+ `api/mcp-tasks.test.ts` 补 4 例（幂等复用/新建、enabled 不被改、运行行拒绝）共 13 例；变异自证 3 处（判定规则退回旧口径 → 变红；退回无条件 enable → 变红）；门禁 `npm run check` exit 0；批次 7 文件 56/56
+
 **设计取舍（记录在案）**
-- 句柄存进程内存：进程重启后旧句柄查不到（返回 `Task not found`，不假装成功）；备份历史仍可从 `backup_list` 查，回填可幂等重跑
+- 句柄存进程内存：**不跨进程重启**——重启后旧句柄查不到（返回 `Task not found`，不假装成功）；「以业务真相为准」的作用域是**同一次进程生命周期内**（避免业务早结束后句柄永远 running 的漂移），重启后的历史看 `backup_list`，回填可幂等重跑
 - 取消是协作式的：单次上传/单篇索引会跑完当前单元，不提供强制中断（避免留下半截对象）
 - `backup_trigger` 只跑指定的那一个调度（`{scheduleId}` 过滤），保证句柄对得上刚触发的那次运行
 

@@ -149,8 +149,8 @@ GET /api/files/:id
 | `knowledge_create` | 创建知识节点         | `title` 节点标题<br>`content` 节点内容<br>`type` 节点类型（默认 `concept`）                                                                                                          | `title` 必填<br>`content`/`type` 可选        |
 | `document_read`    | 读取文档内容         | `id` 文档 ID                                                                                                                                                                         | `id` 必填                                    |
 | `document_write`   | 创建或更新文档       | `id` 已有文档 ID（更新时传入）<br>`folderId` 文件夹 ID<br>`title` 文档标题（创建时必填）<br>`content` 文档内容<br>`format` 格式（默认 `markdown`，可选 `text`/`json`/`html`/`code`） | `id` 可选<br>其余可选（创建时 `title` 必填） |
-| `backup_list`      | 查看备份任务列表     | `status` 状态过滤（可选：`pending`/`running`/`completed`/`failed`/`partial`）<br>`cursor` 分页游标（上次响应的 `nextCursor`）<br>`limit` 页大小（默认 50，上限 200；非法值按边界夹取）      | 均可选                                       |
-| `backup_trigger`   | 立即触发备份任务     | `jobId` 备份任务 ID（返回 `{taskId, scheduleId, runJobId, status}`，不再需要干等）                                                                                                    | `jobId` 必填                                 |
+| `backup_list`      | 查看备份任务列表     | `status` 状态过滤（可选：`pending`/`running`/`completed`/`failed`/`partial`/`cancelled`）<br>`cursor` 分页游标（上次响应的 `nextCursor`）<br>`limit` 页大小（默认 50，上限 200；非法值按边界夹取）      | 均可选                                       |
+| `backup_trigger`   | 立即触发备份任务     | `jobId` **必须是定时调度行（有 cron）**，返回 `{taskId, scheduleId, runJobId, status}`，不再需要干等                                                                                  | `jobId` 必填                                 |
 | `workflow_list`    | 查看工作流列表       | `status` 状态过滤（可选：`draft`/`active`/`paused`/`error`/`archived`）<br>`cursor` 分页游标<br>`limit` 页大小（默认 50，上限 200；非法值按边界夹取）                                    | 均可选                                       |
 | `workflow_execute` | 执行工作流           | `id` 工作流 ID<br>`input` 工作流输入 payload（对象，默认 `{}`）                                                                                                                      | `id` 必填<br>`input` 可选                    |
 
@@ -202,13 +202,21 @@ GET /api/files/:id
 - `task_get`（只读）：`{"taskId": "..."}` → `{taskId, kind, refId, status, progress, startedAt, finishedAt?, error?, meta, cancelRequested}`
   - `kind`：`backup`（`refId` = 本次运行行 backup_jobs.id）或 `reindex`
   - 进度/状态**以业务真相为准**：备份读 `backup_jobs` 行（`meta.filesTotal/filesDone/filesFailed`），回填读索引器进度——进程重启后句柄依然准确，不会永远停在 running
+- `task_get` 是**有意的惰性收口点**：只读注解指它不改业务数据，但句柄若停在 running 而业务早已结束，读一次会把它落成终态（同一进程内让状态收敛，而不是永远漂着）
 - `task_cancel`：`{"taskId": "..."}` → `{taskId, accepted, status, reason?}`
   - **两段式语义**：`accepted: true` 只表示取消请求已记录（执行方在安全点收手：备份在文件之间、回填在文档之间），`status` 仍为 `running`；执行方确认后状态才会变 `cancelled`
   - 任务已结束时**不谎报成功**：返回 `accepted: false` + `reason`（如「任务已 completed，无需取消」）
   - 取消的运行为 `cancelled` 状态，与 `failed`（故障）区分——调用方不该按失败重试
 - `kb.reindex_all` 同样返回 `taskId`（全库回填的进度用 `kb.reindex_status` 或 `task_get` 都行）
-- 边界：句柄保存在服务进程内，**进程重启后旧句柄会查不到**（返回 `isError: Task not found`）；备份可用 `backup_list` 按行查历史，回填可重新触发（幂等）
+- 边界（**重要，别误读**）：句柄保存在服务进程内存里，**不跨进程重启**——重启后旧 `taskId` 一律返回 `isError: Task not found`（不假装成功、也不谎报状态）
+  - 「状态以业务真相为准」说的是**同一次进程生命周期内**：句柄只存身份，进度/终态每次都从 `backup_jobs` 行或索引器实况重新读，所以不会出现「业务早已结束、句柄永远 running」的漂移
+  - 重启后要查历史：备份用 `backup_list`（`refId` = 运行行 id，可直接对上）；回填可重新触发（`kb.reindex_all` 幂等）
+  - 若一次备份运行的行在进程重启时仍停在 `pending`/`running`（进程被杀），它不会有人再来收尾：请以 `backup_list` 的行状态为准，必要时重新触发
+- 幂等入口：回填已在运行时再调 `kb.reindex_all` **不会新造句柄**，而是复用/认领正在跑的那个（返回 `reused: true`）；否则会给出一个没人轮询的句柄，取消它也是空转。UI 直接发起的回填没有句柄，MCP 调用会**认领**它，认领之后即可取消
 - 未提供服务端强制中断：取消是协作式的，单次长上传/单篇索引会跑完当前单元才停
+
+- `backup_trigger` 的边界：`backup_jobs` 是双职表（调度行 + 每次运行行），**运行行（cron 为空）会被拒绝**——否则会悄悄多派生一份备份；触发走「按 id 直取」，不会改 `enabled`，所以停用的调度也能手动触发一次（无需先启用），也不会把行弄成 due
+- 取消的部分快照同样进 `keepLastN` 保留策略（连续取消不会让网盘被半截快照无声堆满）
 
 #### 工具注解（v2 新增）
 

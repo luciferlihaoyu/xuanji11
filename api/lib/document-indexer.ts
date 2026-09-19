@@ -12,6 +12,7 @@ import { kbDocuments, documentChunks } from "@db/schema";
 import { vectorEngine } from "./vector";
 import { embedTextsWithFallback, ensureCorrectDimension } from "./vector-service";
 import { finishTask, isCancelRequested, updateTaskProgress } from "./task-registry";
+import { decideReindexOutcome } from "./task-sync";
 
 export function chunkText(text: string, maxChars = 800, overlap = 100): string[] {
   const normalized = text.replace(/\r\n/g, "\n").trim();
@@ -163,16 +164,30 @@ const REINDEX_DELAY_MS = 100;
  * 后台逐篇索引，进度通过 getReindexProgress 查询。
  */
 export function startReindexAll(taskId?: string): ReindexProgress {
-  // 已在运行：复用现有进度（幂等），新句柄同样能反映这次运行
-  if (progress.running) return getReindexProgress();
+  if (progress.running) {
+    // 已在运行（幂等）：**认领**而不是新起一个句柄——
+    // 否则调用方拿到的句柄没人轮询，task_cancel 会 accepted:true 却毫无效果。
+    if (taskId && !activeTaskId) activeTaskId = taskId;
+    return getReindexProgress();
+  }
   progress = { ...idleProgress, running: true, startedAt: new Date().toISOString() };
   activeTaskId = taskId;
-  void runReindexAll(taskId);
+  void runReindexAll();
   return getReindexProgress();
 }
 
-async function runReindexAll(taskId?: string): Promise<void> {
+/**
+ * 当前全量回填正在使用的任务句柄（无则 undefined）。
+ * 调用方据此复用/认领句柄，避免出现「孤儿句柄」。
+ */
+export function getActiveReindexTaskId(): string | undefined {
+  return activeTaskId;
+}
+
+async function runReindexAll(): Promise<void> {
   let cancelled = false;
+  // 注意：每轮都读模块态 activeTaskId，这样「运行中才认领的句柄」也能收到取消信号与进度
+  const currentTaskId = () => activeTaskId;
   try {
     // 启动前异步校准向量表维度（修复 R3 维度不匹配导致 0 条向量的 bug）
     const { ensureCorrectDimension } = await import("./vector-service");
@@ -182,7 +197,8 @@ async function runReindexAll(taskId?: string): Promise<void> {
     progress = { ...progress, total: docs.length };
     for (const doc of docs) {
       // P0-4 取消点：文档之间响应取消请求（已索引的文档保持有效，随时可续跑）
-      if (taskId && isCancelRequested(taskId)) {
+      const tid = currentTaskId();
+      if (tid && isCancelRequested(tid)) {
         cancelled = true;
         break;
       }
@@ -198,8 +214,8 @@ async function runReindexAll(taskId?: string): Promise<void> {
         };
       }
       progress = { ...progress, done: progress.done + 1 };
-      if (taskId) {
-        updateTaskProgress(taskId, progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0, {
+      if (tid) {
+        updateTaskProgress(tid, progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0, {
           total: progress.total,
           done: progress.done,
           failed: progress.failed,
@@ -211,17 +227,20 @@ async function runReindexAll(taskId?: string): Promise<void> {
     progress = { ...progress, lastError: err instanceof Error ? err.message : String(err) };
   } finally {
     progress = { ...progress, running: false, currentDocumentId: undefined, finishedAt: new Date().toISOString() };
-    if (taskId) {
-      // 终态以索引器实况为准：取消 → cancelled；有失败 → failed；否则 completed
-      const meta = { total: progress.total, done: progress.done, failed: progress.failed, chunksTotal: progress.chunksTotal };
-      if (cancelled) {
-        finishTask(taskId, "cancelled", { meta });
-      } else if (progress.failed > 0 && progress.lastError) {
-        finishTask(taskId, "failed", { error: progress.lastError, meta });
-      } else {
-        finishTask(taskId, "completed", { progress: 100, meta });
-      }
+    const tid = currentTaskId();
+    if (tid) {
+      // 终态判定单点化（审查 Q2）：与 task_get 的读时收口共用同一函数，杜绝同一事实两个终态
+      const outcome = decideReindexOutcome({
+        running: false,
+        total: progress.total,
+        done: progress.done,
+        failed: progress.failed,
+        lastError: progress.lastError,
+        cancelled,
+        startedAt: progress.startedAt,
+      });
+      finishTask(tid, outcome.status, { progress: outcome.progress, error: outcome.error, meta: { ...outcome.meta, chunksTotal: progress.chunksTotal } });
     }
-    if (activeTaskId === taskId) activeTaskId = undefined;
+    activeTaskId = undefined;
   }
 }

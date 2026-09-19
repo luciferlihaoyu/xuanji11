@@ -216,7 +216,8 @@ async function executeBackupToRepository(
     if (shouldCancel?.()) {
       await db
         .update(backupJobs)
-        .set({ status: "cancelled", error: null, completedAt: new Date(), progress: job.progress })
+        // 不写 progress：job 是运行开始时读的旧行，回写会把上传循环已推进的进度打回去
+        .set({ status: "cancelled", error: null, completedAt: new Date() })
         .where(eq(backupJobs.id, job.id));
       return;
     }

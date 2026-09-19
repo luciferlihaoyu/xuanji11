@@ -5,6 +5,7 @@ import { executeBackup, effectiveRepoConfig } from "../backup-repositories/execu
 import { getBackupRepository } from "../backup-repositories/base";
 import type { BackupJob } from "@db/schema";
 import { createTask, finishTask, isCancelRequested } from "./task-registry";
+import { decideBackupOutcome } from "./task-sync";
 
 function parseCronField(field: string, min: number, max: number): number[] {
   if (field === "*") {
@@ -84,17 +85,14 @@ function finishTaskFromRunRow(
     finishTask(taskId, "failed", { error: "备份运行记录不存在" });
     return;
   }
-  const meta = { filesTotal: row.filesTotal ?? 0, filesDone: row.filesDone ?? 0, filesFailed: row.filesFailed ?? 0 };
-  if (row.status === "completed") {
-    finishTask(taskId, "completed", { progress: 100, meta });
-  } else if (row.status === "cancelled") {
-    finishTask(taskId, "cancelled", { meta });
-  } else if (row.status === "running" || row.status === "pending") {
-    // 进程被重启等导致状态悬空：按失败收口，避免句柄永远停在 running
-    finishTask(taskId, "failed", { error: "备份运行未正常结束（进程可能重启）", meta });
-  } else {
-    finishTask(taskId, "failed", { error: row.error ?? `备份状态：${row.status}`, meta });
+  // 终态判定单点化（天演审查 Q7/Q2）：与 task_get 的读时收口共用同一函数，
+  // settled=true 表示「执行方已收手」——此刻行还停在 pending/running 属异常
+  const outcome = decideBackupOutcome(row, { settled: true });
+  if (!outcome) {
+    finishTask(taskId, "failed", { error: "备份运行记录不存在" });
+    return;
   }
+  finishTask(taskId, outcome.status, { progress: outcome.progress, error: outcome.error, meta: outcome.meta });
 }
 
 /**
@@ -149,20 +147,29 @@ export async function applyRetention(scheduleJobId: number): Promise<void> {
   await db.delete(backupJobs).where(inArray(backupJobs.id, jobIds));
 }
 
-export async function runDueBackupSchedules(options: { readonly scheduleId?: number } = {}): Promise<BackupRunHandle[]> {
+export async function runDueBackupSchedules(
+  options: { readonly scheduleId?: number; readonly force?: boolean } = {},
+): Promise<BackupRunHandle[]> {
   const db = getDb();
   const now = new Date();
   console.log(`[BackupScheduler] Checking for due backup schedules at ${now.toISOString()}`);
 
-  const dueRows = await db.select().from(backupJobs)
-    .where(
-      and(
-        eq(backupJobs.enabled, "true"),
-        lte(backupJobs.nextRunAt, now)
-      )
-    );
+  // force：按 id 直取该调度（backup_trigger 走这条），不再依赖 enabled/nextRunAt——
+  // 否则每次「立即触发」都要把行的 enabled 改成 true 并写 nextRunAt，
+  // 一旦传进来的是运行行（cron 为空的同表记录），它就会变成 due 被 tick 当成调度再跑一遍（审查 Q8）
+  const dueRows = options.force && options.scheduleId !== undefined
+    ? await db.select().from(backupJobs).where(eq(backupJobs.id, options.scheduleId))
+    : await db.select().from(backupJobs)
+      .where(
+        and(
+          eq(backupJobs.enabled, "true"),
+          lte(backupJobs.nextRunAt, now)
+        )
+      );
   // 只跑指定的调度（backup_trigger 走这里，保证句柄对得上刚触发的那次运行）
-  const due = options.scheduleId === undefined ? dueRows : dueRows.filter((r) => r.id === options.scheduleId);
+  const due = options.scheduleId === undefined || options.force
+    ? dueRows
+    : dueRows.filter((r) => r.id === options.scheduleId);
   const handles: BackupRunHandle[] = [];
 
   console.log(`[BackupScheduler] Found ${due.length} due schedules`);
@@ -208,7 +215,8 @@ export async function runDueBackupSchedules(options: { readonly scheduleId?: num
       console.log(`[BackupScheduler] Backup run ${runJobId} finished with status: ${finished?.status}`);
       // 任务终态以业务表为准（含 task_cancel 触发的 cancelled）
       finishTaskFromRunRow(task.taskId, finished);
-      if (finished?.status === "completed") {
+      // cancelled 也进 retention：连续取消会留下部分快照，不纳入 keepLastN 会无声堆积（审查 Q10）
+      if (finished?.status === "completed" || finished?.status === "cancelled") {
         await applyRetention(schedule.id);
       } else if (finished?.status === "failed") {
         // 重试处理

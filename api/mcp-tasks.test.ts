@@ -25,7 +25,8 @@ import * as schema from "@db/schema";
 import * as relations from "@db/relations";
 import { eq } from "drizzle-orm";
 import { executeBackup } from "./backup-repositories/execution";
-import { getTask, resetTaskRegistryForTest } from "./lib/task-registry";
+import { createTask, getTask, isCancelRequested, listTasks, resetTaskRegistryForTest } from "./lib/task-registry";
+import { getActiveReindexTaskId } from "./lib/document-indexer";
 
 vi.mock("./lib/auth", async () => {
   const actual = await vi.importActual<typeof import("./lib/auth")>("./lib/auth");
@@ -41,6 +42,8 @@ vi.mock("./lib/document-indexer", () => ({
   tryIndexDocumentById: vi.fn(),
   startReindexAll: vi.fn(() => ({ running: true, total: 4, done: 0, failed: 0, chunksTotal: 0 })),
   getReindexProgress: vi.fn(() => ({ running: true, total: 4, done: 1, failed: 0, chunksTotal: 0 })),
+  // 默认「没有正在跑的回填」；需要模拟「已在跑」时用 vi.mocked(...).mockReturnValue(id)
+  getActiveReindexTaskId: vi.fn(() => undefined),
 }));
 // 备份执行器换成替身：**默认挂起**（保持「运行中」语义），
 // 各用例用 completeRun() / vi.mocked(executeBackup).mockImplementation 自行决定何时收尾
@@ -96,6 +99,11 @@ function seedSchedule(db: ReturnType<typeof createTestDb>): number {
     target: "alist", sourcePath: "/x", status: "pending", cron: "0 3 * * *", enabled: "false",
   }).run() as unknown as { lastInsertRowid: number | bigint };
   return Number(r.lastInsertRowid);
+}
+
+/** JSON-RPC 响应联合类型里 result 不一定存在，测试里统一用这个取结果对象 */
+function resultObj(res: unknown): { isError?: boolean; content: Array<{ text: string }> } {
+  return (res as { result: { isError?: boolean; content: Array<{ text: string }> } }).result;
 }
 
 function resultText(res: unknown): string {
@@ -243,5 +251,67 @@ describe("P0-4 长任务句柄", () => {
     const c = JSON.parse(resultText(await callTool("task_cancel", { taskId: r.taskId }, 141))) as { accepted: boolean; status: string };
     expect(c.accepted).toBe(true);
     expect(c.status).toBe("running");
+  });
+
+  it("回填已在跑时再调 kb.reindex_all：复用同一句柄，绝不新造无人轮询的孤儿句柄", async () => {
+    vi.mocked(getDb).mockReturnValue(createTestDb());
+    // 场景：索引器报告「已有句柄在跑」（真实实现在 startReindexAll 幂等分支里认领句柄）
+    const running = createTask({ kind: "reindex" });
+    vi.mocked(getActiveReindexTaskId).mockReturnValue(running.taskId);
+
+    const r = JSON.parse(resultText(await callTool("kb.reindex_all", {}, 150))) as { taskId: string; reused: boolean };
+
+    expect(r.taskId).toBe(running.taskId);
+    expect(r.reused).toBe(true);
+    // 关键：没有产生第二个回填句柄（修复前这里会是 2 个 → 那个新句柄没人轮询，取消它也是空转）
+    expect(listTasks({ kind: "reindex" })).toHaveLength(1);
+    // 复用句柄的取消依然是有效信号
+    const c = JSON.parse(resultText(await callTool("task_cancel", { taskId: r.taskId }, 151))) as { accepted: boolean };
+    expect(c.accepted).toBe(true);
+    expect(isCancelRequested(running.taskId)).toBe(true);
+  });
+
+  it("backup_trigger 不再把调度行的 enabled 改成 true（force 直取，避免把行弄成 due）", async () => {
+    const db = createTestDb();
+    vi.mocked(getDb).mockReturnValue(db);
+    const scheduleId = seedSchedule(db);
+    await completeRun();
+
+    const res = await callTool("backup_trigger", { jobId: scheduleId });
+    expect(resultObj(res).isError).toBeUndefined();
+
+    const [row] = await db.select().from(schema.backupJobs).where(eq(schema.backupJobs.id, scheduleId));
+    // 原来无条件写 enabled="true" + nextRunAt=now，运行行一旦被传进来就会被 tick 当成调度再跑一遍
+    expect(row?.enabled).toBe("false");
+    // 但本次运行确实发生了（nextRunAt 由调度器按 cron 重算）
+    expect(row?.nextRunAt).toBeInstanceOf(Date);
+  });
+
+  it("backup_trigger 对运行行（无 cron）拒绝，不派生第二份备份", async () => {
+    const db = createTestDb();
+    vi.mocked(getDb).mockReturnValue(db);
+    // 运行行：同表的每次运行记录，cron 为空 —— 它不能被当成调度再触发
+    const r = db.insert(schema.backupJobs).values({
+      target: "local", sourcePath: "/__probe__", status: "completed", progress: 100,
+    }).run() as unknown as { lastInsertRowid: number | bigint };
+    const runRowId = Number(r.lastInsertRowid);
+
+    const res = await callTool("backup_trigger", { jobId: runRowId });
+    expect(resultObj(res).isError).toBe(true);
+    expect(resultText(res)).toContain("不是定时调度");
+    // 且没有派生出新的运行行
+    const rows = await db.select().from(schema.backupJobs);
+    expect(rows).toHaveLength(1);
+  });
+
+  it("无在跑回填时，kb.reindex_all 正常新建句柄（reused=false）", async () => {
+    vi.mocked(getDb).mockReturnValue(createTestDb());
+    vi.mocked(getActiveReindexTaskId).mockReturnValue(undefined);
+
+    const r = JSON.parse(resultText(await callTool("kb.reindex_all", {}, 160))) as { taskId: string; reused: boolean };
+
+    expect(r.taskId).toMatch(/^tsk_reindex_/);
+    expect(r.reused).toBe(false);
+    expect(listTasks({ kind: "reindex" })).toHaveLength(1);
   });
 });

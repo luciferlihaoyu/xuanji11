@@ -31,7 +31,7 @@ vi.mock("./vector-service", () => ({
 }));
 
 import { getDb } from "../queries/connection";
-import { getReindexProgress, startReindexAll } from "./document-indexer";
+import { getActiveReindexTaskId, getReindexProgress, startReindexAll } from "./document-indexer";
 import { createTask, getTask, requestCancel, resetTaskRegistryForTest } from "./task-registry";
 
 function createTestDb() {
@@ -87,6 +87,22 @@ describe("全库回填取消（P0-4）", () => {
     expect(p.running).toBe(false);
     expect(p.done).toBe(3);
     expect(getTask(task.taskId)?.status).toBe("completed");
+  });
+
+  it("运行中才认领句柄同样有效：UI 起的回填可被后到的 MCP 句柄取消", async () => {
+    // UI（kb.reindexAll）起的回填没有句柄；此时 MCP 调用应当**认领**它而不是另起一个孤儿句柄
+    startReindexAll();
+    const task = createTask({ kind: "reindex" });
+    startReindexAll(task.taskId); // 已在运行 → 认领
+    expect(getActiveReindexTaskId()).toBe(task.taskId);
+
+    requestCancel(task.taskId);
+    for (let i = 0; i < 60 && getReindexProgress().running; i += 1) await new Promise((r) => setTimeout(r, 50));
+
+    const p = getReindexProgress();
+    expect(p.running).toBe(false);
+    expect(p.done).toBeLessThan(3); // 被中途叫停，不是跑完
+    expect(getTask(task.taskId)?.status).toBe("cancelled");
   });
 
   it("取消请求到达后循环停下：done 停在原地，任务 cancelled（不是 completed）", async () => {

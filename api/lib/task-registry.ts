@@ -62,6 +62,7 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+/** meta 的值约定为标量（浅拷即隔离）；塞嵌套对象会破坏「返回副本」契约（审查 Q9） */
 function clone(record: TaskRecord): TaskRecord {
   return { ...record, ...(record.meta ? { meta: { ...record.meta } } : {}) };
 }

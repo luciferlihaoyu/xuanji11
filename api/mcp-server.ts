@@ -13,7 +13,8 @@ import { clean } from "./lib/clean";
 import { paginate, InvalidCursorError } from "./lib/mcp-pagination";
 import { previewDocumentDeletion } from "./lib/document-removal";
 import { runDueBackupSchedules } from "./lib/backup-scheduler";
-import { createTask, finishTask, getTask, isCancelRequested, requestCancel, updateTaskProgress, type TaskRecord } from "./lib/task-registry";
+import { createTask, finishTask, getTask, isCancelRequested, listTasks, requestCancel, updateTaskProgress, type TaskRecord } from "./lib/task-registry";
+import { decideBackupOutcome, decideReindexOutcome } from "./lib/task-sync";
 import { executeWorkflow } from "./lib/workflow-runtime";
 import { zvecTools, handleZvecTool } from "./mcp-zvec-tools";
 import { hybridSearchTool, handleHybridSearch } from "./mcp-hybrid-search";
@@ -21,7 +22,7 @@ import { kbBackupTools, handleKbBackupTool } from "./mcp-kb-backup";
 import { keywordTools, handleKeywordTool } from "./mcp-keyword";
 import { relationTools, handleRelationTool } from "./mcp-relation";
 import { analyticsTool, handleAnalyticsTool } from "./mcp-analytics";
-import { tryIndexDocumentById, startReindexAll, getReindexProgress } from "./lib/document-indexer";
+import { tryIndexDocumentById, startReindexAll, getReindexProgress, getActiveReindexTaskId } from "./lib/document-indexer";
 import { vectorEngine } from "./lib/vector";
 import { deleteDocumentCascade } from "./lib/document-removal";
 import { normalizeTitle } from "./lib/title-normalize";
@@ -367,8 +368,17 @@ async function handleFolderList(args: Record<string, unknown>, auth: AuthInfo): 
 async function handleKbReindexAll(auth: AuthInfo): Promise<McpToolResult> {
   assertScope(auth, "documents:write");
   // P0-4：重建索引同样走统一句柄（全库回填是典型长任务）
-  const task = createTask({ kind: "reindex" });
-  return textResult({ taskId: task.taskId, ...startReindexAll(task.taskId) });
+  // 幂等：已在回填时不新造句柄（否则新句柄无人轮询，task_cancel 会 accepted 却无效），
+  // 而是复用/认领正在跑的那个句柄
+  const existing = getActiveReindexTaskId();
+  const task = existing === undefined ? createTask({ kind: "reindex" }) : undefined;
+  const progressNow = startReindexAll(task?.taskId);
+  const taskId = getActiveReindexTaskId() ?? task?.taskId;
+  return textResult({
+    taskId: taskId ?? null,
+    reused: existing !== undefined,
+    ...progressNow,
+  });
 }
 
 async function handleKbReindexStatus(auth: AuthInfo): Promise<McpToolResult> {
@@ -388,12 +398,30 @@ async function handleBackupList(args: Record<string, unknown>, auth: AuthInfo): 
 async function handleBackupTrigger(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
   assertScope(auth, "backups:write");
   const input = z.object({ jobId: z.number().int().positive() }).parse(args);
-  await getDb().update(backupJobs).set({ enabled: "true", nextRunAt: new Date() }).where(eq(backupJobs.id, input.jobId));
-  // P0-4：不再让调用方干等——只跑这一个调度，并把它这次运行的任务句柄交出去
-  const handles = await runDueBackupSchedules({ scheduleId: input.jobId });
+  const [row] = await getDb().select().from(backupJobs).where(eq(backupJobs.id, input.jobId));
+  if (!row) {
+    return { content: [{ type: "text", text: `没有可执行的备份调度：${input.jobId}（作业不存在）` }], isError: true };
+  }
+  // backup_jobs 是双职表（调度行 + 每次运行行）。运行行（cron 为空）不是调度：
+  // 对它触发会再派生一次运行，等于悄悄多跑一份备份（审查 Q8）→ 直接拒绝，不猜测意图
+  if (!row.cron) {
+    return {
+      content: [{ type: "text", text: `作业 ${input.jobId} 不是定时调度（无 cron），无法用 backup_trigger 触发；一次性备份请在控制台新建` }],
+      isError: true,
+    };
+  }
+  // P0-4：不再让调用方干等——force 直取该调度（不改 enabled/nextRunAt，避免把行弄成 due），
+  // 并把它这次运行的任务句柄交出去
+  const handles = await runDueBackupSchedules({ scheduleId: input.jobId, force: true });
   const handle = handles[0];
   if (!handle) {
-    return { content: [{ type: "text", text: `没有可执行的备份调度：${input.jobId}（作业可能不存在）` }], isError: true };
+    // 抢跑：tick 刚把这次运行领走 → 回读该调度在跑/最近的句柄，而不是谎报「没有可执行调度」
+    const recent = listTasks({ kind: "backup" })
+      .find((t) => t.meta?.scheduleId === input.jobId);
+    if (recent) {
+      return textResult({ taskId: recent.taskId, scheduleId: input.jobId, runJobId: recent.refId, status: recent.status, reused: true });
+    }
+    return { content: [{ type: "text", text: `没有可执行的备份调度：${input.jobId}` }], isError: true };
   }
   return textResult({ taskId: handle.taskId, scheduleId: handle.scheduleId, runJobId: handle.runJobId, status: "running" });
 }
@@ -412,22 +440,32 @@ function assertAnyScope(auth: AuthInfo, scopes: readonly string[]): void {
 async function syncTaskFromSource(record: TaskRecord): Promise<TaskRecord> {
   if (record.kind === "backup" && record.refId !== undefined) {
     const [row] = await getDb().select().from(backupJobs).where(eq(backupJobs.id, record.refId));
-    if (!row) return record;
-    const meta = { filesTotal: row.filesTotal, filesDone: row.filesDone, filesFailed: row.filesFailed };
-    if (row.status === "completed") return finishTask(record.taskId, "completed", { progress: 100, meta }) ?? record;
-    if (row.status === "cancelled") return finishTask(record.taskId, "cancelled", { meta }) ?? record;
-    if (row.status === "failed" || row.status === "partial") {
-      return finishTask(record.taskId, "failed", { error: row.error ?? `备份状态：${row.status}`, meta }) ?? record;
+    // settled=false：读时收口——行还停在 pending/running 就是「还在跑」，不是异常
+    const outcome = decideBackupOutcome(row, { settled: false });
+    if (!outcome) return record;
+    if (outcome.status === "running") {
+      return updateTaskProgress(record.taskId, outcome.progress, { ...outcome.meta, backupStatus: row?.status }) ?? record;
     }
-    return updateTaskProgress(record.taskId, row.progress ?? 0, { ...meta, backupStatus: row.status }) ?? record;
+    return finishTask(record.taskId, outcome.status, { progress: outcome.progress, error: outcome.error, meta: outcome.meta }) ?? record;
   }
   if (record.kind === "reindex") {
+    // 归属校验（审查 Q6）：别的回填正在跑时，不能拿全局进度去收口**不属于它**的句柄
+    const active = getActiveReindexTaskId();
+    const foreignRun = active !== undefined && active !== record.taskId;
     const p = getReindexProgress();
-    const meta = { total: p.total, done: p.done, failed: p.failed, chunksTotal: p.chunksTotal };
-    const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
-    if (p.running) return updateTaskProgress(record.taskId, pct, meta) ?? record;
-    // 索引器已停：running 句柄按结果收口（也覆盖进程重启导致句柄悬空的情况）
-    return finishTask(record.taskId, p.failed > 0 ? "failed" : "completed", { progress: 100, meta }) ?? record;
+    const outcome = decideReindexOutcome({
+      running: p.running,
+      total: p.total,
+      done: p.done,
+      failed: p.failed,
+      lastError: p.lastError,
+      cancelled: isCancelRequested(record.taskId),
+      // 归属不符时视为「本句柄无运行痕迹」→ 走「进度已丢失」判定，如实报 failed 而不是拿别人的进度当自己的
+      startedAt: foreignRun ? undefined : p.startedAt,
+    });
+    const meta = { ...outcome.meta, chunksTotal: p.chunksTotal };
+    if (outcome.status === "running") return updateTaskProgress(record.taskId, outcome.progress ?? 0, meta) ?? record;
+    return finishTask(record.taskId, outcome.status, { progress: outcome.progress, error: outcome.error, meta }) ?? record;
   }
   return record;
 }

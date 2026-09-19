@@ -41,6 +41,7 @@ function statusBadge(status: string) {
     completed: { cls: 'bg-emerald-500/15 text-emerald-400', label: '已完成' },
     failed: { cls: 'bg-rose-500/15 text-rose-400', label: '失败' },
     partial: { cls: 'bg-orange-500/15 text-orange-400', label: '部分失败' },
+    cancelled: { cls: 'bg-slate-500/15 text-slate-300', label: '已取消' },
   };
   const { cls, label } = map[status] ?? { cls: 'bg-slate-500/15 text-slate-400', label: status };
   return <span className={`text-[10px] px-1.5 py-0.5 rounded ${cls}`}>{label}</span>;
