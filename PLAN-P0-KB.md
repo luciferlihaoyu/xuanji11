@@ -238,3 +238,25 @@
 - 索引自洽复查：chunks == vectors == 43375
 
 **为何以前没抓到「取消不停」**：该现象在换版窗口只出现一次、之后两次实测均按时停止，**未能复现**，如实记录为未解观察（当时正处新旧容器并存窗口）；能确证的机制是上面缺陷二的读时谎报。
+
+### 独立审查（天演，审 99d8221）与跟进（提交 6e29eee）— 2026-09-19
+**总结论：可收**（两个修复真实存在；`npm run check` exit 0；4 文件 39/39 两次确认；5 组变异中 3 组被精准抓红）。
+天演同时点出 **3 项必跟进** + 1 项 DEVIATION，全部闭环，且每条新测试都自己做了变异验证：
+
+| 编号 | 问题（严重度） | 处置与证据 |
+| --- | --- | --- |
+| R1 | 读时收口接线（`cancelRequested`）**无判别力测试**（变异 M4 在 4 文件全绿下存活）— HIGH | **已补测**：`mcp-tasks` 新增「取消请求已记录但任务仍在跑：再查句柄必须仍是 running」；**变异 M-A（读侧改回 cancelled）实测变红** |
+| R2 | `vector-engine` 新测试断言 vacuous（v1/v2 为平行向量，cosine 无差别；M5 变异存活）— MEDIUM | **已重写**：改用两两正交向量 + 直接数 `vec_chunks`/`vec_chunk_meta` 行数；**变异 M-B（漏删 vec 行）实测变红** |
+| R3 | `indexDocumentById` 先清旧向量再 embed → embed 抛错时文档同时失去 chunks 与向量 — MEDIUM | **已改序**：删除挪到 `embedTextsWithFallback` 成功之后；新增「embed 失败不动旧向量」用例；**变异 M-C（挪回 embed 之前）实测变红** |
+| R4 | 判定规则不对称（读侧 failed 先于 cancel、执行方 cancel 优先）→ 残余「同事实两终态」窗口 — DEVIATION(minor) | **已对称化**：`done<total && cancelRequested → cancelled` 提到 `failed>0` 之前；新增用例 + **变异 M-D 实测变红** |
+| R5 | 降级引擎（sqlite-vec 不可用）insertBatch 不幂等 — MEDIUM/LOW | **已修**：同 id 先丢旧行；新增用例 + **变异 M-E 实测变红** |
+| R6 | `findMetaByld` typo；规则③注释与实现不符 — LOW | **已修**：改名 `findMetaById`；注释写明「需全零才触发，句柄不属本进程的 run 时如实透出对方数字」 |
+
+- 真实门禁再次体现价值：`MemoryVectorEngine(dim)` 构造器实际 0 参 → **vitest 全绿而 `tsc -b` 报 TS2554**，已修
+- 门禁 exit 0；批次 8 文件 79/79；`vite build` 成功；变异全部字节级还原（diff 逐文件校验一致）
+- 天演未验证项（如实记录）：insertBatch 真实并发竞态（better-sqlite3 单连接同步模型，理论无抢占，未做压测）
+
+### 6e29eee 线上终验 — 2026-09-19
+- `kb.reindex_all` → 句柄含 `adopted`（版本指纹）；本轮**真索引成功**：`done=3、failed=0`（修复前是 `done == failed` 全篇失败）
+- 取消链路：`task_cancel` → `accepted:true`，**立刻再查仍是 `running` + `cancelRequested:true`（未谎报）** → 循环 **2s 内停** → 终态 `cancelled`（done=4/1525、failed=0、chunksTotal=314，即真的嵌入并写入了 314 块）→ 再取消 `accepted:false`+reason
+- **幂等实证**：4 篇重索引写入 314 块后，全库 `chunks == vectors == 43479`、文档 1525 篇，计数一字不变（旧行被正确替换而非堆积）
