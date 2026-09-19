@@ -328,10 +328,16 @@ async function handleFolderCreate(args: Record<string, unknown>, user: User, aut
   return textResult({ id: Number(result.lastInsertRowid), name: input.name, parentId });
 }
 
-async function handleFolderList(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
-  assertScope(auth, "documents:read");
-  const input = z.object({ cursor: z.string().optional(), limit: z.number().optional() }).parse(args);
-  const rows = await getDb()
+/**
+ * folder_list 的查询口径（具名导出以便直接断言 ORDER BY 全序性）。
+ *
+ * WHY 必须有 id 兜底：`kb_folders.sortOrder` 默认 0 且 folder_create 从不写它 →
+ * MCP 建的文件夹全部并列。排序键并列时 SQLite **不保证任何顺序**，
+ * 而 cursor 分页是 offset 语义，顺序漂移就会跨页漏项或重项。
+ * sortOrder 为主序（保留人工排序语义），id 兜底补成全序。
+ */
+export function folderListQuery(db: ReturnType<typeof getDb>) {
+  return db
     .select({
       id: kbFolders.id,
       name: kbFolders.name,
@@ -345,7 +351,13 @@ async function handleFolderList(args: Record<string, unknown>, auth: AuthInfo): 
     .from(kbFolders)
     .leftJoin(kbDocuments, eq(kbDocuments.folderId, kbFolders.id))
     .groupBy(kbFolders.id)
-    .orderBy(kbFolders.sortOrder);
+    .orderBy(kbFolders.sortOrder, kbFolders.id);
+}
+
+async function handleFolderList(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
+  assertScope(auth, "documents:read");
+  const input = z.object({ cursor: z.string().optional(), limit: z.number().optional() }).parse(args);
+  const rows = await folderListQuery(getDb());
   return paginatedResult(rows, input);
 }
 

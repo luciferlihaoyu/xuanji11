@@ -149,9 +149,9 @@ GET /api/files/:id
 | `knowledge_create` | 创建知识节点         | `title` 节点标题<br>`content` 节点内容<br>`type` 节点类型（默认 `concept`）                                                                                                          | `title` 必填<br>`content`/`type` 可选        |
 | `document_read`    | 读取文档内容         | `id` 文档 ID                                                                                                                                                                         | `id` 必填                                    |
 | `document_write`   | 创建或更新文档       | `id` 已有文档 ID（更新时传入）<br>`folderId` 文件夹 ID<br>`title` 文档标题（创建时必填）<br>`content` 文档内容<br>`format` 格式（默认 `markdown`，可选 `text`/`json`/`html`/`code`） | `id` 可选<br>其余可选（创建时 `title` 必填） |
-| `backup_list`      | 查看备份任务列表     | `status` 状态过滤（可选：`pending`/`running`/`completed`/`failed`/`partial`）<br>`cursor` 分页游标（上次响应的 `nextCursor`）<br>`limit` 页大小（1-200，默认 50）                        | 均可选                                       |
+| `backup_list`      | 查看备份任务列表     | `status` 状态过滤（可选：`pending`/`running`/`completed`/`failed`/`partial`）<br>`cursor` 分页游标（上次响应的 `nextCursor`）<br>`limit` 页大小（默认 50，上限 200；非法值按边界夹取）      | 均可选                                       |
 | `backup_trigger`   | 立即触发备份任务     | `jobId` 备份任务 ID                                                                                                                                                                  | `jobId` 必填                                 |
-| `workflow_list`    | 查看工作流列表       | `status` 状态过滤（可选：`draft`/`active`/`paused`/`error`/`archived`）<br>`cursor` 分页游标<br>`limit` 页大小（1-200，默认 50）                                                      | 均可选                                       |
+| `workflow_list`    | 查看工作流列表       | `status` 状态过滤（可选：`draft`/`active`/`paused`/`error`/`archived`）<br>`cursor` 分页游标<br>`limit` 页大小（默认 50，上限 200；非法值按边界夹取）                                    | 均可选                                       |
 | `workflow_execute` | 执行工作流           | `id` 工作流 ID<br>`input` 工作流输入 payload（对象，默认 `{}`）                                                                                                                      | `id` 必填<br>`input` 可选                    |
 
 > 注：`document_write` 在代码层面还接受 `tags`（字符串数组）和 `metadata`（对象）用于扩展文档属性，可直接在参数中传入。
@@ -183,6 +183,9 @@ GET /api/files/:id
 
 - `nextCursor` 为 `null` 表示已到末页；请求下一页时把该字符串**原样**传回 `cursor`
 - `cursor` 非法（伪造/过期）→ `isError`，**不会静默返回第一页**（避免调用方重复处理数据却毫无察觉）
+- `limit` 越界按边界夹取（`<1` → 1，`>200` → 200），非整数向下取整
+- 排序是全序：`folder_list` 按 `sortOrder, id`；`backup_list` 按 `createdAt desc, id desc`；`workflow_list` 按 `updatedAt desc, id desc`——保证跨页不漏项/重项
+- 已知取舍：cursor 是 offset 语义（非 keyset），两页之间若有数据增删，`total` 与后续页可能漂移；分页期间建议以首页 `total` 为准或重新取首页
 - 迁移指引：把原来的「直接当数组用」改成读 `items`；只取前 N 条时传 `limit`
 
 #### 工具注解（v2 新增）

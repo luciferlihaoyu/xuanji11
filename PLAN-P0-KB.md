@@ -134,6 +134,20 @@
   - `api/mcp-folder-tools.test.ts` / `api/mcp-document-upsert.test.ts`：同类 DDL 腐化 → 共 4 例失败，已补齐
   - `api/mcp-reindex.test.ts` / `api/mcp-client-router.test.ts` / `api/mcp-kb-backup.test.ts`：测试替身仍是 MySQL 口径（`insertId`/`affectedRows`），而生产侧已统一 better-sqlite3（`lastInsertRowid`/`changes`）→ 断言拿到 NaN/null 而失败，共 4 例；已把替身改为 SQLite 口径（反查确认生产代码无残留 MySQL 口径，故非生产缺陷）
 
+### 独立审查（天演，审 ff7fb36 = wave3 P0-3）— 2026-09-18
+**总结论：可接受，需先修 1 项**（规格 t10 PASS / t11 一处偏离 / t12 PASS / 测试真实性 PASS；3 组变异全部变红）
+
+| 编号 | 问题 | 处置 |
+| --- | --- | --- |
+| Q1（major，必修） | `folder_list` 只 `orderBy(sortOrder)`，无 id 兜底；而 sortOrder 默认 0 且 folder_create 不写入 → 全并列 → SQLite 不保证顺序 → offset 分页可漏项/重项（commit 声称的「排序补 id 兜底」在 folder_list 上未落实） | **已修**：抽出具名 `folderListQuery(db)` 并改为 `.orderBy(kbFolders.sortOrder, kbFolders.id)` |
+| Q2（minor） | `keywords.extract` / `keywords.autoTag` 标 `openWorldHint:false`，但 mode=llm/auto 会 `fetch` 外部 LLM 端点（keyword-extractor.ts:159；autoTag 走 `extractKeywords(...,"auto")`） | **已修**：两者改 `openWorldHint:true`，文件头写明原因 |
+| Q3（minor） | cursor 是无签名 base64url，可伪造合法格式；越界 offset 返回空页而非 isError | **记录不改**：分页安全由服务端定界（取出后切片），空页 + `nextCursor:null` 不会造成重复处理或死循环；若要防篡改需 HMAC，收益不抵复杂度 |
+| Q4（minor） | limit 负数被静默夹为 1 | **文档化**：AGENT_API.md 写明夹取语义（保持向后兼容，避免调用方传 500 时突然报错） |
+| Q5（nit） | `folderId: doc.folderId ?? null` 看似冗余 | **记录不改**：保留可保证响应恒含 `folderId` 键（`undefined` 会被 JSON.stringify 丢掉，响应形状会随数据变化） |
+| Q6（nit） | offset cursor 在翻页期间数据变动会漂移 | **文档化**：AGENT_API.md 已加已知取舍与建议 |
+| Q7（nit） | folder_list 翻页测试只造 3 条不同名记录，未覆盖 sort 并列 | **已修**：新增「同 sortOrder 且插入序与 id 序相反」的全页遍历守卫 + ORDER BY 全序断言 |
+| Q1 的 RED 复盘 | 先用「真 SQLite + 插入序与 id 序相反」写行为测试，**pre-fix 也是绿的**（GROUP BY 走主键索引，返回恰好是有序的）→ 说明该缺陷在当前数据/查询计划下是**潜伏**的 | 因此改用**可观测真值断言**：断言实际下发 SQL 的 ORDER BY 含两个键。RED 证据：`expected 'order by "kb_folders"."sortOrder"' to match /,/`；修复后 13/13 通过 |
+
 ### 独立审查（天演，审 c5306f1 + 41ebcbf）— 2026-09-18
 - 阶段一规格符合度 **7/7 PASS**（含块序号透传链路真实性、LIKE 回退诚实留空、测试真实性经变异验证）
 - 阶段二 **1 critical + 11 minor**：

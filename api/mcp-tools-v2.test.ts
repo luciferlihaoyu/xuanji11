@@ -13,6 +13,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "@db/schema";
 import * as relations from "@db/relations";
+import { folderListQuery } from "./mcp-server";
 
 vi.hoisted(() => {
   process.env.ADMIN_USERNAME = "admin";
@@ -184,9 +185,10 @@ function createTestDb() {
 
 type TestDb = ReturnType<typeof createTestDb>;
 
-function seedFolder(db: TestDb, name: string): number {
-  const r = db.insert(schema.kbFolders).values({ name }).run() as unknown as { lastInsertRowid: number | bigint };
-  return Number(r.lastInsertRowid);
+function seedFolder(db: TestDb, name: string, explicitId?: number): number {
+  const values = explicitId === undefined ? { name } : { id: explicitId, name };
+  const r = db.insert(schema.kbFolders).values(values).run() as unknown as { lastInsertRowid: number | bigint };
+  return explicitId ?? Number(r.lastInsertRowid);
 }
 
 function seedBackupJob(db: TestDb, target: string): number {
@@ -272,6 +274,10 @@ describe("P0-3 工具注解（annotations）", () => {
     expect(byName.get("backup_trigger")?.openWorldHint).toBe(true);
     expect(byName.get("workflow_execute")?.openWorldHint).toBe(true);
     expect(byName.get("knowledge_search")?.openWorldHint).toBe(false);
+    // keywords.extract 的 mode=llm/auto 分支会 fetch 外部 LLM 端点（keyword-extractor.ts），
+    // keywords.autoTag 走 extractKeywords(...,"auto") 同样可能外呼 → 两者都不得标成封闭世界
+    expect(byName.get("keywords.extract")?.openWorldHint).toBe(true);
+    expect(byName.get("keywords.autoTag")?.openWorldHint).toBe(true);
   });
 
   it("tools/list 顺序确定（同一进程内多次调用完全一致）", async () => {
@@ -285,6 +291,44 @@ describe("P0-3 工具注解（annotations）", () => {
 });
 
 describe("P0-3 cursor 分页", () => {
+  it("folder_list 查询的 ORDER BY 必须是全序（sortOrder 并列时以 id 兜底）", () => {
+    const db = createTestDb();
+    const sql = folderListQuery(db).toSQL().sql;
+    const orderBy = sql.slice(sql.toLowerCase().lastIndexOf("order by"));
+    // sortOrder 是主序（保留人工排序语义；列名即驼峰 sortOrder）
+    expect(orderBy).toMatch(/"sortOrder"/);
+    // 必须有第二排序键：sortOrder 默认 0 且 folder_create 不写它 → 全部并列，
+    // 并列时 SQLite 不保证顺序，而 cursor 分页是 offset 语义 → 会漏项/重项
+    expect(orderBy).toMatch(/,/);
+    expect(orderBy).toMatch(/"id"/);
+  });
+
+  it("folder_list 分页必须是 (sortOrder, id) 全序：插入序与 id 序不一致时不得乱序/漏项/重项", async () => {
+    const db = createTestDb();
+    vi.mocked(getDb).mockReturnValue(db);
+    // sortOrder 全为默认 0（folder_create 不写 sortOrder），且**故意让 id 与插入顺序相反**：
+    // 若查询没有 id 兜底，SQLite 只保证 sortOrder 有并列、不保证任何顺序，
+    // 返回顺序会跟扫描/临时 B 树走 → offset 分页就可能漏项或重项。
+    for (const id of [105, 104, 103, 102, 101]) seedFolder(db, `F${id}`, id);
+
+    const collected: number[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < 10; i += 1) {
+      const args = cursor === null ? { limit: 2 } : { limit: 2, cursor };
+      const res = await callTool("folder_list", args, 200 + i);
+      const page = JSON.parse(resultText(res as { result: unknown })) as {
+        items: Array<{ id: number }>;
+        nextCursor: string | null;
+      };
+      collected.push(...page.items.map((f) => f.id));
+      cursor = page.nextCursor;
+      if (cursor === null) break;
+    }
+    // sortOrder 相同 → 按 id 升序（全序），共 5 条、每条一次
+    expect(collected).toEqual([101, 102, 103, 104, 105]);
+    expect(new Set(collected).size).toBe(collected.length);
+  });
+
   it("folder_list 分页：nextCursor 可续页，最后一页为 null", async () => {
     const db = createTestDb();
     vi.mocked(getDb).mockReturnValue(db);

@@ -8,6 +8,10 @@ import { autoTagInputSchema, autoTagDocument } from "./lib/keyword-auto-tag";
 import type { McpTool } from "./mcp-server";
 export type { McpTool };
 
+// 注解如实性：keywords.extract 的 mode=llm/auto 与 keywords.autoTag（内部走 extractKeywords(...,"auto")）
+// 都会 fetch 外部 LLM 端点（见 lib/keyword-extractor.ts），因此 openWorldHint 必须为 true——
+// 否则客户端会误判为纯本地调用而自动放行。
+
 interface McpToolResult {
   readonly content: Array<{ type: "text"; text: string }>;
   readonly isError?: boolean;
@@ -43,7 +47,7 @@ export const keywordTools: readonly McpTool[] = [
   {
     name: "keywords.extract",
     description: "Extract keywords from text using internal frequency analysis or LLM when configured. Returns ranked keywords with scores.",
-    annotations: { title: "抽取关键词", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: {
+    annotations: { title: "抽取关键词", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true }, inputSchema: {
       type: "object",
       properties: {
         text: { type: "string", description: "Text to extract keywords from" },
@@ -56,7 +60,7 @@ export const keywordTools: readonly McpTool[] = [
   {
     name: "keywords.autoTag",
     description: "Extract keywords from a knowledge base document and create tag nodes linked to the document.",
-    annotations: { title: "自动打标签", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, inputSchema: {
+    annotations: { title: "自动打标签", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }, inputSchema: {
       type: "object",
       properties: {
         documentId: { type: "number", description: "Knowledge base document id" },
