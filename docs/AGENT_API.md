@@ -205,9 +205,12 @@ GET /api/files/:id
 - `task_get` 是**有意的惰性收口点**：只读注解指它不改业务数据，但句柄若停在 running 而业务早已结束，读一次会把它落成终态（同一进程内让状态收敛，而不是永远漂着）
 - `task_cancel`：`{"taskId": "..."}` → `{taskId, accepted, status, reason?}`
   - **两段式语义**：`accepted: true` 只表示取消请求已记录（执行方在安全点收手：备份在文件之间、回填在文档之间），`status` 仍为 `running`；执行方确认后状态才会变 `cancelled`
+  - **「请求」不等于「已取消」**：`task_cancel` 刚返回时再查 `task_get`，看到的一定还是 `running`（`cancelRequested: true` 单独体现请求已记录）——只有执行方真的在安全点收手，状态才落 `cancelled`。不会出现「句柄已 cancelled 而任务还在跑」的谎报（2026-09-19 线上实测抓出过这个谎报并修掉：`cancelRequested` 是**请求**，`cancelled` 是**既成事实**，两者在判定函数里是不同输入）
   - 任务已结束时**不谎报成功**：返回 `accepted: false` + `reason`（如「任务已 completed，无需取消」）
   - 取消的运行为 `cancelled` 状态，与 `failed`（故障）区分——调用方不该按失败重试
 - `kb.reindex_all` 同样返回 `taskId`（全库回填的进度用 `kb.reindex_status` 或 `task_get` 都行）
+  - 回填与单篇 `kb.reindexDocument` 都是**幂等**的：写入向量前会先清掉该文档的旧向量（`vec_chunk_meta.id` 是唯一列，不先清会撞唯一索引——2026-09-19 线上整库回填因此**每篇都失败**并把分块删残，已修）
+  - 取消是**协作式**的：在文档之间生效，已索引的文档保持有效，重跑会幂等覆盖
 - 边界（**重要，别误读**）：句柄保存在服务进程内存里，**不跨进程重启**——重启后旧 `taskId` 一律返回 `isError: Task not found`（不假装成功、也不谎报状态）
   - 「状态以业务真相为准」说的是**同一次进程生命周期内**：句柄只存身份，进度/终态每次都从 `backup_jobs` 行或索引器实况重新读，所以不会出现「业务早已结束、句柄永远 running」的漂移
   - 重启后要查历史：备份用 `backup_list`（`refId` = 运行行 id，可直接对上）；回填可重新触发（`kb.reindex_all` 幂等）

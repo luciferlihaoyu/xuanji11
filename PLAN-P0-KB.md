@@ -207,3 +207,34 @@
 
 ### 已知存量问题（非本波次引入）
 - `api/kb-backup.test.ts > imports valid backup data` / `REST imports with knowledge:write scope`：mock 未实现 drizzle 的 `insert().values()` 链，报 `db.insert(...).values is not a function`；证据：e0d2f5b 与 c5306f1 上均 2 例失败
+
+### 线上实测抓出的两个严重缺陷与修复（t13 收尾，提交 99d8221）— 2026-09-19
+
+**起因**：t13 的线上实测（`/tmp/verify-t7b.py` 的「真实在飞取消回填」）在版本指纹关（`adopted` 字段）就中止，
+但**已经把回填留在线上跑**。追查这轮回填，抓出两个都发生在「单测全绿」时的严重缺陷。
+
+**缺陷一（历史，产品级）：全库回填在健康库上「每篇都失败 + 把索引删残」**
+- 现象：`done == failed` 同步增长，每篇 `UNIQUE constraint failed: vec_chunk_meta.id`；而 document_chunks 已先被删 → 索引残缺
+- 根因：① `SqliteVecEngine.insertBatch` 的 `vec_chunk_meta.id` 是 `TEXT NOT NULL UNIQUE`，插入语句却只有 `ON CONFLICT(rowid) DO UPDATE`（重复 id 以新 rowid 撞 id 唯一索引）；② `indexDocumentById` 删了 chunks 却没删旧向量就 insertBatch
+- 为什么以前没暴露：上次单篇 `reindexDocument(1922)` 成功，是因为那篇的向量在前一次事故里已被清空（没有旧行可撞）——**「修过一次成功」不等于路径正确**
+- 修复：insertBatch 按 id 先清旧行（vec + meta，同事务）再插；`indexDocumentById` 在 insertBatch 前 `deleteByDocumentId`
+- RED 证据：`vector-engine.test.ts` 新增「同 id 重复插入不报错」——**修前精准复现线上同一错误**（`UNIQUE constraint failed: vec_chunk_meta.id`）
+- 二次保护：`reindex-cancel.test.ts` 新增「每篇文档先删后插」顺序断言（`invocationCallOrder`）
+
+**缺陷二（本波次自己引入）：把「取消请求」当成「已取消」→ 谎报**
+- 现象：`task_cancel` 返回 `accepted:true` 后句柄立刻 `cancelled`，而索引循环还在跑（done 4→30 持续增长）
+- 根因：读时收口把 `isCancelRequested()`（请求）当既成事实传给判定函数，规则①立即判 cancelled
+- 修复：判定函数区分 `cancelled`（执行方确认）/ `cancelRequested`（仅请求）；读时收口只传后者，运行中一律 running
+- 顺带堵住两个同族谎报：①「运行已停 + 没跑完 + 无取消请求」原判 completed/100 → 改判 failed（提前结束）；② completed 判据改为 `done >= total`
+- RED 证据：`task-sync.test.ts` 5 例，`expected 'completed' to be 'cancelled'` / `expected 'completed' to be 'failed'`
+
+**线上事故面与修复（已复原，逐篇终审为证）**
+- 事故面：回填循环处理到 30 篇时被换版重启杀掉；损伤经逐篇 dryRun 盘点为 **1 篇分块丢失（id=138：chunks 0 / vectors 130 孤儿）**，另发现 1 篇历史不自洽（id=1885：chunks 178 / vectors 124，为 insertBatch 维度静默跳过所致），7 篇日报未索引
+- 修复：`reindexDocument` 逐篇修复（138 → 130/130、1885 → 178/178、7 篇日报成功）→ **逐篇终审 1524 篇：chunks/vectors 不一致 0 篇、未置 vectorized 0 篇，全库 chunks == vectors == 43375**
+- 注：回填失败文档不会置 `metadata.vectorized=true` 的推断**不成立**（旧标记会被保留），故清零式修复只能靠 `dryRun` 逐篇对账——已记录
+
+**t13 线上终验（两次，完全一致）**
+- `kb.reindex_all` → 句柄含 `adopted` 字段（de86aa9+ 指纹）→ 运行中触发 `task_cancel` → `accepted:true`，**立刻再查 `task_get` 仍是 `running` + `cancelRequested:true`（未谎报）** → 循环 **2s 内真停**（`kb.reindex_status.running=false`）→ 终态 `cancelled`（done=1/1524、failed=0、chunksTotal=107，非 completed）→ 再取消 `accepted:false` + reason
+- 索引自洽复查：chunks == vectors == 43375
+
+**为何以前没抓到「取消不停」**：该现象在换版窗口只出现一次、之后两次实测均按时停止，**未能复现**，如实记录为未解观察（当时正处新旧容器并存窗口）；能确证的机制是上面缺陷二的读时谎报。
