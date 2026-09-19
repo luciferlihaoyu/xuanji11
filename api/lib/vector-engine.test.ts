@@ -80,6 +80,31 @@ describe("SqliteVecEngine", () => {
   });
 });
 
+describe("insertBatch 幂等（线上实测：重索引整库全篇 UNIQUE 失败）", () => {
+  it("同一个 id 重复插入不报错，且不留下重复/陈旧向量", async () => {
+    const { getVectorEngine, _resetVectorEngineForTests } = await import("./vector-engine");
+    _resetVectorEngineForTests();
+    const engine = getVectorEngine(dim);
+    engine.clear();
+    const v1 = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1];
+    const v2 = [0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9];
+
+    await engine.insertBatch([{ id: "chunk-9-0", vector: v1, metadata: { documentId: "9", chunkIndex: 0 } }]);
+    // 第二次插入同样的 id（重索引场景：文档已索引过）——原来这里抛
+    // UNIQUE constraint failed: vec_chunk_meta.id（id 是 UNIQUE，而 ON CONFLICT 只覆盖 rowid）
+    await expect(
+      engine.insertBatch([{ id: "chunk-9-0", vector: v2, metadata: { documentId: "9", chunkIndex: 0 } }]),
+    ).resolves.toBeUndefined();
+
+    expect(await engine.countByDocumentId("9")).toBe(1);
+    const hits = await engine.search(v2, 5);
+    expect(hits.filter((h) => h.id === "chunk-9-0")).toHaveLength(1);
+    // 旧向量必须被替换掉：用 v1 检索不该再命中同一条
+    const oldHits = await engine.search(v1, 5);
+    expect(oldHits.filter((h) => h.id === "chunk-9-0")).toHaveLength(1);
+  });
+});
+
 describe("countByDocumentId（供破坏性操作 dryRun 预览真实计数）", () => {
   it("按 documentId 计数，未知 id 为 0，删除后归零", async () => {
     const { getVectorEngine, _resetVectorEngineForTests } = await import("./vector-engine");

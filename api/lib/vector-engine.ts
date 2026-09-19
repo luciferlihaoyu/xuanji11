@@ -177,11 +177,23 @@ class SqliteVecEngine implements VectorEngine {
          content = excluded.content,
          metadataJson = excluded.metadataJson`,
     );
+    // 幂等写入：meta.id 是 UNIQUE，而下面的 ON CONFLICT 只覆盖 rowid——
+    // 同一 id 二次写入（重索引、重复回填）会以新 rowid 撞 id 唯一索引，
+    // 线上实测整库回填因此**每篇文档都失败**（UNIQUE constraint failed: vec_chunk_meta.id），
+    // 且调用方已先删了 document_chunks，等于把文档索引删残。这里按 id 先清旧行。
+    const findMetaByld = raw.prepare(`SELECT rowid FROM ${META_TABLE} WHERE id = ?`);
+    const deleteVecByRowid = raw.prepare(`DELETE FROM ${VEC_TABLE} WHERE rowid = ?`);
+    const deleteMetaById = raw.prepare(`DELETE FROM ${META_TABLE} WHERE id = ?`);
     const tx = raw.transaction((rows: typeof entries) => {
       for (const e of rows) {
         if (e.vector.length !== this.dim) {
           // 维度不匹配时跳过向量插入
           continue;
+        }
+        const stale = findMetaByld.all(e.id) as Array<{ rowid: number }>;
+        if (stale.length > 0) {
+          for (const r of stale) deleteVecByRowid.run(r.rowid);
+          deleteMetaById.run(e.id);
         }
         const result = insertVec.run(this.vectorToBlob(e.vector));
         const rowid = Number(result.lastInsertRowid);

@@ -470,7 +470,8 @@ async function syncTaskFromSource(record: TaskRecord): Promise<TaskRecord> {
       done: p.done,
       failed: p.failed,
       lastError: p.lastError,
-      cancelled: isCancelRequested(record.taskId),
+      // 注意：这里传的是**请求**不是既成事实；执行方确认的取消由索引器自己落终态
+      cancelRequested: isCancelRequested(record.taskId),
       // 归属不符时视为「本句柄无运行痕迹」→ 走「进度已丢失」判定，如实报 failed 而不是拿别人的进度当自己的
       startedAt: foreignRun ? undefined : p.startedAt,
     });

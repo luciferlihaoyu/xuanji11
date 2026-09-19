@@ -72,6 +72,7 @@ function createTestDb() {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks(); // 只清调用记录（保留替身实现），避免跨用例计数污染
   resetTaskRegistryForTest();
   vi.mocked(getDb).mockReturnValue(createTestDb() as never);
 });
@@ -103,6 +104,21 @@ describe("全库回填取消（P0-4）", () => {
     expect(p.running).toBe(false);
     expect(p.done).toBeLessThan(3); // 被中途叫停，不是跑完
     expect(getTask(task.taskId)?.status).toBe("cancelled");
+  });
+
+  it("重索引每篇文档都先清旧向量再写入（否则分块变少会留孤儿向量）", async () => {
+    const task = createTask({ kind: "reindex" });
+    startReindexAll(task.taskId);
+    for (let i = 0; i < 60 && getReindexProgress().running; i += 1) await new Promise((r) => setTimeout(r, 50));
+
+    const { vectorEngine } = await import("./vector");
+    const engine = vectorEngine as unknown as { deleteByDocumentId: ReturnType<typeof vi.fn>; insertBatch: ReturnType<typeof vi.fn> };
+    expect(engine.deleteByDocumentId).toHaveBeenCalledTimes(3); // 3 篇文档
+    expect(engine.insertBatch).toHaveBeenCalledTimes(3);
+    // 每一篇都必须是「先删后插」
+    for (let i = 0; i < 3; i += 1) {
+      expect(engine.deleteByDocumentId.mock.invocationCallOrder[i]).toBeLessThan(engine.insertBatch.mock.invocationCallOrder[i]);
+    }
   });
 
   it("取消请求到达后循环停下：done 停在原地，任务 cancelled（不是 completed）", async () => {

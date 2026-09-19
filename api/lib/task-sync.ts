@@ -18,8 +18,10 @@ export interface ReindexOutcomeInput {
   readonly done: number;
   readonly failed: number;
   readonly lastError?: string;
-  /** 执行方明确知道自己被取消（只有执行方拿得到；读时收口走 isCancelRequested） */
+  /** **执行方确认**的取消（循环真的因取消而停下）——只有执行方拿得到 */
   readonly cancelled?: boolean;
+  /** 只是**收到取消请求**（还没停）：读时收口用它推断，绝不能当成「已取消」 */
+  readonly cancelRequested?: boolean;
   /** 本次运行的启动时间；缺失 = 本进程没有任何回填运行的痕迹 */
   readonly startedAt?: string;
 }
@@ -52,9 +54,10 @@ export function decideReindexOutcome(p: ReindexOutcomeInput & { readonly running
 export function decideReindexOutcome(p: ReindexOutcomeInput): TaskOutcome;
 export function decideReindexOutcome(p: ReindexOutcomeInput): TaskOutcome {
   const meta = { total: p.total, done: p.done, failed: p.failed };
-  // ① 取消优先：人工取消不是故障，即使中途有文档失败也按 cancelled 记
+  // ① 执行方确认的取消优先：人工取消不是故障，即使中途有文档失败也按 cancelled 记
   if (p.cancelled) return { status: "cancelled", progress: pct(p.done, p.total), meta };
-  // ② 运行中（只有读时收口会走到）
+  // ② 仍在跑：只报 running。**「收到取消请求」不等于「已取消」**——
+  //    在线实测抓到的谎报就是这里：读时收口把请求当成既成事实，句柄已 cancelled 而循环还在跑
   if (p.running) return { status: "running", progress: pct(p.done, p.total), meta };
   // ③ 进度已丢失：本进程从未启动过回填（进程重启后 idle 归零）→ 无法确认结果，绝不谎报成功
   if (!p.startedAt && p.total === 0 && p.done === 0 && p.failed === 0) {
@@ -69,8 +72,17 @@ export function decideReindexOutcome(p: ReindexOutcomeInput): TaskOutcome {
       meta,
     };
   }
-  // ⑤ 正常结束
-  return { status: "completed", progress: 100, meta };
+  // ⑤ 只有**跑满全部文档**才算完成（done>=total）：早停不能因为「没失败」就报成功
+  if (p.done >= p.total) return { status: "completed", progress: 100, meta };
+  // ⑥ 没跑完 + 有取消请求 → 推断为取消（执行方未留痕时的诚实推断，meta 里看得到 done/total）
+  if (p.cancelRequested) return { status: "cancelled", progress: pct(p.done, p.total), meta };
+  // ⑦ 没跑完又没取消请求 = 异常提前结束
+  return {
+    status: "failed",
+    progress: pct(p.done, p.total),
+    error: `回填提前结束：只处理了 ${p.done}/${p.total} 篇（无取消请求）`,
+    meta,
+  };
 }
 
 export interface BackupRowLike {

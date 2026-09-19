@@ -71,6 +71,11 @@ export async function indexDocumentById(documentId: number): Promise<IndexDocume
   // 校准向量表维度（确保用 system_settings 的真实 dim 建表，否则 insertBatch 维度检查会静默跳过）
   await ensureCorrectDimension();
 
+  // 重索引 = 用新分块替换该文档的旧向量：先清掉旧行，
+  // 否则分块数变少时会留下孤儿向量（旧 chunkIndex 的行没人再引用），
+  // 且旧行会让 insertBatch 撞 meta.id 唯一索引（2026-09-19 线上整库回填全篇失败）
+  await vectorEngine.deleteByDocumentId(documentId);
+
   // 真正 embed 每个 chunk（修复 R3 空壳：此前从不 embed/写入向量表）
   const chunkContents = chunks.map((content, index) => ({ content, index }));
   const vectors = await embedTextsWithFallback(chunkContents.map((c) => c.content));

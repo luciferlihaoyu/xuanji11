@@ -44,6 +44,34 @@ describe("回填终态判定（decideReindexOutcome）", () => {
   });
 });
 
+describe("在线实测抓出的两处谎报（读时收口）", () => {
+  it("只是**请求了**取消、运行还在跑 → 必须报 running（不能把请求当既成事实）", () => {
+    const r = decideReindexOutcome({ running: true, total: 1523, done: 4, failed: 4, cancelRequested: true, startedAt: "t0" });
+    expect(r.status).toBe("running");
+  });
+
+  it("运行已停 + 有取消请求 + 没跑完 → cancelled（这才是取消的既成事实）", () => {
+    const r = decideReindexOutcome({ running: false, total: 1523, done: 4, failed: 0, cancelRequested: true, startedAt: "t0" });
+    expect(r.status).toBe("cancelled");
+  });
+
+  it("运行已停 + 没跑完 + 没取消请求 → failed（提前结束是异常，绝不能报 completed）", () => {
+    const r = decideReindexOutcome({ running: false, total: 1523, done: 4, failed: 0, startedAt: "t0" });
+    expect(r.status).toBe("failed");
+    expect(r.error).toContain("提前结束");
+  });
+
+  it("跑满全部文档才算 completed（done>=total），即使有取消请求也不谎报 cancelled", () => {
+    const r = decideReindexOutcome({ running: false, total: 4, done: 4, failed: 0, cancelRequested: true, startedAt: "t0" });
+    expect(r.status).toBe("completed");
+  });
+
+  it("执行方确认取消（cancelled=true）优先于一切：即使跑完了也按取消记", () => {
+    const r = decideReindexOutcome({ running: false, total: 4, done: 4, failed: 2, cancelled: true, startedAt: "t0" });
+    expect(r.status).toBe("cancelled");
+  });
+});
+
 describe("备份终态判定（decideBackupOutcome）", () => {
   const base = { status: "running", progress: 40, filesTotal: 5, filesDone: 2, filesFailed: 0 };
 
