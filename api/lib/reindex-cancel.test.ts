@@ -106,6 +106,17 @@ describe("全库回填取消（P0-4）", () => {
     expect(getTask(task.taskId)?.status).toBe("cancelled");
   });
 
+  it("嵌入失败时**不动**旧向量（审查 MEDIUM：先清后 embed 会让文档同时失去 chunks 与向量）", async () => {
+    const { embedTextsWithFallback } = await import("./vector-service");
+    vi.mocked(embedTextsWithFallback).mockRejectedValueOnce(new Error("嵌入服务 502"));
+    const { vectorEngine } = await import("./vector");
+    const engine = vectorEngine as unknown as { deleteByDocumentId: ReturnType<typeof vi.fn> };
+    const { indexDocumentById } = await import("./document-indexer");
+
+    await expect(indexDocumentById(1)).rejects.toThrow("嵌入服务 502");
+    expect(engine.deleteByDocumentId).not.toHaveBeenCalled();
+  });
+
   it("重索引每篇文档都先清旧向量再写入（否则分块变少会留孤儿向量）", async () => {
     const task = createTask({ kind: "reindex" });
     startReindexAll(task.taskId);

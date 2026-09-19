@@ -225,6 +225,22 @@ describe("P0-4 长任务句柄", () => {
     expect(getTask(taskId)).toBeDefined();
   });
 
+  it("取消请求已记录但任务仍在跑：再查句柄必须仍是 running（把请求当既成事实就是谎报）", async () => {
+    // 审查 HIGH：这条是读时收口接线的**判别性**测试。
+    // 变异体（读侧把 cancelRequested 改回 cancelled）会在这里变红：句柄会立刻显示 cancelled 而任务还在跑。
+    vi.mocked(getDb).mockReturnValue(createTestDb());
+    const started = JSON.parse(resultText(await callTool("kb.reindex_all", {}, 140))) as { taskId: string };
+    const cancelled = JSON.parse(resultText(await callTool("task_cancel", { taskId: started.taskId }, 141))) as { accepted: boolean; status: string };
+    expect(cancelled).toMatchObject({ accepted: true, status: "running" });
+
+    // 执行方（索引循环）还没停下 → 再查两次都必须报 running，且 cancelRequested 单独体现
+    const again = JSON.parse(resultText(await callTool("task_get", { taskId: started.taskId }, 142))) as { status: string; cancelRequested?: boolean };
+    expect(again.status).toBe("running");
+    expect(again.cancelRequested).toBe(true);
+    const third = JSON.parse(resultText(await callTool("task_get", { taskId: started.taskId }, 143))) as { status: string };
+    expect(third.status).toBe("running");
+  });
+
   it("backup_trigger 对不存在的调度返回 isError，不返回假句柄", async () => {
     const db = createTestDb();
     vi.mocked(getDb).mockReturnValue(db);

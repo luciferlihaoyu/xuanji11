@@ -61,6 +61,12 @@ describe("在线实测抓出的两处谎报（读时收口）", () => {
     expect(r.error).toContain("提前结束");
   });
 
+  it("早停 + 有失败 + 有取消请求 → cancelled（与执行方「取消优先」对称，不留两个终态的窗口）", () => {
+    const r = decideReindexOutcome({ running: false, total: 10, done: 3, failed: 2, cancelRequested: true, startedAt: "t0" });
+    expect(r.status).toBe("cancelled");
+    expect(r.meta).toEqual({ total: 10, done: 3, failed: 2 });
+  });
+
   it("跑满全部文档才算 completed（done>=total），即使有取消请求也不谎报 cancelled", () => {
     const r = decideReindexOutcome({ running: false, total: 4, done: 4, failed: 0, cancelRequested: true, startedAt: "t0" });
     expect(r.status).toBe("completed");

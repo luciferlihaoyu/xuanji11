@@ -76,12 +76,16 @@ function metadataFromJson(json: string | null | undefined): Record<string, unkno
 }
 
 /** 兜底：内存引擎——sqlite-vec 不可用时启用（不持久化、跨重启丢失）。 */
-class MemoryVectorEngine implements VectorEngine {
+// 导出以便单测直接验证降级引擎（sqlite-vec 不可用时的路径）
+export class MemoryVectorEngine implements VectorEngine {
   private store: Array<{ id: string; vector: number[]; metadata: Record<string, unknown> }> = [];
   async insert(id: string, vector: number[], metadata: Record<string, unknown> = {}): Promise<void> {
     this.store.push({ id, vector: this.normalize(vector), metadata });
   }
   async insertBatch(entries: Array<{ id: string; vector: number[]; metadata?: Record<string, unknown> }>): Promise<void> {
+    // 幂等：同 id 重复写入（重索引）先丢掉旧行，否则降级引擎会越堆越多重复向量
+    const incoming = new Set(entries.map((e) => e.id));
+    if (incoming.size > 0) this.store = this.store.filter((s) => !incoming.has(s.id));
     this.store.push(...entries.map((e) => ({ id: e.id, vector: this.normalize(e.vector), metadata: e.metadata ?? {} })));
   }
   async indexDocumentChunks(documentId: number | string, chunks: Array<{ content: string; index: number; metadata?: Record<string, unknown> }>, baseMetadata: Record<string, unknown> = {}): Promise<number> {
@@ -181,7 +185,7 @@ class SqliteVecEngine implements VectorEngine {
     // 同一 id 二次写入（重索引、重复回填）会以新 rowid 撞 id 唯一索引，
     // 线上实测整库回填因此**每篇文档都失败**（UNIQUE constraint failed: vec_chunk_meta.id），
     // 且调用方已先删了 document_chunks，等于把文档索引删残。这里按 id 先清旧行。
-    const findMetaByld = raw.prepare(`SELECT rowid FROM ${META_TABLE} WHERE id = ?`);
+    const findMetaById = raw.prepare(`SELECT rowid FROM ${META_TABLE} WHERE id = ?`);
     const deleteVecByRowid = raw.prepare(`DELETE FROM ${VEC_TABLE} WHERE rowid = ?`);
     const deleteMetaById = raw.prepare(`DELETE FROM ${META_TABLE} WHERE id = ?`);
     const tx = raw.transaction((rows: typeof entries) => {
@@ -190,7 +194,7 @@ class SqliteVecEngine implements VectorEngine {
           // 维度不匹配时跳过向量插入
           continue;
         }
-        const stale = findMetaByld.all(e.id) as Array<{ rowid: number }>;
+        const stale = findMetaById.all(e.id) as Array<{ rowid: number }>;
         if (stale.length > 0) {
           for (const r of stale) deleteVecByRowid.run(r.rowid);
           deleteMetaById.run(e.id);

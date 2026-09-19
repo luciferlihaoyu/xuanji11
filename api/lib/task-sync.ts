@@ -59,11 +59,15 @@ export function decideReindexOutcome(p: ReindexOutcomeInput): TaskOutcome {
   // ② 仍在跑：只报 running。**「收到取消请求」不等于「已取消」**——
   //    在线实测抓到的谎报就是这里：读时收口把请求当成既成事实，句柄已 cancelled 而循环还在跑
   if (p.running) return { status: "running", progress: pct(p.done, p.total), meta };
-  // ③ 进度已丢失：本进程从未启动过回填（进程重启后 idle 归零）→ 无法确认结果，绝不谎报成功
+  // ③ 进度已丢失：**需要全零**（进程重启后 idle 归零，或句柄不属于本进程的 run）→ 无法确认结果，绝不谎报成功。
+  //    注意：句柄不属本进程的 run 时，读到的会是那个 run 的数字（非全零），如实透出、不冒充自己的进度
   if (!p.startedAt && p.total === 0 && p.done === 0 && p.failed === 0) {
     return { status: "failed", progress: 0, error: "回填进度已丢失（进程可能重启），无法确认本次结果", meta };
   }
-  // ④ 有失败即失败——**不附加 lastError 条件**，否则同一事实会因观察路径不同得出两个终态
+  // ④ 没跑完 + 有取消请求 → cancelled：与执行方规则①「取消优先」对齐，
+  //    否则同一事实会因观察路径不同得出两个终态（读侧 failed / 执行方 cancelled）。审查 DEVIATION 已修
+  if (p.done < p.total && p.cancelRequested) return { status: "cancelled", progress: pct(p.done, p.total), meta };
+  // ⑤ 有失败即失败——**不附加 lastError 条件**，否则同一事实会因观察路径不同得出两个终态
   if (p.failed > 0) {
     return {
       status: "failed",
@@ -72,10 +76,8 @@ export function decideReindexOutcome(p: ReindexOutcomeInput): TaskOutcome {
       meta,
     };
   }
-  // ⑤ 只有**跑满全部文档**才算完成（done>=total）：早停不能因为「没失败」就报成功
+  // ⑥ 只有**跑满全部文档**才算完成（done>=total）：早停不能因为「没失败」就报成功
   if (p.done >= p.total) return { status: "completed", progress: 100, meta };
-  // ⑥ 没跑完 + 有取消请求 → 推断为取消（执行方未留痕时的诚实推断，meta 里看得到 done/total）
-  if (p.cancelRequested) return { status: "cancelled", progress: pct(p.done, p.total), meta };
   // ⑦ 没跑完又没取消请求 = 异常提前结束
   return {
     status: "failed",
