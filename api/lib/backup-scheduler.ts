@@ -4,6 +4,7 @@ import { backupJobs, backupJobFiles } from "@db/schema";
 import { executeBackup, effectiveRepoConfig } from "../backup-repositories/execution";
 import { getBackupRepository } from "../backup-repositories/base";
 import type { BackupJob } from "@db/schema";
+import { createTask, finishTask, isCancelRequested } from "./task-registry";
 
 function parseCronField(field: string, min: number, max: number): number[] {
   if (field === "*") {
@@ -56,10 +57,44 @@ export function nextCronTime(schedule: string, after: Date): Date | null {
   return null;
 }
 
-async function executeBackupJob(jobId: number, connectorConfig: Record<string, unknown> = {}): Promise<void> {
+async function executeBackupJob(
+  jobId: number,
+  connectorConfig: Record<string, unknown> = {},
+  taskId?: string,
+): Promise<void> {
   console.log(`[BackupScheduler] Starting backup job ${jobId}`);
   // 执行逻辑统一走备份仓库抽象层（alist/nas/local 新仓库，115/aliyundrive 历史连接器）
-  await executeBackup(jobId, connectorConfig);
+  // P0-4：带上任务句柄的取消信号，task_cancel 才能真正让执行方在文件之间收手
+  await executeBackup(jobId, connectorConfig, taskId ? { shouldCancel: () => isCancelRequested(taskId) } : {});
+}
+
+/** P0-4：一次备份运行的句柄（scheduleId=调度行，runJobId=本次运行行，taskId=统一任务句柄） */
+export interface BackupRunHandle {
+  readonly scheduleId: number;
+  readonly runJobId: number;
+  readonly taskId: string;
+}
+
+/** 备份运行行 → 任务终态（业务表是真相） */
+function finishTaskFromRunRow(
+  taskId: string,
+  row: { status: string; progress?: number | null; error?: string | null; filesTotal?: number | null; filesDone?: number | null; filesFailed?: number | null } | undefined,
+): void {
+  if (!row) {
+    finishTask(taskId, "failed", { error: "备份运行记录不存在" });
+    return;
+  }
+  const meta = { filesTotal: row.filesTotal ?? 0, filesDone: row.filesDone ?? 0, filesFailed: row.filesFailed ?? 0 };
+  if (row.status === "completed") {
+    finishTask(taskId, "completed", { progress: 100, meta });
+  } else if (row.status === "cancelled") {
+    finishTask(taskId, "cancelled", { meta });
+  } else if (row.status === "running" || row.status === "pending") {
+    // 进程被重启等导致状态悬空：按失败收口，避免句柄永远停在 running
+    finishTask(taskId, "failed", { error: "备份运行未正常结束（进程可能重启）", meta });
+  } else {
+    finishTask(taskId, "failed", { error: row.error ?? `备份状态：${row.status}`, meta });
+  }
 }
 
 /**
@@ -114,18 +149,21 @@ export async function applyRetention(scheduleJobId: number): Promise<void> {
   await db.delete(backupJobs).where(inArray(backupJobs.id, jobIds));
 }
 
-export async function runDueBackupSchedules(): Promise<void> {
+export async function runDueBackupSchedules(options: { readonly scheduleId?: number } = {}): Promise<BackupRunHandle[]> {
   const db = getDb();
   const now = new Date();
   console.log(`[BackupScheduler] Checking for due backup schedules at ${now.toISOString()}`);
 
-  const due = await db.select().from(backupJobs)
+  const dueRows = await db.select().from(backupJobs)
     .where(
       and(
         eq(backupJobs.enabled, "true"),
         lte(backupJobs.nextRunAt, now)
       )
     );
+  // 只跑指定的调度（backup_trigger 走这里，保证句柄对得上刚触发的那次运行）
+  const due = options.scheduleId === undefined ? dueRows : dueRows.filter((r) => r.id === options.scheduleId);
+  const handles: BackupRunHandle[] = [];
 
   console.log(`[BackupScheduler] Found ${due.length} due schedules`);
 
@@ -148,6 +186,14 @@ export async function runDueBackupSchedules(): Promise<void> {
     const runJobId = Number(result.lastInsertRowid);
     console.log(`[BackupScheduler] Created backup run job ${runJobId} for schedule ${schedule.id}`);
 
+    // P0-4：注册统一任务句柄，调用方据此 task_get 轮询 / task_cancel 取消
+    const task = createTask({
+      kind: "backup",
+      refId: runJobId,
+      meta: { scheduleId: schedule.id, target: schedule.target, sourcePath: schedule.sourcePath },
+    });
+    handles.push({ scheduleId: schedule.id, runJobId, taskId: task.taskId });
+
     // 计算下次运行时间
     const nextRun = schedule.cron ? nextCronTime(schedule.cron, now) : null;
     await db.update(backupJobs).set({
@@ -157,9 +203,11 @@ export async function runDueBackupSchedules(): Promise<void> {
     console.log(`[BackupScheduler] Schedule ${schedule.id} next run at: ${nextRun?.toISOString() ?? 'none'}`);
 
     // 异步执行备份
-    executeBackupJob(runJobId, config).then(async () => {
+    executeBackupJob(runJobId, config, task.taskId).then(async () => {
       const [finished] = await db.select().from(backupJobs).where(eq(backupJobs.id, runJobId));
       console.log(`[BackupScheduler] Backup run ${runJobId} finished with status: ${finished?.status}`);
+      // 任务终态以业务表为准（含 task_cancel 触发的 cancelled）
+      finishTaskFromRunRow(task.taskId, finished);
       if (finished?.status === "completed") {
         await applyRetention(schedule.id);
       } else if (finished?.status === "failed") {
@@ -179,8 +227,10 @@ export async function runDueBackupSchedules(): Promise<void> {
       }
     }).catch((err) => {
       console.error(`[BackupScheduler] Backup run ${runJobId} error:`, err);
+      finishTask(task.taskId, "failed", { error: err instanceof Error ? err.message : "备份执行异常" });
     });
   }
+  return handles;
 }
 
 export function startBackupScheduler(intervalMs = 60_000): () => void {

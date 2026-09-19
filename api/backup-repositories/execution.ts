@@ -49,6 +49,8 @@ interface RepositoryUploadContext {
   readonly config: Record<string, unknown>;
   readonly files: readonly { relPath: string; fullPath: string; size: number }[];
   readonly encrypt: boolean;
+  /** P0-4：长任务取消信号——每个文件之间检查一次，返回 true 则停下（已完成的上传保持已记录） */
+  readonly shouldCancel?: () => boolean;
 }
 
 /** 流式 sha256（大文件防整读） */
@@ -79,6 +81,11 @@ async function uploadFilesToRepository(
   const tmpDir = path.join(env.backupTempDir, `tmp-enc-${job.id}`);
 
   for (const file of ctx.files) {
+    // 取消点：文件之间响应取消请求（不打断单个文件的上传，避免留下半截对象）
+    if (ctx.shouldCancel?.()) {
+      console.warn(`[Backup] Job ${job.id} 收到取消请求，停止于 ${done}/${ctx.files.length} 个文件`);
+      break;
+    }
     try {
       const safeRelativePath = sanitizeRelativePath(file.relPath);
       if (file.size > BIG_FILE_BYTES) {
@@ -157,7 +164,8 @@ async function executeBackupToRepository(
   db: Db,
   job: BackupJob,
   repo: BackupRepository,
-  connectorConfig: Record<string, unknown>
+  connectorConfig: Record<string, unknown>,
+  shouldCancel?: () => boolean
 ): Promise<void> {
   const config = effectiveRepoConfig(job.target, job.id, job.config ?? {});
   Object.assign(config, connectorConfig);
@@ -195,7 +203,23 @@ async function executeBackupToRepository(
   try {
     // 确保备份落点目录存在（AList 递归建目录 / 本地 mkdir -p）
     await repo.ensureBasePath(config);
-    const manifestFiles = await uploadFilesToRepository(db, job, { repo, config, files, encrypt });
+    const manifestFiles = await uploadFilesToRepository(db, job, {
+      repo,
+      config,
+      files,
+      encrypt,
+      ...(shouldCancel ? { shouldCancel } : {}),
+    });
+
+    // 取消：已上传的文件保留（部分快照），运行标记为 cancelled 而不是 failed——
+    // 这是「人主动停的」，不是故障，调用方不该按失败重试
+    if (shouldCancel?.()) {
+      await db
+        .update(backupJobs)
+        .set({ status: "cancelled", error: null, completedAt: new Date(), progress: job.progress })
+        .where(eq(backupJobs.id, job.id));
+      return;
+    }
 
     if (manifest) {
       let manifestContent: Buffer = Buffer.from(JSON.stringify(manifest));
@@ -234,7 +258,16 @@ async function executeBackupToRepository(
   }
 }
 
-export async function executeBackup(jobId: number, connectorConfig: Record<string, unknown> = {}): Promise<void> {
+export interface ExecuteBackupOptions {
+  /** 取消信号：由任务句柄注入（task_cancel → isCancelRequested） */
+  readonly shouldCancel?: () => boolean;
+}
+
+export async function executeBackup(
+  jobId: number,
+  connectorConfig: Record<string, unknown> = {},
+  options: ExecuteBackupOptions = {},
+): Promise<void> {
   const db = getDb();
   const [job] = await db.select().from(backupJobs).where(eq(backupJobs.id, jobId));
   if (!job) return;
@@ -244,7 +277,7 @@ export async function executeBackup(jobId: number, connectorConfig: Record<strin
   const repo = getBackupRepository(job.target);
   try {
     if (repo) {
-      await executeBackupToRepository(db, job, repo, connectorConfig);
+      await executeBackupToRepository(db, job, repo, connectorConfig, options.shouldCancel);
     } else {
       await executeBackupLegacyConnector(db, job, connectorConfig);
     }

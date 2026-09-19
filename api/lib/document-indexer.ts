@@ -11,6 +11,7 @@ import { getDb } from "../queries/connection";
 import { kbDocuments, documentChunks } from "@db/schema";
 import { vectorEngine } from "./vector";
 import { embedTextsWithFallback, ensureCorrectDimension } from "./vector-service";
+import { finishTask, isCancelRequested, updateTaskProgress } from "./task-registry";
 
 export function chunkText(text: string, maxChars = 800, overlap = 100): string[] {
   const normalized = text.replace(/\r\n/g, "\n").trim();
@@ -145,6 +146,9 @@ export interface ReindexProgress {
 }
 
 const idleProgress: ReindexProgress = { running: false, total: 0, done: 0, failed: 0, chunksTotal: 0 };
+
+/** P0-4：当前全量回填所属的任务句柄（取消信号与进度都挂在它上面） */
+let activeTaskId: string | undefined;
 let progress: ReindexProgress = { ...idleProgress };
 
 export function getReindexProgress(): ReindexProgress {
@@ -158,14 +162,17 @@ const REINDEX_DELAY_MS = 100;
  * 启动全量回填。已在运行时直接返回当前进度（幂等），
  * 后台逐篇索引，进度通过 getReindexProgress 查询。
  */
-export function startReindexAll(): ReindexProgress {
+export function startReindexAll(taskId?: string): ReindexProgress {
+  // 已在运行：复用现有进度（幂等），新句柄同样能反映这次运行
   if (progress.running) return getReindexProgress();
   progress = { ...idleProgress, running: true, startedAt: new Date().toISOString() };
-  void runReindexAll();
+  activeTaskId = taskId;
+  void runReindexAll(taskId);
   return getReindexProgress();
 }
 
-async function runReindexAll(): Promise<void> {
+async function runReindexAll(taskId?: string): Promise<void> {
+  let cancelled = false;
   try {
     // 启动前异步校准向量表维度（修复 R3 维度不匹配导致 0 条向量的 bug）
     const { ensureCorrectDimension } = await import("./vector-service");
@@ -174,6 +181,11 @@ async function runReindexAll(): Promise<void> {
     const docs = await db.select({ id: kbDocuments.id }).from(kbDocuments).where(isNotNull(kbDocuments.content));
     progress = { ...progress, total: docs.length };
     for (const doc of docs) {
+      // P0-4 取消点：文档之间响应取消请求（已索引的文档保持有效，随时可续跑）
+      if (taskId && isCancelRequested(taskId)) {
+        cancelled = true;
+        break;
+      }
       progress = { ...progress, currentDocumentId: doc.id };
       try {
         const result = await indexDocumentById(doc.id);
@@ -186,11 +198,30 @@ async function runReindexAll(): Promise<void> {
         };
       }
       progress = { ...progress, done: progress.done + 1 };
+      if (taskId) {
+        updateTaskProgress(taskId, progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0, {
+          total: progress.total,
+          done: progress.done,
+          failed: progress.failed,
+        });
+      }
       await new Promise((resolve) => setTimeout(resolve, REINDEX_DELAY_MS));
     }
   } catch (err) {
     progress = { ...progress, lastError: err instanceof Error ? err.message : String(err) };
   } finally {
     progress = { ...progress, running: false, currentDocumentId: undefined, finishedAt: new Date().toISOString() };
+    if (taskId) {
+      // 终态以索引器实况为准：取消 → cancelled；有失败 → failed；否则 completed
+      const meta = { total: progress.total, done: progress.done, failed: progress.failed, chunksTotal: progress.chunksTotal };
+      if (cancelled) {
+        finishTask(taskId, "cancelled", { meta });
+      } else if (progress.failed > 0 && progress.lastError) {
+        finishTask(taskId, "failed", { error: progress.lastError, meta });
+      } else {
+        finishTask(taskId, "completed", { progress: 100, meta });
+      }
+    }
+    if (activeTaskId === taskId) activeTaskId = undefined;
   }
 }

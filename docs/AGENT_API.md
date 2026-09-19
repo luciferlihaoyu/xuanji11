@@ -150,7 +150,7 @@ GET /api/files/:id
 | `document_read`    | 读取文档内容         | `id` 文档 ID                                                                                                                                                                         | `id` 必填                                    |
 | `document_write`   | 创建或更新文档       | `id` 已有文档 ID（更新时传入）<br>`folderId` 文件夹 ID<br>`title` 文档标题（创建时必填）<br>`content` 文档内容<br>`format` 格式（默认 `markdown`，可选 `text`/`json`/`html`/`code`） | `id` 可选<br>其余可选（创建时 `title` 必填） |
 | `backup_list`      | 查看备份任务列表     | `status` 状态过滤（可选：`pending`/`running`/`completed`/`failed`/`partial`）<br>`cursor` 分页游标（上次响应的 `nextCursor`）<br>`limit` 页大小（默认 50，上限 200；非法值按边界夹取）      | 均可选                                       |
-| `backup_trigger`   | 立即触发备份任务     | `jobId` 备份任务 ID                                                                                                                                                                  | `jobId` 必填                                 |
+| `backup_trigger`   | 立即触发备份任务     | `jobId` 备份任务 ID（返回 `{taskId, scheduleId, runJobId, status}`，不再需要干等）                                                                                                    | `jobId` 必填                                 |
 | `workflow_list`    | 查看工作流列表       | `status` 状态过滤（可选：`draft`/`active`/`paused`/`error`/`archived`）<br>`cursor` 分页游标<br>`limit` 页大小（默认 50，上限 200；非法值按边界夹取）                                    | 均可选                                       |
 | `workflow_execute` | 执行工作流           | `id` 工作流 ID<br>`input` 工作流输入 payload（对象，默认 `{}`）                                                                                                                      | `id` 必填<br>`input` 可选                    |
 
@@ -187,6 +187,28 @@ GET /api/files/:id
 - 排序是全序：`folder_list` 按 `sortOrder, id`；`backup_list` 按 `createdAt desc, id desc`；`workflow_list` 按 `updatedAt desc, id desc`——保证跨页不漏项/重项
 - 已知取舍：cursor 是 offset 语义（非 keyset），两页之间若有数据增删，`total` 与后续页可能漂移；分页期间建议以首页 `total` 为准或重新取首页
 - 迁移指引：把原来的「直接当数组用」改成读 `items`；只取前 N 条时传 `limit`
+
+#### 长任务统一句柄（v2 新增：task_get / task_cancel）
+
+备份、全库回填这类长任务以前只能干等或去业务表里猜哪一行是自己刚触发的那次运行。现在统一走**任务句柄**：
+
+```json
+{"method": "tools/call", "params": {"name": "backup_trigger", "arguments": {"jobId": 3}}}
+```
+```json
+{"taskId": "tsk_backup_m3k2a01", "scheduleId": 3, "runJobId": 41, "status": "running"}
+```
+
+- `task_get`（只读）：`{"taskId": "..."}` → `{taskId, kind, refId, status, progress, startedAt, finishedAt?, error?, meta, cancelRequested}`
+  - `kind`：`backup`（`refId` = 本次运行行 backup_jobs.id）或 `reindex`
+  - 进度/状态**以业务真相为准**：备份读 `backup_jobs` 行（`meta.filesTotal/filesDone/filesFailed`），回填读索引器进度——进程重启后句柄依然准确，不会永远停在 running
+- `task_cancel`：`{"taskId": "..."}` → `{taskId, accepted, status, reason?}`
+  - **两段式语义**：`accepted: true` 只表示取消请求已记录（执行方在安全点收手：备份在文件之间、回填在文档之间），`status` 仍为 `running`；执行方确认后状态才会变 `cancelled`
+  - 任务已结束时**不谎报成功**：返回 `accepted: false` + `reason`（如「任务已 completed，无需取消」）
+  - 取消的运行为 `cancelled` 状态，与 `failed`（故障）区分——调用方不该按失败重试
+- `kb.reindex_all` 同样返回 `taskId`（全库回填的进度用 `kb.reindex_status` 或 `task_get` 都行）
+- 边界：句柄保存在服务进程内，**进程重启后旧句柄会查不到**（返回 `isError: Task not found`）；备份可用 `backup_list` 按行查历史，回填可重新触发（幂等）
+- 未提供服务端强制中断：取消是协作式的，单次长上传/单篇索引会跑完当前单元才停
 
 #### 工具注解（v2 新增）
 

@@ -134,6 +134,34 @@
   - `api/mcp-folder-tools.test.ts` / `api/mcp-document-upsert.test.ts`：同类 DDL 腐化 → 共 4 例失败，已补齐
   - `api/mcp-reindex.test.ts` / `api/mcp-client-router.test.ts` / `api/mcp-kb-backup.test.ts`：测试替身仍是 MySQL 口径（`insertId`/`affectedRows`），而生产侧已统一 better-sqlite3（`lastInsertRowid`/`changes`）→ 断言拿到 NaN/null 而失败，共 4 例；已把替身改为 SQLite 口径（反查确认生产代码无残留 MySQL 口径，故非生产缺陷）
 
+### wave4 P0-4 长任务统一句柄（t13）— 2026-09-19
+**目标**：`backup_trigger` 不再让调用方干等——立即返回 `taskId`；新增 `task_get` / `task_cancel`；重建索引并入同一句柄。
+
+**交付**
+- 新增 `api/lib/task-registry.ts`：进程内句柄注册表（`createTask/getTask/listTasks/updateTaskProgress/finishTask/requestCancel/isCancelRequested`）
+  - 取消是**两段式**：`requestCancel` 只置位并返回 accepted，执行方在安全点收手后 `finishTask(id,"cancelled")` 才确认——绝不出现「报了取消成功、实际还在跑」
+  - 终态不可改写（幂等）；进度夹到 0..100；返回副本（外部改不到内部）
+  - 容量上限 `MAX_TASKS=200`：**只淘汰终态**，运行中句柄永不淘汰（淘汰运行中句柄 = 调用方失去轮询/取消能力）
+- `api/lib/backup-scheduler.ts`：`runDueBackupSchedules({scheduleId})` 返回 `BackupRunHandle[]`；每次运行注册 `kind:"backup"` 任务并把 `shouldCancel` 注入执行器；终态以 `backup_jobs` 行为准
+- `api/backup-repositories/execution.ts`：`executeBackup(jobId, cfg, {shouldCancel})` → 上传循环在**文件之间**检查取消点，命中则停止并把运行标为 `cancelled`（不是 failed，不写 error）
+- `api/lib/document-indexer.ts`：`startReindexAll(taskId)` → 循环在**文档之间**检查取消点，每篇回写进度到句柄，终态 `cancelled`/`failed`/`completed` 收口
+- `api/mcp-server.ts`：`task_get`（只读注解）、`task_cancel`（非破坏、幂等注解）两工具 + `backup_trigger` 返回句柄 + `kb.reindex_all` 返回句柄；`syncTaskFromSource` 统一「句柄 ← 业务真相」映射
+- `db/schema.ts`：`backup_jobs.status` 枚举新增 `cancelled`（TEXT 列，纯 TS 约束，无需 SQL 迁移）
+
+**TDD 证据**
+- 注册表：先落**故意朴素**的桩实现（固定 id / 无夹取 / 终态可改写 / 无淘汰 / 取消恒 false），`api/lib/task-registry.test.ts` **9 failed | 4 passed** → 真实现后 15/15
+- MCP 层：`api/mcp-tasks.test.ts` 先写 9 例 → 全红（工具不存在）→ 实现后 9/9；其中「以业务表为真相」用可控执行器替身（默认挂起）分别验证 running/failed/completed 同步
+- 备份取消：`api/lib/backup-cancel.test.ts` 用真实执行链路 + 注入假仓库（4 个文件）：对照（无信号）4/4 上传 completed；取消（第 1 个文件后置位）只上传 1 个且状态 `cancelled`、error 为 null
+- 回填取消：`api/lib/reindex-cancel.test.ts` 对照 3/3 篇 completed；启动前取消 → done 停在 0、状态 `cancelled`
+- **变异自证**（两处取消点都验过）：禁用上传循环取消点 → `expected 4 to be 1` 变红；禁用回填循环取消点 → `expected 3 to be +0` 变红；均已复原
+- **门禁抓错（真实收益）**：`npm run check` 首次 exit 2，抓出 `backup_jobs.status` 枚举缺 `cancelled`、`progress` 可为 null 未兜底、假仓库缺 `listFiles` 等问题 → 修完 exit 0
+- 批次回归：9 文件 **65/65** 通过
+
+**设计取舍（记录在案）**
+- 句柄存进程内存：进程重启后旧句柄查不到（返回 `Task not found`，不假装成功）；备份历史仍可从 `backup_list` 查，回填可幂等重跑
+- 取消是协作式的：单次上传/单篇索引会跑完当前单元，不提供强制中断（避免留下半截对象）
+- `backup_trigger` 只跑指定的那一个调度（`{scheduleId}` 过滤），保证句柄对得上刚触发的那次运行
+
 ### 独立审查（天演，审 ff7fb36 = wave3 P0-3）— 2026-09-18
 **总结论：可接受，需先修 1 项**（规格 t10 PASS / t11 一处偏离 / t12 PASS / 测试真实性 PASS；3 组变异全部变红）
 

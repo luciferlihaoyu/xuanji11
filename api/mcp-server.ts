@@ -13,6 +13,7 @@ import { clean } from "./lib/clean";
 import { paginate, InvalidCursorError } from "./lib/mcp-pagination";
 import { previewDocumentDeletion } from "./lib/document-removal";
 import { runDueBackupSchedules } from "./lib/backup-scheduler";
+import { createTask, finishTask, getTask, isCancelRequested, requestCancel, updateTaskProgress, type TaskRecord } from "./lib/task-registry";
 import { executeWorkflow } from "./lib/workflow-runtime";
 import { zvecTools, handleZvecTool } from "./mcp-zvec-tools";
 import { hybridSearchTool, handleHybridSearch } from "./mcp-hybrid-search";
@@ -95,6 +96,8 @@ const tools: readonly McpTool[] = [
   { name: "kb.reindex_status", description: "Get the progress of the running or last reindex-all job plus current vector store size", annotations: { title: "查询重建进度", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: {} } },
   { name: "backup_list", description: "List backup jobs and status", annotations: { title: "列出备份任务", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: { status: { type: "string", description: "Optional backup status filter" }, cursor: { type: "string", description: "Opaque cursor taken verbatim from a previous response's nextCursor; omit for the first page" }, limit: { type: "number", description: "Page size, 1-200 (default 50)" } } } },
   { name: "backup_trigger", description: "Trigger a scheduled backup job immediately", annotations: { title: "立即触发备份", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }, inputSchema: { type: "object", properties: { jobId: { type: "number", description: "Scheduled backup job id" } }, required: ["jobId"] } },
+  { name: "task_get", description: "Get a long-running task (backup/reindex) status and progress", annotations: { title: "查询长任务", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: { taskId: { type: "string", description: "Task handle returned by backup_trigger / kb.reindex_all" } }, required: ["taskId"] } },
+  { name: "task_cancel", description: "Request cancellation of a long-running task (two-phase: signal now, executor acknowledges at a safe point)", annotations: { title: "取消长任务", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: { taskId: { type: "string", description: "Task handle" } }, required: ["taskId"] } },
   { name: "workflow_list", description: "List workflows", annotations: { title: "列出工作流", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: { status: { type: "string", description: "Optional workflow status filter" }, cursor: { type: "string", description: "Opaque cursor taken verbatim from a previous response's nextCursor; omit for the first page" }, limit: { type: "number", description: "Page size, 1-200 (default 50)" } } } },
   { name: "workflow_execute", description: "Execute a workflow", annotations: { title: "执行工作流", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }, inputSchema: { type: "object", properties: { id: { type: "number", description: "Workflow id" }, input: { type: "object", description: "Workflow input payload" } }, required: ["id"] } },
   ...zvecTools,
@@ -363,7 +366,9 @@ async function handleFolderList(args: Record<string, unknown>, auth: AuthInfo): 
 
 async function handleKbReindexAll(auth: AuthInfo): Promise<McpToolResult> {
   assertScope(auth, "documents:write");
-  return textResult(startReindexAll());
+  // P0-4：重建索引同样走统一句柄（全库回填是典型长任务）
+  const task = createTask({ kind: "reindex" });
+  return textResult({ taskId: task.taskId, ...startReindexAll(task.taskId) });
 }
 
 async function handleKbReindexStatus(auth: AuthInfo): Promise<McpToolResult> {
@@ -384,8 +389,79 @@ async function handleBackupTrigger(args: Record<string, unknown>, auth: AuthInfo
   assertScope(auth, "backups:write");
   const input = z.object({ jobId: z.number().int().positive() }).parse(args);
   await getDb().update(backupJobs).set({ enabled: "true", nextRunAt: new Date() }).where(eq(backupJobs.id, input.jobId));
-  await runDueBackupSchedules();
-  return textResult({ success: true, scheduledJobId: input.jobId });
+  // P0-4：不再让调用方干等——只跑这一个调度，并把它这次运行的任务句柄交出去
+  const handles = await runDueBackupSchedules({ scheduleId: input.jobId });
+  const handle = handles[0];
+  if (!handle) {
+    return { content: [{ type: "text", text: `没有可执行的备份调度：${input.jobId}（作业可能不存在）` }], isError: true };
+  }
+  return textResult({ taskId: handle.taskId, scheduleId: handle.scheduleId, runJobId: handle.runJobId, status: "running" });
+}
+
+/** 至少具备其中一个 scope（任务句柄横跨备份/文档两类业务） */
+function assertAnyScope(auth: AuthInfo, scopes: readonly string[]): void {
+  if (scopes.some((scope) => hasScope(auth, scope))) return;
+  throw new Error(`Missing required scope: ${scopes.join(" 或 ")}`);
+}
+
+/**
+ * 把任务句柄与业务真相对齐：句柄只存身份，状态/进度以业务源为准。
+ * - backup → backup_jobs 的 run 行（进程重启后依然准确）
+ * - reindex → 索引器的 getReindexProgress()
+ */
+async function syncTaskFromSource(record: TaskRecord): Promise<TaskRecord> {
+  if (record.kind === "backup" && record.refId !== undefined) {
+    const [row] = await getDb().select().from(backupJobs).where(eq(backupJobs.id, record.refId));
+    if (!row) return record;
+    const meta = { filesTotal: row.filesTotal, filesDone: row.filesDone, filesFailed: row.filesFailed };
+    if (row.status === "completed") return finishTask(record.taskId, "completed", { progress: 100, meta }) ?? record;
+    if (row.status === "cancelled") return finishTask(record.taskId, "cancelled", { meta }) ?? record;
+    if (row.status === "failed" || row.status === "partial") {
+      return finishTask(record.taskId, "failed", { error: row.error ?? `备份状态：${row.status}`, meta }) ?? record;
+    }
+    return updateTaskProgress(record.taskId, row.progress ?? 0, { ...meta, backupStatus: row.status }) ?? record;
+  }
+  if (record.kind === "reindex") {
+    const p = getReindexProgress();
+    const meta = { total: p.total, done: p.done, failed: p.failed, chunksTotal: p.chunksTotal };
+    const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+    if (p.running) return updateTaskProgress(record.taskId, pct, meta) ?? record;
+    // 索引器已停：running 句柄按结果收口（也覆盖进程重启导致句柄悬空的情况）
+    return finishTask(record.taskId, p.failed > 0 ? "failed" : "completed", { progress: 100, meta }) ?? record;
+  }
+  return record;
+}
+
+async function handleTaskGet(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
+  assertAnyScope(auth, ["documents:read", "backups:read"]);
+  const input = z.object({ taskId: z.string().min(1).max(200) }).parse(args);
+  const record = getTask(input.taskId);
+  if (!record) {
+    return { content: [{ type: "text", text: `Task not found: ${input.taskId}` }], isError: true };
+  }
+  const synced = await syncTaskFromSource(record);
+  return textResult({ ...synced, cancelRequested: isCancelRequested(input.taskId) });
+}
+
+async function handleTaskCancel(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
+  assertAnyScope(auth, ["documents:write", "backups:write"]);
+  const input = z.object({ taskId: z.string().min(1).max(200) }).parse(args);
+  const record = getTask(input.taskId);
+  if (!record) {
+    return { content: [{ type: "text", text: `Task not found: ${input.taskId}` }], isError: true };
+  }
+  // 先对齐业务真相：已结束的任务必须如实回答「无需取消」，不能谎报取消成功
+  await syncTaskFromSource(record);
+  const outcome = requestCancel(input.taskId);
+  if (!outcome) {
+    return { content: [{ type: "text", text: `Task not found: ${input.taskId}` }], isError: true };
+  }
+  return textResult({
+    taskId: input.taskId,
+    accepted: outcome.accepted,
+    status: outcome.task.status,
+    ...(outcome.reason ? { reason: outcome.reason } : {}),
+  });
 }
 
 async function handleWorkflowList(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
@@ -418,6 +494,8 @@ async function callTool(call: McpToolCall, user: User, auth: AuthInfo): Promise<
     case "kb.reindex_status": return handleKbReindexStatus(auth);
     case "backup_list": return handleBackupList(call.arguments, auth);
     case "backup_trigger": return handleBackupTrigger(call.arguments, auth);
+    case "task_get": return handleTaskGet(call.arguments, auth);
+    case "task_cancel": return handleTaskCancel(call.arguments, auth);
     case "workflow_list": return handleWorkflowList(call.arguments, auth);
     case "workflow_execute": return handleWorkflowExecute(call.arguments, user, auth);
     case "zvec.embed":

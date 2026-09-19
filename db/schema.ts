@@ -575,7 +575,8 @@ export const backupJobs = sqliteTable("backup_jobs", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   target: text("target").notNull(),
   sourcePath: text("sourcePath").notNull(),
-  status: text("status", { enum: ["pending", "running", "completed", "failed", "partial"] }).default("pending").notNull(),
+  // cancelled = 人工取消（P0-4 task_cancel），与 failed（故障）区分：调用方不该按失败重试
+  status: text("status", { enum: ["pending", "running", "completed", "failed", "partial", "cancelled"] }).default("pending").notNull(),
   progress: integer("progress").default(0),
   filesTotal: integer("filesTotal").default(0),
   filesDone: integer("filesDone").default(0),
