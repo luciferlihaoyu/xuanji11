@@ -552,6 +552,22 @@ export const kbRouter = createRouter({
     return { ...getReindexProgress(), vectorSize: vectorEngine.size };
   }),
 
+  /**
+   * 清理 FTS 孤儿（rowid 指向已删 chunk 的历史行）。
+   * 巡检会报 `fts_orphans`，但巡检只报不改；这里是显式维护动作。
+   * `dryRun: true` 只报数不删（沿用破坏性操作的 dryRun 约定）。
+   */
+  pruneFtsOrphans: adminQuery
+    .input(z.object({ dryRun: z.boolean().default(false) }).optional())
+    .mutation(async ({ input, ctx }) => {
+      const { pruneFtsOrphans } = await import("./lib/fts-search");
+      const result = pruneFtsOrphans({ dryRun: input?.dryRun ?? false });
+      if (!input?.dryRun && result.pruned > 0) {
+        await logAudit(ctx, "kb_fts", "delete", 0, { orphans: result.orphans, pruned: result.pruned } as Record<string, unknown>);
+      }
+      return result;
+    }),
+
   getTree: authedQuery.query(async () => {
     const db = getDb();
     const folders = await db.select().from(kbFolders).orderBy(kbFolders.sortOrder);

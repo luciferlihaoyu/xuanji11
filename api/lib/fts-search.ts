@@ -21,9 +21,14 @@ export function ensureFts(): void {
   raw.exec(
     `CREATE VIRTUAL TABLE IF NOT EXISTS ${FTS_TABLE} USING fts5(content, tokenize='trigram')`
   );
-  const ftsCount = (raw.prepare(`SELECT COUNT(*) c FROM ${FTS_TABLE}`).get() as { c: number }).c;
-  const chunkCount = (raw.prepare(`SELECT COUNT(*) c FROM document_chunks`).get() as { c: number }).c;
-  if (ftsCount < chunkCount) {
+  // 回填判据必须看「有没有缺行」，不能比总数：表里若有孤儿（指向已删 chunk 的历史行），
+  // ftsCount 会高于 chunkCount，`ftsCount < chunkCount` 这类判据就被骗过、回填永不执行
+  // （2026-09-19 线上巡检：缺 FTS 929 条 + 孤儿 25003 条并存，正是这个原因）。
+  const missing = raw.prepare(
+    `SELECT 1 FROM document_chunks c
+      WHERE NOT EXISTS (SELECT 1 FROM ${FTS_TABLE} f WHERE f.rowid = c.id) LIMIT 1`
+  ).get();
+  if (missing) {
     raw.exec(
       `INSERT INTO ${FTS_TABLE}(rowid, content)
        SELECT c.id, c.content FROM document_chunks c
@@ -31,6 +36,31 @@ export function ensureFts(): void {
     );
   }
   ftsReady = true;
+}
+
+/**
+ * 清理 FTS 孤儿：rowid 指向已删 chunk 的历史行（删除文档时 id 已不在 document_chunks 里，
+ * deleteDocumentFromFts 的子查询找不到它们，只能靠对账清理）。
+ * 孤儿不会让检索报错，但会撑大索引、污染 bm25 统计并骗过回填判据。`dryRun` 只报数。
+ */
+export function pruneFtsOrphans(opts: { dryRun?: boolean } = {}): { orphans: number; pruned: number } {
+  ensureFts();
+  const raw = getRawDb();
+  const orphans = (raw.prepare(
+    `SELECT COUNT(*) c FROM ${FTS_TABLE} f
+      WHERE NOT EXISTS (SELECT 1 FROM document_chunks c WHERE c.id = f.rowid)`
+  ).get() as { c: number }).c;
+  if (opts.dryRun || orphans === 0) return { orphans, pruned: 0 };
+  raw.exec(
+    `DELETE FROM ${FTS_TABLE}
+      WHERE NOT EXISTS (SELECT 1 FROM document_chunks c WHERE c.id = ${FTS_TABLE}.rowid)`
+  );
+  return { orphans, pruned: orphans };
+}
+
+/** 测试钩子：重置模块内的一次性初始化标记 */
+export function _resetFtsReadyForTests(): void {
+  ftsReady = false;
 }
 
 /** 新 chunk 同步进 FTS（未初始化时跳过，等 ensureFts 回填） */

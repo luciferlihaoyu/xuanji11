@@ -15,9 +15,16 @@ import { _setDbForTests, _resetDbForTests } from "../queries/connection";
  * FTS5 trigram BM25 验证：中文 3 字滑窗匹配、名次排序、同步钩子。
  * 真实 SQLite 内存库（不 mock）。
  */
+let rawDb: Database.Database | null = null;
+function _rawDb(): Database.Database {
+  if (!rawDb) throw new Error("测试库未初始化");
+  return rawDb;
+}
+
 describe("fts-search BM25", () => {
   beforeAll(() => {
     const raw = new Database(":memory:");
+    rawDb = raw;
     raw.exec(`
       CREATE TABLE document_chunks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,6 +45,52 @@ describe("fts-search BM25", () => {
     const { ensureFts } = await import("./fts-search");
     ensureFts();
     // 再调一次幂等
+    ensureFts();
+  });
+
+  it("FTS 孤儿（指向已删 chunk）会被清理；dryRun 只报数不删", async () => {
+    const { ensureFts, pruneFtsOrphans } = await import("./fts-search");
+    ensureFts();
+    const raw = _rawDb();
+    // 造两条孤儿：rowid 在 document_chunks 里不存在
+    raw.exec(`INSERT INTO chunks_fts(rowid, content) VALUES (9001, '已被删除的历史分块'), (9002, '另一个孤儿')`);
+    const before = (raw.prepare(`SELECT COUNT(*) c FROM chunks_fts`).get() as { c: number }).c;
+
+    const dry = pruneFtsOrphans({ dryRun: true });
+    expect(dry.orphans).toBe(2);
+    expect(dry.pruned).toBe(0);
+    expect((raw.prepare(`SELECT COUNT(*) c FROM chunks_fts`).get() as { c: number }).c).toBe(before);
+
+    const real = pruneFtsOrphans();
+    expect(real.orphans).toBe(2);
+    expect(real.pruned).toBe(2);
+    const after = (raw.prepare(`SELECT COUNT(*) c FROM chunks_fts`).get() as { c: number }).c;
+    expect(after).toBe(before - 2);
+    // 幂等：再清一次没有可清的了
+    expect(pruneFtsOrphans().pruned).toBe(0);
+  });
+
+  it("孤儿把 ftsCount 抬到高于 chunkCount 时，ensureFts 仍要补齐缺失 chunk（原判据会被孤儿骗过）", async () => {
+    const raw = _rawDb();
+    raw.exec(`DELETE FROM chunks_fts`);
+    // 只回填一半 chunk，再塞大量孤儿，使 ftsCount > chunkCount
+    raw.exec(`INSERT INTO chunks_fts(rowid, content) SELECT id, content FROM document_chunks WHERE id <= 2`);
+    raw.exec(`INSERT INTO chunks_fts(rowid, content) SELECT 5000 + value, '孤儿' || value FROM (WITH RECURSIVE seq(value) AS (SELECT 1 UNION ALL SELECT value + 1 FROM seq WHERE value < 20) SELECT value FROM seq)`);
+    expect((raw.prepare(`SELECT COUNT(*) c FROM chunks_fts`).get() as { c: number }).c)
+      .toBeGreaterThan((raw.prepare(`SELECT COUNT(*) c FROM document_chunks`).get() as { c: number }).c);
+
+    const { _resetFtsReadyForTests, ensureFts } = await import("./fts-search");
+    _resetFtsReadyForTests();
+    ensureFts();
+    const missing = (raw.prepare(
+      `SELECT COUNT(*) c FROM document_chunks c WHERE NOT EXISTS (SELECT 1 FROM chunks_fts f WHERE f.rowid = c.id)`
+    ).get() as { c: number }).c;
+    expect(missing).toBe(0);
+
+    // 还原共享测试库状态（本用例改了 chunks_fts，后续检索用例依赖原始 4 行）
+    const { pruneFtsOrphans } = await import("./fts-search");
+    pruneFtsOrphans();
+    _resetFtsReadyForTests();
     ensureFts();
   });
 
