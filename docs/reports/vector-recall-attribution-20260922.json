@@ -1,0 +1,155 @@
+{
+ "generatedAt": "2026-09-22T16:12:45.755Z",
+ "base": "https://xuanji.xianrealme.com",
+ "verdict": "嵌入管线健康：低指标来自用例集（同族兄弟文档分辨题），不是检索链路缺陷",
+ "evalCases": {
+  "total": 10,
+  "top5Hits": 3,
+  "ranksPerCase": [
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第4部分/共5部分)",
+    "expectedDocIds": [
+     135
+    ],
+    "ranks": [
+     8
+    ]
+   },
+   {
+    "query": "[科目/不动产] GroupF_郑州多选与操作规范 (第1部分/共2部分)",
+    "expectedDocIds": [
+     143
+    ],
+    "ranks": [
+     1
+    ]
+   },
+   {
+    "query": "[科目/不动产] 试题题库-汇总5.20 (第2部分/共4部分)",
+    "expectedDocIds": [
+     140
+    ],
+    "ranks": [
+     null
+    ]
+   },
+   {
+    "query": "[科目/不动产] 试题题库-汇总5.20 (第3部分/共4部分)",
+    "expectedDocIds": [
+     141
+    ],
+    "ranks": [
+     15
+    ]
+   },
+   {
+    "query": "知识库产品对标调研（149 条官方来源）",
+    "expectedDocIds": [
+     1923
+    ],
+    "ranks": [
+     1
+    ]
+   },
+   {
+    "query": "[openclaw][nvwa] 记忆增量 2026-09-18 14:32Z",
+    "expectedDocIds": [
+     1935
+    ],
+    "ranks": [
+     7
+    ]
+   },
+   {
+    "query": "[openclaw][main] 记忆增量 2026-09-18 14:32Z",
+    "expectedDocIds": [
+     1931
+    ],
+    "ranks": [
+     16
+    ]
+   },
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第1部分/共5部分)",
+    "expectedDocIds": [
+     132
+    ],
+    "ranks": [
+     2
+    ]
+   },
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第2部分/共5部分)",
+    "expectedDocIds": [
+     133
+    ],
+    "ranks": [
+     17
+    ]
+   },
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第3部分/共5部分)",
+    "expectedDocIds": [
+     134
+    ],
+    "ranks": [
+     6
+    ]
+   }
+  ]
+ },
+ "uniqueContentProbes": {
+  "total": 12,
+  "top5Hits": 9,
+  "ranksPerProbe": [
+   {
+    "docId": 2219,
+    "rank": 1
+   },
+   {
+    "docId": 2218,
+    "rank": 1
+   },
+   {
+    "docId": 2217,
+    "rank": 1
+   },
+   {
+    "docId": 2216,
+    "rank": 1
+   },
+   {
+    "docId": 2215,
+    "rank": 1
+   },
+   {
+    "docId": 2214,
+    "rank": 1
+   },
+   {
+    "docId": 2213,
+    "rank": 1
+   },
+   {
+    "docId": 2208,
+    "rank": 1
+   },
+   {
+    "docId": 2205,
+    "rank": 1
+   },
+   {
+    "docId": 2202,
+    "rank": null
+   },
+   {
+    "docId": 2201,
+    "rank": null
+   },
+   {
+    "docId": 2199,
+    "rank": null
+   }
+  ]
+ }
+}

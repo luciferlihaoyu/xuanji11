@@ -374,3 +374,23 @@ describe("documentId 类型容错：auto-tag 写数字、入库写字符串，�
     expect(r.deletedNodes).toBe(1);
   });
 });
+
+describe("purgeDocumentsCascade 失败语义", () => {
+  it("某篇在 SQL 事务阶段失败 → 计入 failed 且其余照删，不静默吞掉", async () => {
+    const db = createDb();
+    const a = seedDocument(db, true);
+    const b = seedDocument(db, true);
+    // b 的向量删除抛错（事务之前的步骤）→ 该篇失败，a 仍应清干净
+    vi.mocked(vectorEngine.deleteByDocumentId).mockImplementation(async (id: string | number) => {
+      if (id === b) throw new Error("boom");
+      return 1;
+    });
+
+    const r = await purgeDocumentsCascade(db, vectorEngine, [a, b]);
+
+    expect(r.purged).toBe(1);   // 计数语义（PurgeManyResult.purged 是篇数，不是数组）
+    expect(r.failed.map((f) => f.id)).toEqual([b]);
+    expect(r.failed[0]?.error).toContain("boom");
+    expect(db.select().from(schema.kbDocuments).all().map((d) => d.id)).toEqual([b]);
+  });
+});

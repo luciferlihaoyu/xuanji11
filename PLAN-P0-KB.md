@@ -406,3 +406,69 @@ siblingConfusionCount = 0 还低 → 才需要查嵌入模板 / 链路。**
    本轮用「探针文档删除从 500 变成功」当指纹（旧版本必然 500，新版本成功）——比翻 CLI 状态更直接。
 4. **tRPC 方法语义**：mutation 用 GET 会得到 **405**（过程已存在）而非 404（过程不存在）——
    这两个码正好可以用来判断"新版本是否已上线"。
+
+### 七、二轮审查（天演 ×2：规格符合度 + 代码质量）与处置 — 2026-09-22
+对 `f2bca2e..95b96e8` 做了两阶段独立审查（先规格符合度、再代码质量），共 3 个 high + 8 个 medium/low，**全部处置并复核通过**。
+最有价值的两个发现都不是我主动找的，而是"线上探针 + 审查"逼出来的：
+
+#### 7.1 孤儿真根因是**判据类型**，不只是"路径漏调级联"（提交 a8168c0）
+第一次修复（3da1eed）让 purge/deleteFolder 都走级联后，我用**自建探针文档**验收：
+purge 返回 `deletedNodes: 0`，删完立刻 `graphOrphans: 1` —— **删除自己刚造出一个孤儿**。
+根因：图谱节点 `metadata.documentId` 的**写入类型不统一**——
+`ingestion.ts`/`workflow-runtime.ts`/`kb-router.ts` 写 `String(id)`（字符串），
+`keyword-auto-tag.ts`（autoTagDocument）写 `doc.id`（**数字**）；
+而所有匹配点都用字符串等值比较 `json_extract(...) = String(id)`（SQLite 数值与文本永不相等）✗。
+后果：数字型节点删除时漏删（留孤儿）、auto-tag 去重时找不到自己建的节点（**重复建节点**）；
+巡检 `index-health` 用 `CAST(... AS INTEGER)` 所以看得见，删除侧却看不见 —— 于是"巡检天天报红、代码看着没毛病"。
+历史孤儿 `node 189`（`{"documentId":1855}` 数字）正是这条链的产物。
+修复：新增 `api/lib/document-node-match.ts`，判据收口为一处
+`CAST(json_extract(metadata,'$.documentId') AS INTEGER) = id`（与巡检同源），
+替换删除级联、dryRun 预览、kb-router、workflow-runtime、relation-analyzer、auto-tag 去重共 5 处。
+**线上终验**：探针 purge → `deletedNodes: 1, deletedEdges: 14`，删后 docs/chunks/versions 全 0、孤儿 0 ✅
+
+#### 7.2 我这轮改动自己引入的缺陷：deleteFolder 失败路径 FK 500（提交 95b96e8，审查预言 + 测试复现）
+`kb_documents.folderId → kb_folders(id)` 有外键。"某篇 purge 失败 → 文档行还在 → 无条件删文件夹" → 
+`FOREIGN KEY constraint failed`，而且**连"如实汇报失败"的机会都没有**（500 把诚实结果吞了）。
+测试 DDL 此前**没建** `folderId` 外键（正是藏住它的盲区）→ 补上后立刻复现。
+修复：只要有一篇没清掉就**一篇文件夹都不删**（`foldersPreserved: true` + `removedFolderCount: 0` + `purgeFailed` 明细）。
+二轮复核又指出残留边界：深层子文件夹失败时若只删"看着是空的"祖先，会撞
+`kb_folders.parentId → kb_folders(id)` 外键 —— 已用变异自检确认（退回部分删除 → `FOREIGN KEY constraint failed` 红），
+收紧为"有失败则全保留"后转绿。前端 `KnowledgeBase.tsx` 同步消费 `purgeFailed`（不再假弹「已删除」）。
+
+#### 7.3 其余处置（medium/low，全部落地）
+缓存失效改为**事务提交后再失效一次**（删除前的失效挡不住提交前的并发搜索写回旧结果）；
+`runEval` 取期望标题的辅助查询加 try/catch 降级（失败 → `missReason` 全 other，recall/MRR 一字不动，不让辅助查询毁掉整份报告）；
+`normalizeDocTitle` 收窄为**只剥开头连续 `[前缀]`**（审查反例：`每日晨报 [2026-09-01]` vs `[2026-09-02]` 是不同日期的独立文档，不得判成同族）；
+测试补 `vi.hoisted` env 消除并行 flake；两套手写 DDL 对齐（补 `knowledge_edges` 双外键、`kb_folders.parentId` 自引用、调建表顺序）；
+UI 对缺字段兜底（旧后端响应显示「—」而非误报「无近重复干扰」）。
+
+#### 7.4 证据留档（审查指出"结论无脚本无输出"）
+新增 `scripts/vector-recall-attribution.mjs`（两组对照、凭据走环境变量、只读、login 5xx 可重试、灰区输出 inconclusive），
+线上跑出的原始报告归档在 `docs/reports/vector-recall-attribution-20260922.json`；
+四模式评测报告归档在 `docs/reports/search-eval-modes-20260922.json`。
+**线上实测（2026-09-22 16:1x）**：
+
+| 模式 | recall@5 | MRR | siblingConfusionCount |
+|---|---|---|---|
+| keyword | 1.0 | 1.0 | 0 |
+| vector | **0.3** | 0.25 | **3** |
+| hybrid | 1.0 | 1.0 | 0 |
+
+→ 向量模式 3 条未命中被归因为"命中了同族兄弟"，其余 4 条为 other（保守口径，不硬拗）；
+唯一内容反证 12 条命中 9 条（未命中 3 条仍是近重复兄弟）→ **嵌入管线健康，低指标是用例集可分性上限**。
+阈值 0.6/0.6 是启发式的，不是理论值；灰区现在会输出 `inconclusive` 而不是硬下结论。
+
+#### 7.5 本轮新增的已知边界（如实记录，未修）
+1. **概念/实体节点的悬挂引用**：`type='concept'|'entity'` 的知识抽取节点也带 `metadata.documentId`，
+   源文档删除后会变成悬挂引用（线上实测 10 个，本次已连边清掉自己探针造的）。
+   巡检只把 `type='document'` 的算孤儿，所以它不报红 —— 属**有意边界**（这些节点是独立知识产物）。
+2. **726 条 hash 兜底向量**：巡检 `mixed_embedding_models` 报
+   `qwen3.7-text-embedding-flash×45141 / __hash_fallback__×726` → 巡检 `healthy: false`。
+   根因是 f6c0400 那个"兜底不留身份"缺陷造成的存量（语义不可检索）。属下一轮开项：
+   需要向量引擎侧（sqlite-vec 扩展）按模型列出文档 id 后逐篇 `kb.reindexDocument`，本次未做（判据不在本次范围）。
+
+#### 7.6 复核结论
+- 规格符合度二轮：H-1（线上孤儿）修好 ✅、H-2（deleteFolder 失败路径）修好 ✅、判据收口全覆盖 ✅、
+  归因结论**独立复刻**（A 组 top5 命中 3/10、B 组 9/12，与我报告逐字一致）✅
+- 代码质量二轮：8 条处置全部"修好"，新增 N1/N2/G1~G3 均已处置；总评**可合并**
+- 复核提出的新问题（脚本 502 无重试、祖先外键残留边界、MCP 层缺数字形态回归）已在本轮全部修掉

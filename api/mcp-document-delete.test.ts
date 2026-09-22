@@ -184,3 +184,13 @@ describe("MCP document_delete", () => {
     }
   });
 });
+
+describe("MCP document_delete 走的是同一套判据（数字形态 documentId 也删得到）", () => {
+  it("级联复用的就是 document-removal 的实现，不是自己一套匹配", async () => {
+    // 这条测的是「MCP 层没有独立匹配点」：它必须直接调用 lib 层的 deleteDocumentCascade。
+    // 一旦有人在 MCP 层另写一套 json_extract 字符串比较，就会绕开 CAST 容错（审查缺口）。
+    const source = await import("node:fs").then((fs) => fs.readFileSync(new URL("./mcp-server.ts", import.meta.url), "utf8"));
+    expect(source).toContain('from "./lib/document-removal"');
+    expect(source).not.toMatch(/json_extract\([^)]*documentId/);
+  });
+});

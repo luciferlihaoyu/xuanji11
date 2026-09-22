@@ -127,6 +127,10 @@ export const kbRouter = createRouter({
       // 注意：kb_documents.folderId → kb_folders(id) 有外键（线上 foreign_keys=ON）。
       // 若某篇文档 purge 失败，其文档行仍留在文件夹里，直接删文件夹会 FK 500 —— 连
       // 「如实汇报失败」的机会都没有。因此只删**确实已空**的文件夹，并回报被保留的。
+      // 只要有一篇没清掉，就**一篇文件夹都不删**：
+      // ① 残留文档可能挂在任意层级，祖先文件夹此时"看着是空的"却仍被 kb_documents.folderId 或
+      //    子文件夹的 kb_folders.parentId 引用，部分删会撞外键（审查二轮残留边界）；
+      // ② 部分成功的中间态语义调用方难预期，不如全保留 + 如实回报，让用户重试。
       const remainingDocs = await db
         .select({ folderId: kbDocuments.folderId })
         .from(kbDocuments)
@@ -134,11 +138,11 @@ export const kbRouter = createRouter({
       const blockedFolderIds = new Set(
         remainingDocs.map((r) => r.folderId).filter((x): x is number => typeof x === "number"),
       );
-      const deletableFolderIds = targetFolderIds.filter((fid) => !blockedFolderIds.has(fid));
+      const deletableFolderIds = purgeFailed.length === 0 && blockedFolderIds.size === 0 ? targetFolderIds : [];
       if (deletableFolderIds.length > 0) {
         await db.delete(kbFolders).where(inArray(kbFolders.id, deletableFolderIds));
       }
-      const foldersPreserved = blockedFolderIds.size > 0;
+      const foldersPreserved = deletableFolderIds.length === 0 && targetFolderIds.length > 0;
       await logAudit(ctx, "kb_folder", "delete", input.id, {
         ...input,
         removedFolderCount: deletableFolderIds.length,

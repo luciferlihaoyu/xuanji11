@@ -1,0 +1,305 @@
+{
+ "keyword": {
+  "metrics": {
+   "caseCount": 10,
+   "meanRecallAtK": 1,
+   "mrr": 1,
+   "failedCount": 0,
+   "siblingConfusionCount": 0
+  },
+  "cases": [
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第4部分/共5部分)",
+    "expectedDocIds": [
+     135
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[科目/不动产] GroupF_郑州多选与操作规范 (第1部分/共2部分)",
+    "expectedDocIds": [
+     143
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[科目/不动产] 试题题库-汇总5.20 (第2部分/共4部分)",
+    "expectedDocIds": [
+     140
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[科目/不动产] 试题题库-汇总5.20 (第3部分/共4部分)",
+    "expectedDocIds": [
+     141
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "知识库产品对标调研（149 条官方来源）",
+    "expectedDocIds": [
+     1923
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[openclaw][nvwa] 记忆增量 2026-09-18 14:32Z",
+    "expectedDocIds": [
+     1935
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[openclaw][main] 记忆增量 2026-09-18 14:32Z",
+    "expectedDocIds": [
+     1931
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第1部分/共5部分)",
+    "expectedDocIds": [
+     132
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第2部分/共5部分)",
+    "expectedDocIds": [
+     133
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第3部分/共5部分)",
+    "expectedDocIds": [
+     134
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   }
+  ]
+ },
+ "vector": {
+  "metrics": {
+   "caseCount": 10,
+   "meanRecallAtK": 0.3,
+   "mrr": 0.25,
+   "failedCount": 0,
+   "siblingConfusionCount": 3
+  },
+  "cases": [
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第4部分/共5部分)",
+    "expectedDocIds": [
+     135
+    ],
+    "recallAtK": 0,
+    "reciprocalRank": 0,
+    "missReason": "other"
+   },
+   {
+    "query": "[科目/不动产] GroupF_郑州多选与操作规范 (第1部分/共2部分)",
+    "expectedDocIds": [
+     143
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[科目/不动产] 试题题库-汇总5.20 (第2部分/共4部分)",
+    "expectedDocIds": [
+     140
+    ],
+    "recallAtK": 0,
+    "reciprocalRank": 0,
+    "missReason": "sibling"
+   },
+   {
+    "query": "[科目/不动产] 试题题库-汇总5.20 (第3部分/共4部分)",
+    "expectedDocIds": [
+     141
+    ],
+    "recallAtK": 0,
+    "reciprocalRank": 0,
+    "missReason": "other"
+   },
+   {
+    "query": "知识库产品对标调研（149 条官方来源）",
+    "expectedDocIds": [
+     1923
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[openclaw][nvwa] 记忆增量 2026-09-18 14:32Z",
+    "expectedDocIds": [
+     1935
+    ],
+    "recallAtK": 0,
+    "reciprocalRank": 0,
+    "missReason": "other"
+   },
+   {
+    "query": "[openclaw][main] 记忆增量 2026-09-18 14:32Z",
+    "expectedDocIds": [
+     1931
+    ],
+    "recallAtK": 0,
+    "reciprocalRank": 0,
+    "missReason": "other"
+   },
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第1部分/共5部分)",
+    "expectedDocIds": [
+     132
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 0.5,
+    "missReason": "none"
+   },
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第2部分/共5部分)",
+    "expectedDocIds": [
+     133
+    ],
+    "recallAtK": 0,
+    "reciprocalRank": 0,
+    "missReason": "sibling"
+   },
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第3部分/共5部分)",
+    "expectedDocIds": [
+     134
+    ],
+    "recallAtK": 0,
+    "reciprocalRank": 0,
+    "missReason": "sibling"
+   }
+  ]
+ },
+ "hybrid": {
+  "metrics": {
+   "caseCount": 10,
+   "meanRecallAtK": 1,
+   "mrr": 1,
+   "failedCount": 0,
+   "siblingConfusionCount": 0
+  },
+  "cases": [
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第4部分/共5部分)",
+    "expectedDocIds": [
+     135
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[科目/不动产] GroupF_郑州多选与操作规范 (第1部分/共2部分)",
+    "expectedDocIds": [
+     143
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[科目/不动产] 试题题库-汇总5.20 (第2部分/共4部分)",
+    "expectedDocIds": [
+     140
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[科目/不动产] 试题题库-汇总5.20 (第3部分/共4部分)",
+    "expectedDocIds": [
+     141
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "知识库产品对标调研（149 条官方来源）",
+    "expectedDocIds": [
+     1923
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[openclaw][nvwa] 记忆增量 2026-09-18 14:32Z",
+    "expectedDocIds": [
+     1935
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[openclaw][main] 记忆增量 2026-09-18 14:32Z",
+    "expectedDocIds": [
+     1931
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第1部分/共5部分)",
+    "expectedDocIds": [
+     132
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第2部分/共5部分)",
+    "expectedDocIds": [
+     133
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   },
+   {
+    "query": "[科目/不动产] 完整错题库解析 (第3部分/共5部分)",
+    "expectedDocIds": [
+     134
+    ],
+    "recallAtK": 1,
+    "reciprocalRank": 1,
+    "missReason": "none"
+   }
+  ]
+ }
+}

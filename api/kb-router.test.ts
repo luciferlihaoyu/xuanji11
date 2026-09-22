@@ -40,6 +40,13 @@ function createDb() {
   // 线上真库的三条外键（PRAGMA foreign_key_list 实测），单测带上才拦得住 FK 违反类 bug
   sqlite.pragma("foreign_keys = ON");
   sqlite.exec(`
+    
+    CREATE TABLE kb_folders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+      parentId INTEGER REFERENCES kb_folders(id), icon TEXT,
+      sortOrder INTEGER DEFAULT 0, createdBy INTEGER,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+    );
     CREATE TABLE kb_documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT, folderId INTEGER REFERENCES kb_folders(id),
       title TEXT NOT NULL, content TEXT,
@@ -47,12 +54,7 @@ function createDb() {
       createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0,
       deletedAt INTEGER, deletedReason TEXT, mergedIntoId INTEGER
     );
-    CREATE TABLE kb_folders (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-      parentId INTEGER REFERENCES kb_folders(id), icon TEXT,
-      sortOrder INTEGER DEFAULT 0, createdBy INTEGER,
-      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
-    );
+    
     CREATE TABLE kb_document_versions (
       id INTEGER PRIMARY KEY AUTOINCREMENT, documentId INTEGER NOT NULL REFERENCES kb_documents(id),
       versionNumber INTEGER NOT NULL, title TEXT NOT NULL, content TEXT, format TEXT, tags TEXT,
@@ -240,5 +242,32 @@ describe("deleteFolder 失败路径：purge 有失败时不能 500，且要如�
     expect(r.foldersPreserved).toBe(false);
     expect(db.select().from(schema.kbFolders).all()).toEqual([]);
     expect(db.select().from(schema.kbDocuments).all()).toEqual([]);
+  });
+});
+
+describe("deleteFolder 多层残留（复核二轮残留边界）", () => {
+  it("深层子文件夹有失败 → 祖先文件夹一并保留，不撞 kb_folders.parentId 外键", async () => {
+    const db = createDb();
+    vi.mocked(getDb).mockReturnValue(db as never);
+    const root = db.insert(schema.kbFolders).values({ name: "root", createdAt: new Date(0), updatedAt: new Date(0) }).run() as unknown as { lastInsertRowid: number | bigint };
+    const rootId = Number(root.lastInsertRowid);
+    const child = db.insert(schema.kbFolders).values({ name: "child", parentId: rootId, createdAt: new Date(0), updatedAt: new Date(0) }).run() as unknown as { lastInsertRowid: number | bigint };
+    const childId = Number(child.lastInsertRowid);
+    const ok = seedDoc(db, rootId, false);        // 根层：能删
+    const bad = seedDoc(db, childId, false);      // 深层：删不掉
+    vi.mocked(vectorEngine.deleteByDocumentId).mockImplementation(async (id: string | number) => {
+      if (id === bad) throw new Error("向量引擎挂了");
+      return 2;
+    });
+
+    const r = await caller().deleteFolder({ id: rootId });   // 不抛 FK 错
+
+    expect(r.success).toBe(false);
+    expect(r.foldersPreserved).toBe(true);
+    expect(r.removedFolderCount).toBe(0);
+    // 两个文件夹都在（祖先若删掉会违反 kb_folders.parentId / kb_documents.folderId）
+    expect(db.select().from(schema.kbFolders).all().map((f) => f.id).sort()).toEqual([rootId, childId].sort());
+    expect(db.select().from(schema.kbDocuments).all().map((d) => d.id)).toEqual([bad]);
+    expect(ok).toBeGreaterThan(0);
   });
 });

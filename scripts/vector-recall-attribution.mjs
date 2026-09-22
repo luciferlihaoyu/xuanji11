@@ -37,13 +37,28 @@ const headers = () => ({
 });
 
 async function login() {
-  const r = await fetch(`${BASE}/api/trpc/auth.login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'User-Agent': UA },
-    body: JSON.stringify({ json: { username: USER, password: PASS } }),
-  });
-  if (!r.ok) throw new Error(`login ${r.status}`);
-  cookie = (r.headers.get('set-cookie') || '').split(';')[0];
+  // 网关换版/波动时会 502（审查实测：node undici 比 curl 更容易撞上），
+  // 因此 5xx 与网络错误一律可重试，不要一次 throw 就把"可复现"的承诺交给运气。
+  let last;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      const r = await fetch(`${BASE}/api/trpc/auth.login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'User-Agent': UA, accept: 'application/json' },
+        body: JSON.stringify({ json: { username: USER, password: PASS } }),
+      });
+      if (r.ok) {
+        cookie = (r.headers.get('set-cookie') || '').split(';')[0];
+        return;
+      }
+      last = new Error(`login ${r.status}`);
+      if (r.status < 500) break; // 4xx 重试无意义
+    } catch (err) {
+      last = err;
+    }
+    await new Promise((res) => setTimeout(res, 5000 * attempt));
+  }
+  throw last ?? new Error('login failed');
 }
 
 async function query(proc, input) {
@@ -100,10 +115,18 @@ const report = {
   base: BASE,
   evalCases: { total: caseRows.length, top5Hits: hitCases, rows: caseRows },
   uniqueContentProbes: { total: probeRows.length, top5Hits: probeHits, rows: probeRows },
-  verdict:
-    probeRows.length > 0 && probeHits / probeRows.length >= 0.6 && hitCases / Math.max(caseRows.length, 1) < 0.6
-      ? '嵌入管线健康：低指标来自用例集（同族兄弟文档分辨题），不是检索链路缺陷'
-      : '需进一步排查检索链路（唯一内容反证未达预期）',
+  // 阈值是启发式的（不是理论值）：唯一内容反证命中率与用例命中率分离度足够大才敢下结论，
+  // 落在灰区就给 inconclusive，别硬拗成结论。
+  verdict: (() => {
+    if (probeRows.length === 0) return 'inconclusive：唯一内容探针样本为 0，无法判定';
+    const probeRate = probeHits / probeRows.length;
+    const caseRate = hitCases / Math.max(caseRows.length, 1);
+    if (probeRate >= 0.6 && caseRate < 0.6) {
+      return '嵌入管线健康：低指标来自用例集（同族兄弟文档分辨题），不是检索链路缺陷';
+    }
+    if (probeRate <= 0.4) return '需进一步排查检索链路：唯一内容回查自身都命中不了';
+    return `inconclusive：灰区（唯一内容命中率 ${probeRate.toFixed(2)} / 用例命中率 ${caseRate.toFixed(2)}），需扩大样本再判定`;
+  })(),
 };
 
 console.log(JSON.stringify(report, null, 2));
