@@ -260,3 +260,48 @@
 - `kb.reindex_all` → 句柄含 `adopted`（版本指纹）；本轮**真索引成功**：`done=3、failed=0`（修复前是 `done == failed` 全篇失败）
 - 取消链路：`task_cancel` → `accepted:true`，**立刻再查仍是 `running` + `cancelRequested:true`（未谎报）** → 循环 **2s 内停** → 终态 `cancelled`（done=4/1525、failed=0、chunksTotal=314，即真的嵌入并写入了 314 块）→ 再取消 `accepted:false`+reason
 - **幂等实证**：4 篇重索引写入 314 块后，全库 `chunks == vectors == 43479`、文档 1525 篇，计数一字不变（旧行被正确替换而非堆积）
+
+## 全库重建与 FTS 清理：执行记录（2026-09-21 → 09-22）
+
+### 结论：三项归零 + 全库零不一致
+以**每日巡检报告**（工作流自动存档的硬数据）对比，比任何自述都可信：
+
+| 巡检项 | 09-19 | 09-20（重建前） | 09-22（重建后） |
+| --- | --- | --- | --- |
+| 旧向量未记模型身份 | 25230 | 24782 | **0** |
+| 缺 BM25 索引 | 929 | 5423 | **0** |
+| FTS 孤儿 | 25003 | 28950 | **0** |
+| 缺语义向量 | 54 | 0 | **0** |
+| 有内容但未索引文档 | 6 | 1 | 6 → 补齐后 **0** |
+| 图谱孤儿 | 1 | 1 | 1（未处理，独立小项） |
+
+- 全库逐篇终审（1555 篇 `document_delete` dryRun 对账）：**chunks/vectors 不一致 0 篇、零分块 0 篇、未置 vectorized 0 篇**
+- 全局计数一致：`chunks == vectors == ftsRows == 45028`
+- 评测复跑：keyword 1/1、hybrid 1/1、hybrid+rerank 1/1、vector recall@5=0.3 / MRR 0.233（重建前 0.153 → 有提升，但纯向量召回仍偏低，列为 P1：用检索测试台查是否查询/文档嵌入模板不一致，或用例偏关键词）
+
+### FTS 孤儿根因与修复（提交 743f7ca）
+`ensureFts()` 的回填判据是 `ftsCount < chunkCount`，而**孤儿把 ftsCount 抬到高于 chunkCount → 判据恒假 → 缺行永不回填**；
+孤儿本身也清不掉（`deleteDocumentFromFts` 靠 `rowid IN (SELECT id ...)` 定位，已删 chunk 的 id 不在表里）。
+修复：判据改为「存在缺失行」的存在性检查；新增 `pruneFtsOrphans({dryRun})` + 管理员接口 `kb.pruneFtsOrphans`。
+线上执行：dryRun 报 28950 → 真删 28950 → 复检 0。
+
+### 重建过程实测抓出的两个新缺陷（提交 f6c0400）
+1. **hash 兜底不留身份**：候选嵌入配置全部失败时 `simpleTextHash` 兜底写伪向量且**不更新模型身份** ——
+   回填前段 2 分钟「成功」了 550+ 篇、`failed=0`，实则语义质量归零，任何状态码都不报错。
+   修复：导出 `HASH_FALLBACK_MODEL`，兜底写入时显式标注 → 巡检的模型漂移检查可直接点名兜底产物。
+2. **工作流 `save-result` 不走索引**：直接插库 → 每天新增 2 篇「有内容但未索引」报告文档，**巡检为此天天自报红**。
+   修复：落盘后调 `indexDocumentById`；索引失败不阻断工作流但返回 `indexed:false + indexError`，不假装成功。
+   上线指纹：跑一次「每日索引巡检」工作流 → 新报告 #2212 落盘即 `chunks=1/vectors=1`（改前恒为 0）✅
+
+### 事故与教训
+- **我自己造成的一次**：重建跑到 1149/1542（75%）时，我为上线 FTS 修复执行了 push → 自动部署换容器 →
+  进程内存里的回填与句柄一起消失，只能整跑重来。**铁律：长任务在飞时禁止 push；push 前先查在飞长任务。**
+  （本项目句柄不跨重启，是已文档化的边界——但意味着「部署」就是长任务的硬杀手。）
+- **平台侧的一次（非代码问题）**：f6c0400 部署后服务 502 约 45 分钟。运行时日志显示 Pod 反复
+  `ErrImagePull` / `ImagePullBackOff` / `DeadlineExceeded`（对 `registry-oci.zeabur.cloud` 连接被重置），
+  直到 13:52:35 才拉取成功（1m39s / 564MB）→ Pod 起、服务恢复。旧 Pod 已被替换，故窗口期一直回源失败。
+  **判据**：`npx zeabur@latest deployment list --service-id <id> -i=false` 看 STATUS/COMMITSHA，
+  `deployment log -t runtime` 看 Pod 事件。
+
+### 嵌入服务吞吐实测（供后续估时）
+批量 64 条 = 24.6s → **2.6 条/s**；批量 8 条 0.29s/条；单条 1.06s。全库 4.5 万块 ≈ 4-5 小时（实测跨夜跑完）。
