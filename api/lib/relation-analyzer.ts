@@ -4,6 +4,7 @@ import { getDb } from "../queries/connection";
 import { knowledgeNodes, knowledgeEdges, kbDocuments } from "@db/schema";
 import type { KbDocument } from "@db/schema";
 import { searchVectors } from "./vector-service";
+import { documentNodeMatch } from "./document-node-match";
 
 export const STRATEGIES = ["co-occurrence", "vector", "reference"] as const;
 export type Strategy = (typeof STRATEGIES)[number];
@@ -43,7 +44,7 @@ async function findDocumentNodeId(documentId: number): Promise<number | undefine
     .where(
       and(
         eq(knowledgeNodes.type, "document"),
-        sql`json_extract(${knowledgeNodes.metadata}, '$.documentId') = ${String(documentId)}`,
+        documentNodeMatch(documentId),
       ),
     )
     .limit(1);

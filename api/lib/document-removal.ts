@@ -17,10 +17,11 @@
  * 测试覆盖：deleteDocumentCascade / previewDocumentDeletion / purgeDocumentsCascade 均在
  * document-removal.test.ts 用真实内存 SQLite 兜回归；MCP 集成层另有一层。
  */
-import { eq, and, inArray, or, sql, count } from "drizzle-orm";
+import { eq, and, inArray, or, count } from "drizzle-orm";
 import { kbDocuments, documentChunks, kbDocumentVersions, kbIngestionKeys, knowledgeNodes, knowledgeEdges } from "@db/schema";
 import { getDb } from "../queries/connection";
 import { vectorEngine } from "./vector";
+import { documentNodeMatch } from "./document-node-match";
 
 export interface DocumentRemovalResult {
   deletedChunks: number;
@@ -85,7 +86,7 @@ export async function previewDocumentDeletion(
     .where(
       and(
         eq(knowledgeNodes.type, "document"),
-        sql`json_extract(${knowledgeNodes.metadata}, '$.documentId') = ${String(id)}`,
+        documentNodeMatch(id),
       ),
     );
   const nodeIds = nodeRows.map((row) => row.id);
@@ -218,7 +219,7 @@ export async function deleteDocumentCascade(
       .where(
         and(
           eq(knowledgeNodes.type, "document"),
-          sql`json_extract(${knowledgeNodes.metadata}, '$.documentId') = ${String(id)}`,
+          documentNodeMatch(id),
         ),
       )
       .all();

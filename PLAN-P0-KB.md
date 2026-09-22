@@ -305,3 +305,104 @@
 
 ### 嵌入服务吞吐实测（供后续估时）
 批量 64 条 = 24.6s → **2.6 条/s**；批量 8 条 0.29s/条；单条 1.06s。全库 4.5 万块 ≈ 4-5 小时（实测跨夜跑完）。
+
+## P1 收口：图谱孤儿根因 + 向量召回低归因（2026-09-22，提交 3da1eed / 45c9546）
+
+### 一、graph_orphans 的**真根因**：两条删除路径漏清图谱
+巡检一直报 `graph_orphans: 1`（文档节点指向已删文档）。线上定位到具体行：
+`knowledge_nodes.id=189`（title「[薇子/测试] 闲置工具探测-0908」，`metadata.documentId=1855`，文档 1855 已不存在），
+并有 10 条 `tag` 边指向它（`autoTagDocument` 打标时建的 tag 节点 → 文档节点；与历史 orphan 形状一致）。
+
+根因不是巡检误报，而是**删除路径不统一**：
+- MCP `document_delete` → `deleteDocumentCascade`：chunks → FTS → 图谱边 → 图谱节点 → 文档行，全清 ✅
+- 控制台 tRPC `kb.purgeDocument`（彻底删除）与 `kb.deleteFolder`（文件夹删除）→
+  只调 `deleteDocumentVectors`（清缓存 + FTS + chunks + 向量）**独漏 `knowledge_nodes` / `knowledge_edges`** ✗
+  → 每次这类删除都留孤儿；这也是历史 FTS 孤儿那一族问题的同源产物。
+
+修复（提交 3da1eed）：
+1. `kb.purgeDocument` 改走 `deleteDocumentCascade`，删除计数如实回传；
+2. `kb.deleteFolder` 改走新增的 `purgeDocumentsCascade`（逐篇级联、汇总计数、**单篇失败不中断其余**、
+   失败明细放 `purgeFailed`，`success: purgeFailed.length === 0` —— 不假装全清干净）；
+3. 新增 `api/lib/graph-maintenance.ts`：`pruneGraphOrphans({dryRun})` 清存量孤儿节点及其牵连边，
+   判据与巡检**严格同源**；`documentId` 为空的 document 节点不算孤儿（`NULL NOT IN (...)` 非真，巡检也不计；
+   线上这类节点有 102 个，误删会伤及历史数据）；
+4. 新增管理员入口 `kb.pruneGraphOrphans({dryRun})`（真删写审计；巡检只报不改，这是显式维护动作）；
+5. 搜索缓存失效收进级联（此前只有 kb-router 两处入口手动调，MCP 删除路径会在 60s 内返回已删文档）。
+
+线上验收（3da1eed RUNNING 后）：
+`kb.pruneGraphOrphans {dryRun:true}` → `{orphans:1, edges:10}` → 真删 `{prunedNodes:1, prunedEdges:10}` → 复检 `0` ✅
+
+### 二、意外抓到的**线上真故障**：`FOREIGN KEY constraint failed`（提交 45c9546）
+3da1eed 上线后，用**自建探针文档**（#2220，建后经 `auto-tag` 造出 1 个文档节点 + 10 条边）跑删除验收，
+`kb.purgeDocument` 直接 500：`{"message":"FOREIGN KEY constraint failed"}`。
+
+查线上真库 `PRAGMA foreign_key_list`：指向 `kb_documents` 的外键**共 3 条**——
+`document_chunks` ✅（级联已清）、**`kb_document_versions`** ❌、**`kb_ingestion_keys`** ❌。
+凡是**有版本历史**的文档（更新过 / 打标过 / 工作流改过）就删不掉；MCP `document_delete` 与本次改的
+purgeDocument/deleteFolder 共用同一级联实现，**全都受影响**（属于此前未被发现的存量缺陷）。
+
+修复：级联事务内、删文档行**之前**补清两张子表，`DocumentRemovalResult` / `PurgeManyResult` 增加
+`deletedVersions` / `deletedIngestionKeys` 计数（不静默吞掉）。
+
+**为什么单测没抓到**：手写 DDL 没有外键、连接也没开 `foreign_keys` → FK 违反在单测里完全不可见。
+已把**线上真实的三条外键**写进单测 DDL 并 `PRAGMA foreign_keys = ON`：新的回归用例现在能
+**精确复现线上的 `FOREIGN KEY constraint failed`**（变异自检 M-fk 变红 ✅）。
+
+### 三、向量 recall 0.3 归因：**不是检索坏了，是用例集的可分性上限**
+逐条复跑 10 条评测用例（limit=50，看期望文档排第几）：
+
+| 查询（即标题） | 期望文档 | 向量模式命中名次 |
+|---|---|---|
+| [科目/不动产] 完整错题库解析 (第4部分/共5部分) | #135 | 9 |
+| [科目/不动产] GroupF_郑州多选与操作规范 (第1部分/共2部分) | #143 | 1 |
+| [科目/不动产] 试题题库-汇总5.20 (第2部分/共4部分) | #140 | **50 名内都没有** |
+| [科目/不动产] 试题题库-汇总5.20 (第3部分/共4部分) | #141 | 15 |
+| 知识库产品对标调研（149 条官方来源） | #1923 | 1 |
+| [openclaw][nvwa] 记忆增量 2026-09-18 14:32Z | #1935 | 7 |
+| [openclaw][main] 记忆增量 2026-09-18 14:32Z | #1931 | 16 |
+| [科目/不动产] 完整错题库解析 (第1/2/3部分) | #132/#133/#134 | 2 / 17 / 6 |
+
+**10 条里 9 条是「同族兄弟文档 + 查询就是标题」**：向量空间天然分不开「第4部分」与「第1部分」
+（内容同构、标题只差一个数字），这不是检索链路缺陷，而是用例本身的可分性上限。
+
+**反证**（决定性）：改用**唯一内容**当查询——取文档正文中段 40~70 字原句检索，
+向量 top5 命中源文档 **9/12**（未命中的 3 条又是同族近重复的「作业教训」兄弟文档）
+→ **嵌入管线健康**（若查询/文档嵌入模板不一致，连"原文回查原文"都会失败）。
+
+### 四、测试台加「同族兄弟」失败归因（同提交 45c9546）
+不改 recall/MRR 口径（兄弟命中**不算**命中），只让报告自己解释指标：
+- `normalizeDocTitle()`：剥 `[前缀]` 与 `（第N部分/共M部分）` 等分册标记后归一
+- `classifyMissReason()`：`none` / `sibling`（命中同族兄弟）/ `other`；保守原则——期望标题缺失或归一不等一律 `other`，宁可漏判不可错判
+- `EvalCaseResult.missReason` + `EvalMetrics.siblingConfusionCount`
+- UI `src/pages/SearchTestbed.tsx`：新增「同族兄弟混淆」指标卡 + 逐条蓝色标注「同族兄弟（近重复，可分性上限）」
+
+判读规则（写给后来者）：**向量 recall 低 + siblingConfusionCount 高 → 用例近重复，换用例；
+siblingConfusionCount = 0 还低 → 才需要查嵌入模板 / 链路。**
+
+### 五、测试与自检
+新增/改动测试：`api/kb-router.test.ts`（新，**锁路由层接线**——纯 lib 测试覆盖不到）、
+`api/lib/graph-maintenance.test.ts`（新）、`api/lib/document-removal.test.ts`（+`purgeDocumentsCascade`、+FK 回归）、
+`api/lib/search-eval.test.ts`（+归因纯函数与 runEval 端到端）、`api/mcp-document-delete.test.ts`（计数对齐）。
+
+变异自检（每组都确认源码字节级还原）：
+| 变异 | 结果 |
+|---|---|
+| M-r1 purgeDocument 退回旧实现（漏图谱） | 路由测试变红 ✅ |
+| M-r2 deleteFolder 退回旧实现 | 路由测试变红 ✅ |
+| M-r3 孤儿清理只删 source 端边 | 图谱测试变红 ✅ |
+| M-r4 批量删除遇错即中断 | 变红 ✅ |
+| M-fk 不清子表（复现线上 500） | `FOREIGN KEY constraint failed` 复现并变红 ✅ |
+| M-s1 runEval 不写归因 | 端到端归因测试变红 ✅ |
+
+门禁：`npm run check` exit 0（真实门禁本轮又抓出两处：测试 DDL 缺 `icon`/`entityType` 列、
+`knowledge_edges` 多了 schema 不存在的 `updatedAt` 列、mock 结果缺新字段——vitest 全都无感而 tsc 报错）；
+5 文件 42/42；`vite build` 成功。
+
+### 六、本轮新踩的坑（供后来者）
+1. **手写 DDL 不带外键 = 测试盲区**：FK 违反类 bug 在单测里完全看不见，线上才炸。凡是"删父表"的改动，
+   测试 DDL 必须带真实外键并 `PRAGMA foreign_keys = ON`。
+2. **真实门禁与单测的差距**：`tsc -b` 抓出了 vitest 抓不到的列名/类型漂移（本轮 3 次）。改完必跑真门禁。
+3. **部署状态可用"行为指纹"判断**：新接口出现/旧接口消失即换版完成；
+   本轮用「探针文档删除从 500 变成功」当指纹（旧版本必然 500，新版本成功）——比翻 CLI 状态更直接。
+4. **tRPC 方法语义**：mutation 用 GET 会得到 **405**（过程已存在）而非 404（过程不存在）——
+   这两个码正好可以用来判断"新版本是否已上线"。

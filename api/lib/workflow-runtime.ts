@@ -1,6 +1,7 @@
 import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "../queries/connection";
+import { documentNodeMatch } from "./document-node-match";
 import {
   kbDocuments,
   knowledgeEdges,
@@ -346,7 +347,7 @@ const nodeExecutors: Record<string, NodeExecutor> = {
     // 概念实体节点 + contains 边
     const { sql } = await import("drizzle-orm");
     const docNode = await db.select({ id: kNodes.id }).from(kNodes)
-      .where(sql`json_extract(${kNodes.metadata}, '$.documentId') = ${String(documentId)}`).limit(1);
+      .where(documentNodeMatch(documentId)).limit(1);
     const docNodeId = docNode[0]?.id;
     let createdNodes = 0;
     for (const c of suggestion.concepts) {

@@ -338,3 +338,31 @@ describe("带子表引用（外键）的文档删除：线上 500 回归", () =>
     expect(db.select().from(schema.kbDocumentVersions).all()).toHaveLength(0);
   });
 });
+
+describe("documentId 类型容错：auto-tag 写数字、入库写字符串，匹配必须两种都认", () => {
+  it("节点 metadata.documentId 是【数字】时，级联删除照样清掉（线上实测漏删 → 留孤儿）", async () => {
+    const db = createDb();
+    const docId = seedDocument(db, false);
+    // autoTagDocument 的真实写法：metadata: { documentId: doc.id }（数字）
+    const n = db.insert(schema.knowledgeNodes)
+      .values({ title: "auto-tag 造的文档节点", type: "document", metadata: { documentId: docId }, createdAt: new Date(0), updatedAt: new Date(0) })
+      .run() as unknown as { lastInsertRowid: number | bigint };
+    db.insert(schema.knowledgeEdges)
+      .values({ sourceId: Number(n.lastInsertRowid), targetId: Number(n.lastInsertRowid), type: "related", createdAt: new Date(0) })
+      .run();
+
+    const preview = await previewDocumentDeletion(db, vectorEngine as never, docId);
+    expect(preview.wouldDelete.graphNodes).toBe(1);
+
+    const r = await deleteDocumentCascade(db, vectorEngine, docId);
+    expect(r.deletedNodes).toBe(1);
+    expect(db.select().from(schema.knowledgeNodes).all()).toHaveLength(0);
+  });
+
+  it("节点 metadata.documentId 是【字符串】时同样清掉（入库/工作流写法）", async () => {
+    const db = createDb();
+    const docId = seedDocument(db, true);
+    const r = await deleteDocumentCascade(db, vectorEngine, docId);
+    expect(r.deletedNodes).toBe(1);
+  });
+});

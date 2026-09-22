@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { getDb } from "../queries/connection";
 import { knowledgeNodes, knowledgeEdges, kbDocuments } from "@db/schema";
+import { documentNodeMatch } from "./document-node-match";
 import { clean } from "./clean";
 import { extractKeywords } from "./keyword-extractor";
 
@@ -25,7 +26,9 @@ async function findOrCreateDocumentNode(documentId: number, createdBy: number | 
     .where(
       and(
         eq(knowledgeNodes.type, "document"),
-        sql`json_extract(${knowledgeNodes.metadata}, '$.documentId') = ${String(documentId)}`,
+        // 判据统一走 document-node-match：本文件历史上写「数字」documentId，
+        // 用字符串比较会找不到自己建的节点 → 打标两次就重复建文档节点（线上实测）
+        documentNodeMatch(documentId),
       ),
     )
     .limit(1);

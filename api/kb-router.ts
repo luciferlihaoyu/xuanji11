@@ -9,6 +9,7 @@ import { logAudit, logAction } from "./lib/audit";
 import { vectorEngine } from "./lib/vector";
 import { indexDocumentById, tryIndexDocumentById, startReindexAll, getReindexProgress } from "./lib/document-indexer";
 import { collectDescendantFolderIds } from "./lib/kb-tree";
+import { documentNodeMatch } from "./lib/document-node-match";
 import { deleteDocumentCascade, purgeDocumentsCascade } from "./lib/document-removal";
 
 async function deleteDocumentVectors(documentId: number): Promise<void> {
@@ -286,7 +287,7 @@ export const kbRouter = createRouter({
       // 文档对应的 document 节点（metadata.documentId 匹配）用于连 contains 边
       const { sql } = await import("drizzle-orm");
       const docNode = await db.select({ id: knowledgeNodes.id }).from(knowledgeNodes)
-        .where(sql`json_extract(${knowledgeNodes.metadata}, '$.documentId') = ${String(input.documentId)}`)
+        .where(documentNodeMatch(input.documentId))
         .limit(1);
       const docNodeId = docNode[0]?.id;
 
