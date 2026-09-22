@@ -123,11 +123,36 @@ export const kbRouter = createRouter({
         const r = await purgeDocumentsCascade(db, vectorEngine, docs.map((d) => d.id));
         purgeFailed = purgeFailed.concat(r.failed);
       }
-      // 先删子孙再删根（id 集合含全部层级，一次 in 条件删除）
-      await db.delete(kbFolders).where(inArray(kbFolders.id, targetFolderIds));
-      await logAudit(ctx, "kb_folder", "delete", input.id, { ...input, removedFolderCount: targetFolderIds.length, purgeFailed } as Record<string, unknown>);
+      // 先删子孙再删根（id 集合含全部层级，一次 in 条件删除）。
+      // 注意：kb_documents.folderId → kb_folders(id) 有外键（线上 foreign_keys=ON）。
+      // 若某篇文档 purge 失败，其文档行仍留在文件夹里，直接删文件夹会 FK 500 —— 连
+      // 「如实汇报失败」的机会都没有。因此只删**确实已空**的文件夹，并回报被保留的。
+      const remainingDocs = await db
+        .select({ folderId: kbDocuments.folderId })
+        .from(kbDocuments)
+        .where(inArray(kbDocuments.folderId, targetFolderIds));
+      const blockedFolderIds = new Set(
+        remainingDocs.map((r) => r.folderId).filter((x): x is number => typeof x === "number"),
+      );
+      const deletableFolderIds = targetFolderIds.filter((fid) => !blockedFolderIds.has(fid));
+      if (deletableFolderIds.length > 0) {
+        await db.delete(kbFolders).where(inArray(kbFolders.id, deletableFolderIds));
+      }
+      const foldersPreserved = blockedFolderIds.size > 0;
+      await logAudit(ctx, "kb_folder", "delete", input.id, {
+        ...input,
+        removedFolderCount: deletableFolderIds.length,
+        targetFolderCount: targetFolderIds.length,
+        foldersPreserved,
+        purgeFailed,
+      } as Record<string, unknown>);
       // 有文档没能删掉就如实带出来（不假装全部清干净）
-      return { success: purgeFailed.length === 0, removedFolderCount: targetFolderIds.length, purgeFailed };
+      return {
+        success: purgeFailed.length === 0,
+        removedFolderCount: deletableFolderIds.length,
+        foldersPreserved,
+        purgeFailed,
+      };
     }),
 
   listDocuments: authedQuery

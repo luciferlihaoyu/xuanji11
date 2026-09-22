@@ -62,10 +62,17 @@ export interface RunEvalReport {
   readonly durationMs: number;
 }
 
-/** 同族兄弟判定用的标题归一：剥掉 [前缀] 与 （第N部分/共M部分）等分册标记后小写 */
+/**
+ * 同族兄弟判定用的标题归一：剥掉**开头连续的** `[前缀]`（如 `[openclaw][main]`、`[科目/不动产]`）
+ * 与 `（第N部分/共M部分）` 等分册标记后小写。
+ *
+ * 只剥开头：`每日晨报 [2026-09-01]` 与 `每日晨报 [2026-09-02]` 是**不同日期的独立文档**，
+ * 若把行内方括号也剥掉就会归一成同一条而被误判成「同族兄弟」（审查反例），
+ * 归因会误导调参方向。宁可漏判，不可错判。
+ */
 export function normalizeDocTitle(title: string): string {
   return title
-    .replace(/\[[^\]]*\]/g, " ")
+    .replace(/^\s*(?:\[[^\]]*\]\s*)+/, " ")
     .replace(/[（(]\s*第\s*\d+\s*部分[^)）]*[)）]/g, " ")
     .replace(/[（(]\s*part\s*\d+[^)）]*[)）]/gi, " ")
     .replace(/\s+/g, " ")
@@ -171,11 +178,17 @@ export async function runEval(opts: RunEvalOptions = {}): Promise<RunEvalReport>
   const allExpectedIds = [...new Set(rows.flatMap((row) => parseExpectedDocIds(row.expectedDocIds)))];
   const titleById = new Map<number, string>();
   if (allExpectedIds.length > 0) {
-    const titleRows = await db
-      .select({ id: kbDocuments.id, title: kbDocuments.title })
-      .from(kbDocuments)
-      .where(inArray(kbDocuments.id, allExpectedIds));
-    for (const r of titleRows) titleById.set(r.id, r.title);
+    // 降级而不是毁盘：标题只用于「兄弟混淆」归因，查失败就退化成「无标题」（missReason 一律 other），
+    // recall/MRR 一个字都不受影响——不能让一次辅助查询把整份评测报告带走。
+    try {
+      const titleRows = await db
+        .select({ id: kbDocuments.id, title: kbDocuments.title })
+        .from(kbDocuments)
+        .where(inArray(kbDocuments.id, allExpectedIds));
+      for (const r of titleRows) titleById.set(r.id, r.title);
+    } catch (err) {
+      console.warn("[search-eval] 取期望文档标题失败，兄弟归因降级为 other:", err instanceof Error ? err.message : err);
+    }
   }
 
   const results: EvalCaseResult[] = [];

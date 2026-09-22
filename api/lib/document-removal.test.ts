@@ -1,4 +1,12 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+
+// env.ts 启动校验需要；并行 worker 下若依赖 import 顺序会偶发红（审查 M6 flake 实录）
+vi.hoisted(() => {
+  process.env.DATABASE_URL ||= "file::memory:";
+  process.env.ADMIN_USERNAME ||= "test-admin";
+  process.env.ADMIN_PASSWORD ||= "test-password-at-least-32-characters-long!!";
+  process.env.JWT_SECRET ||= "fixed-test-jwt-secret-with-32-chars";
+});
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "@db/schema";

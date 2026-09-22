@@ -41,13 +41,15 @@ function createDb() {
   sqlite.pragma("foreign_keys = ON");
   sqlite.exec(`
     CREATE TABLE kb_documents (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, folderId INTEGER, title TEXT NOT NULL, content TEXT,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, folderId INTEGER REFERENCES kb_folders(id),
+      title TEXT NOT NULL, content TEXT,
       format TEXT NOT NULL DEFAULT 'markdown', tags TEXT, metadata TEXT, createdBy INTEGER,
       createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0,
       deletedAt INTEGER, deletedReason TEXT, mergedIntoId INTEGER
     );
     CREATE TABLE kb_folders (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, parentId INTEGER, icon TEXT,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+      parentId INTEGER REFERENCES kb_folders(id), icon TEXT,
       sortOrder INTEGER DEFAULT 0, createdBy INTEGER,
       createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
     );
@@ -77,7 +79,9 @@ function createDb() {
       createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE knowledge_edges (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, sourceId INTEGER NOT NULL, targetId INTEGER NOT NULL, label TEXT,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sourceId INTEGER NOT NULL REFERENCES knowledge_nodes(id),
+      targetId INTEGER NOT NULL REFERENCES knowledge_nodes(id), label TEXT,
       type TEXT NOT NULL DEFAULT 'related', weight REAL DEFAULT 1, createdBy INTEGER,
       createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
     );
@@ -194,5 +198,47 @@ describe("kb-router 删除路径必须走级联（图谱不能漏）", () => {
     const real = await caller().pruneGraphOrphans({ dryRun: false });
     expect(real).toMatchObject({ orphans: 1, prunedNodes: 1 });
     expect(db.select().from(schema.knowledgeNodes).all().map((n) => n.id)).not.toContain(ghostId);
+  });
+});
+
+describe("deleteFolder 失败路径：purge 有失败时不能 500，且要如实汇报", () => {
+  it("某篇文档清除失败 → 不抛错、success=false、purgeFailed 带出原因、文件夹保留（FK 不炸）", async () => {
+    const db = createDb();
+    vi.mocked(getDb).mockReturnValue(db as never);
+    const folder = db.insert(schema.kbFolders).values({ name: "f", createdAt: new Date(0), updatedAt: new Date(0) }).run() as unknown as { lastInsertRowid: number | bigint };
+    const folderId = Number(folder.lastInsertRowid);
+    const a = seedDoc(db, folderId, false);
+    const b = seedDoc(db, folderId, false);
+    // b 的向量删除失败 → 该篇 purge 抛错 → 文档行留在文件夹里
+    vi.mocked(vectorEngine.deleteByDocumentId).mockImplementation(async (id: string | number) => {
+      if (id === b) throw new Error("向量引擎挂了");
+      return 2;
+    });
+
+    const r = await caller().deleteFolder({ id: folderId });
+
+    expect(r.success).toBe(false);
+    expect(r.purgeFailed.map((f) => f.id)).toEqual([b]);
+    expect(r.foldersPreserved).toBe(true);
+    // 失败篇仍在、成功篇已清；文件夹保留（否则 kb_documents.folderId 外键会炸）
+    expect(db.select().from(schema.kbDocuments).all().map((d) => d.id)).toEqual([b]);
+    expect(db.select().from(schema.kbFolders).all().map((f) => f.id)).toEqual([folderId]);
+    expect(a).toBeGreaterThan(0);
+  });
+
+  it("四篇全成功时照旧删掉文件夹", async () => {
+    const db = createDb();
+    vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(vectorEngine.deleteByDocumentId).mockImplementation(async () => 2);
+    const folder = db.insert(schema.kbFolders).values({ name: "f2", createdAt: new Date(0), updatedAt: new Date(0) }).run() as unknown as { lastInsertRowid: number | bigint };
+    const folderId = Number(folder.lastInsertRowid);
+    seedDoc(db, folderId, false);
+
+    const r = await caller().deleteFolder({ id: folderId });
+
+    expect(r.success).toBe(true);
+    expect(r.foldersPreserved).toBe(false);
+    expect(db.select().from(schema.kbFolders).all()).toEqual([]);
+    expect(db.select().from(schema.kbDocuments).all()).toEqual([]);
   });
 });

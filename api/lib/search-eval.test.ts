@@ -214,7 +214,7 @@ describe("runEval（读库+检索+打分）", () => {
 });
 
 describe("runEval 端到端归因：兄弟混淆计数走通（不只纯函数对）", () => {
-  it("一条命中、一条命中同族兄弟 → siblingConfusionCount=1，reсall 口径不变", async () => {
+  it("一条命中、一条命中同族兄弟 → siblingConfusionCount=1，recall 口径不变", async () => {
     vi.mocked(getDb).mockReturnValue(fakeDbWithCases(
       [
         { id: 1, query: "命中的查询", expectedDocIds: "[11]", note: null },
@@ -248,5 +248,37 @@ describe("runEval 端到端归因：兄弟混淆计数走通（不只纯函数�
     expect(siblingCase?.recallAtK).toBe(0); // 口径不放松：兄弟命中不算命中
     expect(r.metrics.siblingConfusionCount).toBe(1);
     expect(r.metrics.meanRecallAtK).toBe(0.5);
+  });
+});
+
+describe("归因健壮性（审查 M4/M5）", () => {
+  it("取期望标题失败时降级：报告照出、missReason 全 other、recall 口径不受影响", async () => {
+    const fake = fakeDbWithCases([{ id: 1, query: "会命中", expectedDocIds: "[11]", note: null }]);
+    // kb_documents 的标题查询抛错（辅助查询失败不该毁整份报告）
+    fake.select = vi.fn(() => ({
+      from: vi.fn((table: unknown) => ({
+        orderBy: vi.fn(async () => (table === evalCasesTable ? [{ id: 1, query: "会命中", expectedDocIds: "[11]", note: null }] : [])),
+        where: vi.fn(async () => { throw new Error("kb_documents 查询炸了"); }),
+      })),
+    })) as never;
+    vi.mocked(getDb).mockReturnValue(fake as never);
+    searchMock.executeHybridSearch.mockResolvedValue({
+      results: [docResult(11)],
+      facets: { types: {}, tags: {}, folders: {} },
+      metadata: { mode: "hybrid", query: "会命中", limit: 5, total: 1, keywordResults: 1, vectorResults: 1, durationMs: 1, cached: false },
+    });
+
+    const r = await runEval();
+    expect(r.results).toHaveLength(1);
+    expect(r.results[0]?.missReason).toBe("none"); // 命中的仍判 none（不依赖标题）
+    expect(r.metrics.meanRecallAtK).toBe(1);
+    expect(r.metrics.siblingConfusionCount).toBe(0);
+  });
+
+  it("反例：不同日期的同名系列（每日晨报 [2026-09-01] / [2026-09-02]）不得判成同族兄弟", () => {
+    expect(classifyMissReason([1], [2], ["每日晨报 [2026-09-01]"], ["每日晨报 [2026-09-02]"])).toBe("other");
+    // 但开头连续的 [前缀] 仍应剥掉（评测集里 [openclaw][main] / [科目/不动产] 这类）
+    expect(normalizeDocTitle("[openclaw][main] 记忆增量 2026-09-18 14:32Z"))
+      .toBe(normalizeDocTitle("[openclaw][nvwa] 记忆增量 2026-09-18 14:32Z"));
   });
 });

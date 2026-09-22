@@ -433,7 +433,20 @@ export default function KnowledgeBase() {
       if (!node) return;
       if (id.startsWith('folder-')) {
         const fid = parseFolderId(id);
-        if (fid) await deleteFolder({ id: fid });
+        if (fid) {
+          const r = await deleteFolder({ id: fid });
+          // 部分失败不能假装成功：文档残留时后端会保留文件夹并回传 purgeFailed，
+          // 这里必须让用户看见，否则「已删除」的提示是假的（审查 M2）
+          if (r && r.success === false) {
+            const failedIds = (r.purgeFailed ?? []).map((f) => f.id).join(', ');
+            addToast({
+              type: 'warning',
+              title: '文件夹未完全删除',
+              description: `${r.purgeFailed?.length ?? 0} 篇文档未能清除（#${failedIds}），文件夹已保留，请重试或改走彻底删除`,
+            });
+            return;
+          }
+        }
       } else {
         const did = parseDocId(id);
         if (did) await deleteDocument({ id: did });

@@ -83,7 +83,7 @@ export default function SearchTestbed() {
   const [evalNote, setEvalNote] = useState('');
   const [evalReport, setEvalReport] = useState<{
     results: readonly EvalResultRow[];
-    metrics: { caseCount: number; meanRecallAtK: number; mrr: number; failedCount: number; siblingConfusionCount: number };
+    metrics: { caseCount: number; meanRecallAtK: number; mrr: number; failedCount: number; siblingConfusionCount?: number };
     durationMs: number;
   } | null>(null);
   const [message, setMessage] = useState('');
@@ -339,11 +339,11 @@ export default function SearchTestbed() {
                 </div>
                 <div className="p-2 rounded text-center" style={{ background: 'var(--bg-secondary)' }}>
                   <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>同族兄弟混淆</div>
-                  <div className="text-lg font-bold" style={{ color: evalReport.metrics.siblingConfusionCount > 0 ? '#22d3ee' : 'var(--text-primary)' }}>
-                    {evalReport.metrics.siblingConfusionCount}
+                  <div className="text-lg font-bold" style={{ color: (evalReport.metrics.siblingConfusionCount ?? 0) > 0 ? '#22d3ee' : 'var(--text-primary)' }}>
+                    {(evalReport.metrics.siblingConfusionCount ?? 0) || (evalReport.metrics.siblingConfusionCount === undefined ? '—' : evalReport.metrics.siblingConfusionCount)}
                   </div>
                   <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                    {evalReport.metrics.siblingConfusionCount > 0 ? '未命中但命中了近重复同族' : '无近重复干扰'}
+                    {evalReport.metrics.siblingConfusionCount === undefined ? '旧版本无此字段' : evalReport.metrics.siblingConfusionCount > 0 ? '未命中但命中了近重复同族' : '无近重复干扰'}
                   </div>
                 </div>
                 <div className="p-2 rounded text-center" style={{ background: 'var(--bg-secondary)' }}>

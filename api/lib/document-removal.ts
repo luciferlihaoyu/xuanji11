@@ -261,6 +261,13 @@ export async function deleteDocumentCascade(
     return { deletedChunks, deletedEdges, deletedNodes, deletedVersions, deletedIngestionKeys };
   });
 
+  // 3f) 事务提交后再失效一次缓存：删除前的失效挡不住「提交前插入的并发搜索把旧结果写回缓存」
+  // （invalidateSearchCache 只是 map.clear()，双调零成本；60s TTL 内不再返回已删文档）
+  try {
+    const { invalidateSearchCache } = await import("./hybrid-search");
+    invalidateSearchCache();
+  } catch { /* 同上：best-effort，最坏 60s 陈旧 */ }
+
   return {
     deletedChunks: result.deletedChunks,
     deletedVersions: result.deletedVersions,
