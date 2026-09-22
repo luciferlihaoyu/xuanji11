@@ -14,7 +14,8 @@
  * 与 BEGIN 混用风险），且向量引擎自己 rollback 不会污染 SQL 事务。
  * 分两步执行让两边各管各的失败语义。
  *
- * 测试覆盖：MCP 集成层跑，单测不做（不在本文件加自检）。
+ * 测试覆盖：deleteDocumentCascade / previewDocumentDeletion / purgeDocumentsCascade 均在
+ * document-removal.test.ts 用真实内存 SQLite 兜回归；MCP 集成层另有一层。
  */
 import { eq, and, inArray, or, sql, count } from "drizzle-orm";
 import { kbDocuments, documentChunks, knowledgeNodes, knowledgeEdges } from "@db/schema";
@@ -112,6 +113,54 @@ export async function previewDocumentDeletion(
  * @returns 各表实际删除行数
  * @throws 文档不存在时抛 `Error("Document not found: <id>")`
  */
+export interface PurgeManyResult {
+  /** 成功彻底删除的文档数 */
+  readonly purged: number;
+  /** 未能删除的文档（不存在或抛错），逐条如实汇报，绝不静默吞掉 */
+  readonly failed: ReadonlyArray<{ id: number; error: string }>;
+  readonly deletedChunks: number;
+  readonly deletedVectors: number;
+  readonly deletedNodes: number;
+  readonly deletedEdges: number;
+}
+
+/**
+ * 批量彻底删除：**逐篇**走 `deleteDocumentCascade`（单一实现，避免各调用点各写一套漏清）。
+ *
+ * 为什么需要它：控制台的「彻底删除」与「文件夹删除」此前只清向量/chunks/FTS，漏了图谱节点与边，
+ * 每次这类删除都留下孤儿（线上 2026-09-22 巡检到的 `graph_orphans` 即此来源）。
+ *
+ * 语义：单篇失败不中断其余（文件夹删除不能因为一篇异常就半途而废），
+ * 但失败必须如实回报在 `failed` 里——调用方据此决定是否提示用户，不允许假装全部成功。
+ */
+export async function purgeDocumentsCascade(
+  db: ReturnType<typeof getDb>,
+  vectorEngineArg: typeof vectorEngine,
+  ids: readonly number[],
+): Promise<PurgeManyResult> {
+  const failed: Array<{ id: number; error: string }> = [];
+  let purged = 0;
+  let deletedChunks = 0;
+  let deletedVectors = 0;
+  let deletedNodes = 0;
+  let deletedEdges = 0;
+
+  for (const id of ids) {
+    try {
+      const r = await deleteDocumentCascade(db, vectorEngineArg, id);
+      purged += 1;
+      deletedChunks += r.deletedChunks;
+      deletedVectors += r.deletedVectors;
+      deletedNodes += r.deletedNodes;
+      deletedEdges += r.deletedEdges;
+    } catch (err) {
+      failed.push({ id, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  return { purged, failed, deletedChunks, deletedVectors, deletedNodes, deletedEdges };
+}
+
 export async function deleteDocumentCascade(
   db: ReturnType<typeof getDb>,
   vectorEngineArg: typeof vectorEngine,
@@ -122,6 +171,13 @@ export async function deleteDocumentCascade(
   if (existing.length === 0) {
     throw new Error(`Document not found: ${id}`);
   }
+
+  // 1b) 搜索缓存失效：混合检索结果有 60s 缓存，删除后必须立刻失效，否则会短期返回已删文档
+  // （此前只在 kb-router 的两处入口手动调用，MCP document_delete 路径漏了；收进级联做单一出口）
+  try {
+    const { invalidateSearchCache } = await import("./hybrid-search");
+    invalidateSearchCache();
+  } catch { /* 缓存失效失败不阻塞删除主流程（最坏情况是 60s 内返回旧结果） */ }
 
   // 2) 先删向量（内部事务；按 rowid 精确清，幂等）
   const deletedVectors = await vectorEngineArg.deleteByDocumentId(id);

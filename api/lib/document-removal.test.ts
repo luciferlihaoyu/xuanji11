@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "@db/schema";
 import * as relations from "@db/relations";
-import { deleteDocumentCascade, previewDocumentDeletion } from "./document-removal";
+import { deleteDocumentCascade, previewDocumentDeletion, purgeDocumentsCascade } from "./document-removal";
 
 /**
  * document-removal 真实级联删除单测（内存 SQLite，真 drizzle 事务路径）。
@@ -175,6 +175,47 @@ describe("deleteDocumentCascade", () => {
     expect(r.deletedEdges).toBe(0);
     expect(r.deletedChunks).toBe(2);
     expect(db.select().from(schema.kbDocuments).all()).toHaveLength(0);
+  });
+});
+
+describe("purgeDocumentsCascade（多条一次性彻底删除：文件夹删除 / 批量彻底删除共用）", () => {
+  beforeEach(() => {
+    vi.mocked(vectorEngine.deleteByDocumentId).mockClear();
+    vi.mocked(vectorEngine.deleteByDocumentId).mockResolvedValue(2);
+  });
+
+  it("逐篇走级联：chunks 与图谱节点/边全部清干净，计数如实汇总", async () => {
+    const db = createDb();
+    const a = seedDocument(db, true);
+    const b = seedDocument(db, true);
+    const keep = seedDocument(db, true);
+
+    const r = await purgeDocumentsCascade(db, vectorEngine as never, [a, b]);
+
+    expect(r.purged).toBe(2);
+    expect(r.failed).toEqual([]);
+    expect(r.deletedChunks).toBe(4);
+    expect(r.deletedNodes).toBe(2);
+    expect(r.deletedEdges).toBe(4);
+    const docIds = db.select().from(schema.kbDocuments).all().map((d) => d.id);
+    expect(docIds).toEqual([keep]);
+    const orphanChunks = db.select().from(schema.documentChunks).all().filter((c) => c.documentId === a || c.documentId === b);
+    expect(orphanChunks).toEqual([]);
+    // 保留篇的图谱节点与边仍在（不能误删别的文档的图谱）
+    const nodeTitles = db.select().from(schema.knowledgeNodes).all().map((n) => n.title);
+    expect(nodeTitles).toContain("t");
+  });
+
+  it("其中一篇不存在时不中断其余：如实报 failed，不谎报 purged", async () => {
+    const db = createDb();
+    const a = seedDocument(db, false);
+
+    const r = await purgeDocumentsCascade(db, vectorEngine as never, [a, 999999]);
+
+    expect(r.purged).toBe(1);
+    expect(r.failed).toHaveLength(1);
+    expect(r.failed[0]!.id).toBe(999999);
+    expect(String(r.failed[0]!.error)).toContain("999999");
   });
 });
 

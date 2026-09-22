@@ -9,6 +9,7 @@ import { logAudit, logAction } from "./lib/audit";
 import { vectorEngine } from "./lib/vector";
 import { indexDocumentById, tryIndexDocumentById, startReindexAll, getReindexProgress } from "./lib/document-indexer";
 import { collectDescendantFolderIds } from "./lib/kb-tree";
+import { deleteDocumentCascade, purgeDocumentsCascade } from "./lib/document-removal";
 
 async function deleteDocumentVectors(documentId: number): Promise<void> {
   void import("./lib/hybrid-search").then((m) => m.invalidateSearchCache());
@@ -113,18 +114,19 @@ export const kbRouter = createRouter({
       const descendantIds = collectDescendantFolderIds(allFolders, input.id);
       const targetFolderIds = [input.id, ...descendantIds];
 
+      // 统一走级联删除（此前这里只清向量/chunks/FTS，漏掉图谱节点与边 → 每次删文件夹都留孤儿）
+      let purgeFailed: Array<{ id: number; error: string }> = [];
       for (const folderId of targetFolderIds) {
         const docs = await db.select({ id: kbDocuments.id }).from(kbDocuments)
           .where(eq(kbDocuments.folderId, folderId));
-        for (const doc of docs) {
-          await deleteDocumentVectors(doc.id);
-        }
-        await db.delete(kbDocuments).where(eq(kbDocuments.folderId, folderId));
+        const r = await purgeDocumentsCascade(db, vectorEngine, docs.map((d) => d.id));
+        purgeFailed = purgeFailed.concat(r.failed);
       }
       // 先删子孙再删根（id 集合含全部层级，一次 in 条件删除）
       await db.delete(kbFolders).where(inArray(kbFolders.id, targetFolderIds));
-      await logAudit(ctx, "kb_folder", "delete", input.id, { ...input, removedFolderCount: targetFolderIds.length } as Record<string, unknown>);
-      return { success: true, removedFolderCount: targetFolderIds.length };
+      await logAudit(ctx, "kb_folder", "delete", input.id, { ...input, removedFolderCount: targetFolderIds.length, purgeFailed } as Record<string, unknown>);
+      // 有文档没能删掉就如实带出来（不假装全部清干净）
+      return { success: purgeFailed.length === 0, removedFolderCount: targetFolderIds.length, purgeFailed };
     }),
 
   listDocuments: authedQuery
@@ -456,11 +458,11 @@ export const kbRouter = createRouter({
   purgeDocument: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
-      await deleteDocumentVectors(input.id);
+      // 统一走级联（此前只清向量/chunks/FTS，漏图谱节点与边 → 留下 graph_orphans）
       const db = getDb();
-      await db.delete(kbDocuments).where(eq(kbDocuments.id, input.id));
-      await logAudit(ctx, "kb_document", "delete", input.id, { action: "purge" });
-      return { success: true };
+      const r = await deleteDocumentCascade(db, vectorEngine, input.id);
+      await logAudit(ctx, "kb_document", "delete", input.id, { action: "purge", ...r } as Record<string, unknown>);
+      return { success: true, ...r };
     }),
 
   /** 版本历史列表（不含正文，省流量） */
@@ -564,6 +566,21 @@ export const kbRouter = createRouter({
       const result = pruneFtsOrphans({ dryRun: input?.dryRun ?? false });
       if (!input?.dryRun && result.pruned > 0) {
         await logAudit(ctx, "kb_fts", "delete", 0, { orphans: result.orphans, pruned: result.pruned } as Record<string, unknown>);
+      }
+      return result;
+    }),
+
+  /**
+   * 清理图谱孤儿（document 节点指向已删文档）。巡检只报不改，这里是显式维护动作。
+   * dryRun 只报数（沿用破坏性操作的 dryRun 约定）。
+   */
+  pruneGraphOrphans: adminQuery
+    .input(z.object({ dryRun: z.boolean().default(false) }).optional())
+    .mutation(async ({ input, ctx }) => {
+      const { pruneGraphOrphans } = await import("./lib/graph-maintenance");
+      const result = pruneGraphOrphans({ dryRun: input?.dryRun ?? false });
+      if (!input?.dryRun && result.prunedNodes > 0) {
+        await logAudit(ctx, "kb_graph", "delete", 0, { ...result } as Record<string, unknown>);
       }
       return result;
     }),
