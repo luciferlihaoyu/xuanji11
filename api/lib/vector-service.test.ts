@@ -316,3 +316,14 @@ describe("vector model template management", () => {
     expect(mockStore["embedding_dimension"]).toBe("2048");
   });
 });
+
+describe("hash 兜底必须留下可识别身份（线上实测：静默 hash 向量被当成已索引）", () => {
+  it("兜底写入会把模型身份标成 __hash_fallback__，而不是沿用真实模型", async () => {
+    const { hashFallbackEmbeddings, getLastEmbeddingIdentity, HASH_FALLBACK_MODEL } = await import("./vector-service");
+    const vecs = hashFallbackEmbeddings(["土地管理法规定土地使用权可以依法转让", "不动产登记暂行条例"], 8);
+    expect(vecs).toHaveLength(2);
+    expect(vecs[0]).toHaveLength(8);
+    expect(HASH_FALLBACK_MODEL).toBe("__hash_fallback__");
+    expect(getLastEmbeddingIdentity()).toEqual({ model: HASH_FALLBACK_MODEL, dimension: 8 });
+  });
+});

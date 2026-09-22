@@ -412,8 +412,21 @@ async function embedWithFallback(texts: string[]): Promise<number[][]> {
   // 保证与 vec0 表维度一致、能真正写入——embedding API 不可用时检索仍可用
   // （hash 相似度，语义质量低于真实 embedding，但不会 0 向量）。
   const first = candidates.find((c) => c.dimension > 0);
-  const fallbackDim = first?.dimension ?? 64;
-  return texts.map((t) => simpleTextHash(t, fallbackDim));
+  return hashFallbackEmbeddings(texts, first?.dimension ?? 64);
+}
+
+/** 兜底向量写入向量表时使用的模型身份标记。**必须能一眼认出来**，否则
+ * 「嵌入服务不可用 → 静默写入无语义的 hash 向量」会被误当成已正常索引
+ * （2026-09-21 线上实测：回填两分钟写了 550+ 篇 hash 向量，检索质量归零而 failed=0 无任何异常）。 */
+export const HASH_FALLBACK_MODEL = "__hash_fallback__";
+
+/**
+ * hash 兜底：生成与目标维度一致的伪向量，并把模型身份标成 HASH_FALLBACK_MODEL。
+ * 这样巡检的「模型版本漂移」能直接点名哪些向量是兜底产物，调用方可据此重建。
+ */
+export function hashFallbackEmbeddings(texts: string[], dim: number): number[][] {
+  lastEmbeddingIdentity = { model: HASH_FALLBACK_MODEL, dimension: dim };
+  return texts.map((t) => simpleTextHash(t, dim));
 }
 
 /**

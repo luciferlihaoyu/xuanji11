@@ -9,6 +9,8 @@ vi.mock("./vector-service", () => ({
   embedTexts: vi.fn(async (texts: string[]) => texts.map(() => Array.from({ length: 8 }, () => 0.1))),
 }));
 
+import { indexDocumentById } from './document-indexer';
+vi.mock("./document-indexer", () => ({ indexDocumentById: vi.fn() }));
 vi.mock("./hybrid-search", () => ({
   executeHybridSearch: vi.fn(async () => ({
     results: [
@@ -132,5 +134,25 @@ describe("落库型执行器（mock DB）", () => {
     const out = await executeNode("save-result", { targetFolderId: 3, title: "结果" }, CTX);
     expect(out.saved).toBe(true);
     expect(out.documentId).toBe(77);
+  });
+
+  it("save-result 落盘后必须走索引：否则每天新增「有内容但未索引」的报告文档（线上巡检天天报红）", async () => {
+    const db = fakeDbForInsert(66);
+    vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(indexDocumentById).mockResolvedValueOnce({ chunks: 3, skipped: false } as never);
+    const out = await executeNode("save-result", { content: "巡检结果", title: "每日索引巡检报告" }, CTX);
+    expect(indexDocumentById).toHaveBeenCalledWith(66);
+    expect(out.indexed).toBe(true);
+    expect(out.chunks).toBe(3);
+  });
+
+  it("索引失败不能让工作流失败，但要如实标注未索引", async () => {
+    const db = fakeDbForInsert(67);
+    vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(indexDocumentById).mockRejectedValueOnce(new Error("嵌入服务 503"));
+    const out = await executeNode("save-result", { content: "x", title: "报告" }, CTX);
+    expect(out.saved).toBe(true);
+    expect(out.indexed).toBe(false);
+    expect(String(out.indexError)).toContain("503");
   });
 });

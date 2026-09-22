@@ -121,7 +121,19 @@ const nodeExecutors: Record<string, NodeExecutor> = {
       tags: ['workflow'],
       metadata: { source: 'workflow' },
     });
-    return { saved: true, documentId: Number(result.lastInsertRowid), title };
+    const documentId = Number(result.lastInsertRowid);
+    // 必须走索引：直接插库会产生「有内容但未索引」的文档，检索不到且每日巡检持续报红
+    // （线上实证：巡检/建边/去重/聚类四类报告每天新增 2 篇，长期累积）。
+    // 索引失败不阻断工作流（报告本身已落盘有价值），但要如实标注，别假装成功。
+    try {
+      const { indexDocumentById } = await import('./document-indexer');
+      const indexed = await indexDocumentById(documentId);
+      return { saved: true, documentId, title, indexed: true, chunks: indexed.chunks };
+    } catch (err) {
+      const indexError = err instanceof Error ? err.message : String(err);
+      console.warn(`[WorkflowRuntime] save-result 已落盘但索引失败 documentId=${documentId}: ${indexError}`);
+      return { saved: true, documentId, title, indexed: false, indexError };
+    }
   },
 
   'text-extract': async (config) => {
