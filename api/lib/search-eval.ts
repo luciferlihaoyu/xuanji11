@@ -6,8 +6,11 @@
  */
 import { desc } from "drizzle-orm";
 import { getDb } from "../queries/connection";
-import { kbEvalCases } from "@db/schema";
+import { inArray } from "drizzle-orm";
+import { kbDocuments, kbEvalCases } from "@db/schema";
 import { executeHybridSearch } from "./hybrid-search";
+
+export type MissReason = "none" | "sibling" | "other";
 
 export interface EvalCaseResult {
   readonly caseId: number;
@@ -20,6 +23,16 @@ export interface EvalCaseResult {
   readonly reciprocalRank: number;
   /** 该条检索失败时的错误摘要（仅失败项存在；失败项不计入指标） */
   readonly error?: string;
+  /**
+   * 未命中原因归类（只做解释，**不改变 recall/MRR 口径**）：
+   * - `none`：期望文档已命中
+   * - `sibling`：没命中期望文档，但命中的是它的「同族兄弟」——
+   *   标题归一后相同（剥掉 `[前缀]` 与 `（第N部分/共M部分）`），典型如
+   *   「完整错题库解析 (第4部分/共5部分)」查询命中「(第1部分/共5部分)」。
+   *   向量空间对这类近重复天然分不开，属于用例本身的可分性上限，不是检索坏了。
+   * - `other`：命中与期望无关，或根本没有命中
+   */
+  readonly missReason?: MissReason;
 }
 
 export interface EvalMetrics {
@@ -29,6 +42,12 @@ export interface EvalMetrics {
   readonly mrr: number;
   /** 检索失败的用例数 */
   readonly failedCount: number;
+  /**
+   * 未命中里「命中同族兄弟文档」的用例数。
+   * 用于解释低 recall 的性质：向量指标低但全是 sibling → 用例是近重复分辨题（可分性上限），
+   * 不是检索链路坏了；若 sibling=0 还低 → 才需要查嵌入/链路。
+   */
+  readonly siblingConfusionCount: number;
 }
 
 export interface RunEvalOptions {
@@ -41,6 +60,44 @@ export interface RunEvalReport {
   readonly results: readonly EvalCaseResult[];
   readonly metrics: EvalMetrics;
   readonly durationMs: number;
+}
+
+/** 同族兄弟判定用的标题归一：剥掉 [前缀] 与 （第N部分/共M部分）等分册标记后小写 */
+export function normalizeDocTitle(title: string): string {
+  return title
+    .replace(/\[[^\]]*\]/g, " ")
+    .replace(/[（(]\s*第\s*\d+\s*部分[^)）]*[)）]/g, " ")
+    .replace(/[（(]\s*part\s*\d+[^)）]*[)）]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/** 标题归一后长度低于此值不参与兄弟判定（避免 "(第1部分)" 这种剥完只剩空串的误判） */
+const MIN_SIBLING_TITLE_LEN = 4;
+
+/**
+ * 未命中原因归类（纯函数）。
+ * 保守原则：期望标题缺失、命中原标题与期望归一后不等 → 一律 `other`，宁可漏判不可错判。
+ */
+export function classifyMissReason(
+  expectedDocIds: readonly number[],
+  hitDocIds: readonly number[],
+  expectedTitles: readonly string[],
+  hitTitles: readonly string[],
+): "none" | "sibling" | "other" {
+  const expected = new Set(expectedDocIds);
+  if (hitDocIds.some((id) => expected.has(id))) return "none";
+  if (hitDocIds.length === 0) return "other";
+  const expectedNorms = new Set(
+    expectedTitles.map(normalizeDocTitle).filter((t) => t.length >= MIN_SIBLING_TITLE_LEN),
+  );
+  if (expectedNorms.size === 0) return "other";
+  for (const title of hitTitles) {
+    const n = normalizeDocTitle(title);
+    if (n.length >= MIN_SIBLING_TITLE_LEN && expectedNorms.has(n)) return "sibling";
+  }
+  return "other";
 }
 
 function round3(n: number): number {
@@ -76,7 +133,8 @@ export function evaluateSingleCase(
 export function computeEvalMetrics(cases: readonly EvalCaseResult[]): EvalMetrics {
   const scored = cases.filter((c) => !c.error);
   const failedCount = cases.length - scored.length;
-  if (scored.length === 0) return { caseCount: 0, meanRecallAtK: 0, mrr: 0, failedCount };
+  const siblingConfusionCount = scored.filter((c) => c.missReason === "sibling").length;
+  if (scored.length === 0) return { caseCount: 0, meanRecallAtK: 0, mrr: 0, failedCount, siblingConfusionCount: 0 };
   const meanRecall = scored.reduce((s, c) => s + c.recallAtK, 0) / scored.length;
   const mrr = scored.reduce((s, c) => s + c.reciprocalRank, 0) / scored.length;
   return {
@@ -84,6 +142,7 @@ export function computeEvalMetrics(cases: readonly EvalCaseResult[]): EvalMetric
     meanRecallAtK: round3(meanRecall),
     mrr: round3(mrr),
     failedCount,
+    siblingConfusionCount,
   };
 }
 
@@ -108,15 +167,36 @@ export async function runEval(opts: RunEvalOptions = {}): Promise<RunEvalReport>
   const db = getDb();
   const rows = await db.select().from(kbEvalCases).orderBy(desc(kbEvalCases.createdAt));
 
+  // 期望文档标题（用于兄弟混淆归因）：一次查完所有用例的期望 id，避免逐条查库
+  const allExpectedIds = [...new Set(rows.flatMap((row) => parseExpectedDocIds(row.expectedDocIds)))];
+  const titleById = new Map<number, string>();
+  if (allExpectedIds.length > 0) {
+    const titleRows = await db
+      .select({ id: kbDocuments.id, title: kbDocuments.title })
+      .from(kbDocuments)
+      .where(inArray(kbDocuments.id, allExpectedIds));
+    for (const r of titleRows) titleById.set(r.id, r.title);
+  }
+
   const results: EvalCaseResult[] = [];
   for (const row of rows) {
     try {
       const search = await executeHybridSearch({ query: row.query, mode, limit: topK, rerank });
-      const hitDocIds = search.results
-        .filter((r) => r.type === "document")
+      const docHits = search.results.filter((r) => r.type === "document");
+      const hitDocIds = docHits
         .map((r) => Number(r.id))
         .filter((n) => Number.isFinite(n));
-      results.push(evaluateSingleCase(row.id, row.query, parseExpectedDocIds(row.expectedDocIds), hitDocIds));
+      const expectedDocIds = parseExpectedDocIds(row.expectedDocIds);
+      const missReason = classifyMissReason(
+        expectedDocIds,
+        hitDocIds,
+        expectedDocIds.map((id) => titleById.get(id) ?? "").filter((t) => t.length > 0),
+        docHits.map((r) => r.title ?? ""),
+      );
+      results.push({
+        ...evaluateSingleCase(row.id, row.query, expectedDocIds, hitDocIds),
+        missReason,
+      });
     } catch (e) {
       // 单条失败（嵌入服务抖动、超时等）不该让整份评测报告消失
       results.push({

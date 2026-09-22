@@ -30,6 +30,12 @@ interface EvalResultRow {
   recallAtK: number;
   reciprocalRank: number;
   error?: string;
+  /**
+   * 未命中原因：sibling = 命中的是期望文档的同族兄弟（标题归一后相同，
+   * 如「完整错题库解析 (第4部分/共5部分)」vs「(第1部分/共5部分)」）。
+   * 近重复文档在向量空间天然分不开，属用例可分性上限，不是检索坏了。
+   */
+  missReason?: 'none' | 'sibling' | 'other';
 }
 
 function parseExpected(raw: string): number[] {
@@ -77,7 +83,7 @@ export default function SearchTestbed() {
   const [evalNote, setEvalNote] = useState('');
   const [evalReport, setEvalReport] = useState<{
     results: readonly EvalResultRow[];
-    metrics: { caseCount: number; meanRecallAtK: number; mrr: number; failedCount: number };
+    metrics: { caseCount: number; meanRecallAtK: number; mrr: number; failedCount: number; siblingConfusionCount: number };
     durationMs: number;
   } | null>(null);
   const [message, setMessage] = useState('');
@@ -322,7 +328,7 @@ export default function SearchTestbed() {
           )}
           {evalReport && (
             <>
-              <div className="grid grid-cols-3 gap-2 mb-3">
+              <div className="grid grid-cols-4 gap-2 mb-3">
                 <div className="p-2 rounded text-center" style={{ background: 'var(--bg-secondary)' }}>
                   <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>mean recall@{topK}</div>
                   <div className="text-lg font-bold text-cyan-400">{evalReport.metrics.meanRecallAtK}</div>
@@ -330,6 +336,15 @@ export default function SearchTestbed() {
                 <div className="p-2 rounded text-center" style={{ background: 'var(--bg-secondary)' }}>
                   <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>MRR</div>
                   <div className="text-lg font-bold text-violet-400">{evalReport.metrics.mrr}</div>
+                </div>
+                <div className="p-2 rounded text-center" style={{ background: 'var(--bg-secondary)' }}>
+                  <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>同族兄弟混淆</div>
+                  <div className="text-lg font-bold" style={{ color: evalReport.metrics.siblingConfusionCount > 0 ? '#22d3ee' : 'var(--text-primary)' }}>
+                    {evalReport.metrics.siblingConfusionCount}
+                  </div>
+                  <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    {evalReport.metrics.siblingConfusionCount > 0 ? '未命中但命中了近重复同族' : '无近重复干扰'}
+                  </div>
                 </div>
                 <div className="p-2 rounded text-center" style={{ background: 'var(--bg-secondary)' }}>
                   <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>用例 / 耗时</div>
@@ -350,8 +365,10 @@ export default function SearchTestbed() {
                     <div key={r.caseId} className="flex items-center gap-2 text-xs px-2 py-1 rounded" style={{ background: 'var(--bg-secondary)' }}>
                       {failed ? <AlertTriangle size={13} className="text-rose-400 shrink-0" /> : good ? <CheckCircle2 size={13} className="text-emerald-400 shrink-0" /> : bad ? <XCircle size={13} className="text-rose-400 shrink-0" /> : <span className="shrink-0 w-[13px] text-center" style={{ color: 'var(--text-muted)' }}>◐</span>}
                       <span className="flex-1 min-w-0 truncate" style={{ color: 'var(--text-primary)' }}>{r.query}</span>
-                      <span className="font-mono shrink-0" style={{ color: 'var(--text-muted)' }}>
-                        {failed ? `检索失败：${r.error}` : `recall ${r.recallAtK} · rr ${r.reciprocalRank} · 命中 [${r.hitDocIds.join(', ')}]`}
+                      <span className="font-mono shrink-0" style={{ color: r.missReason === 'sibling' ? '#22d3ee' : 'var(--text-muted)' }}>
+                        {failed
+                          ? `检索失败：${r.error}`
+                          : `recall ${r.recallAtK} · rr ${r.reciprocalRank} · 命中 [${r.hitDocIds.join(', ')}]${r.missReason === 'sibling' ? ' · 同族兄弟（近重复，可分性上限）' : ''}`}
                       </span>
                     </div>
                   );

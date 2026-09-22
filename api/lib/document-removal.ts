@@ -18,7 +18,7 @@
  * document-removal.test.ts 用真实内存 SQLite 兜回归；MCP 集成层另有一层。
  */
 import { eq, and, inArray, or, sql, count } from "drizzle-orm";
-import { kbDocuments, documentChunks, knowledgeNodes, knowledgeEdges } from "@db/schema";
+import { kbDocuments, documentChunks, kbDocumentVersions, kbIngestionKeys, knowledgeNodes, knowledgeEdges } from "@db/schema";
 import { getDb } from "../queries/connection";
 import { vectorEngine } from "./vector";
 
@@ -27,6 +27,10 @@ export interface DocumentRemovalResult {
   deletedVectors: number;
   deletedNodes: number;
   deletedEdges: number;
+  /** 版本历史行数（kb_document_versions.documentId → kb_documents 有外键，不清就 FK 违反） */
+  deletedVersions: number;
+  /** 入库幂等键行数（kb_ingestion_keys.documentId → kb_documents 有外键） */
+  deletedIngestionKeys: number;
 }
 
 /** 破坏性操作 dryRun 的预览结果：只报数，不代表已执行 */
@@ -122,6 +126,8 @@ export interface PurgeManyResult {
   readonly deletedVectors: number;
   readonly deletedNodes: number;
   readonly deletedEdges: number;
+  readonly deletedVersions: number;
+  readonly deletedIngestionKeys: number;
 }
 
 /**
@@ -144,6 +150,8 @@ export async function purgeDocumentsCascade(
   let deletedVectors = 0;
   let deletedNodes = 0;
   let deletedEdges = 0;
+  let deletedVersions = 0;
+  let deletedIngestionKeys = 0;
 
   for (const id of ids) {
     try {
@@ -153,12 +161,14 @@ export async function purgeDocumentsCascade(
       deletedVectors += r.deletedVectors;
       deletedNodes += r.deletedNodes;
       deletedEdges += r.deletedEdges;
+      deletedVersions += r.deletedVersions;
+      deletedIngestionKeys += r.deletedIngestionKeys;
     } catch (err) {
       failed.push({ id, error: err instanceof Error ? err.message : String(err) });
     }
   }
 
-  return { purged, failed, deletedChunks, deletedVectors, deletedNodes, deletedEdges };
+  return { purged, failed, deletedChunks, deletedVectors, deletedNodes, deletedEdges, deletedVersions, deletedIngestionKeys };
 }
 
 export async function deleteDocumentCascade(
@@ -236,14 +246,24 @@ export async function deleteDocumentCascade(
       deletedNodes = Number((nodesResult as { changes?: number }).changes ?? 0);
     }
 
-    // 3d) 最后删文档行
+    // 3d) 指向本文档的子表行必须先清（线上真库有外键约束）：
+    //     kb_document_versions.documentId、kb_ingestion_keys.documentId → kb_documents(id)。
+    //     漏清就抛 "FOREIGN KEY constraint failed"（线上 2026-09-22 实测 500，被探针抓到）。
+    const versionsResult = tx.delete(kbDocumentVersions).where(eq(kbDocumentVersions.documentId, id)).run();
+    const deletedVersions = Number((versionsResult as { changes?: number }).changes ?? 0);
+    const ingestResult = tx.delete(kbIngestionKeys).where(eq(kbIngestionKeys.documentId, id)).run();
+    const deletedIngestionKeys = Number((ingestResult as { changes?: number }).changes ?? 0);
+
+    // 3e) 最后删文档行
     tx.delete(kbDocuments).where(eq(kbDocuments.id, id)).run();
 
-    return { deletedChunks, deletedEdges, deletedNodes };
+    return { deletedChunks, deletedEdges, deletedNodes, deletedVersions, deletedIngestionKeys };
   });
 
   return {
     deletedChunks: result.deletedChunks,
+    deletedVersions: result.deletedVersions,
+    deletedIngestionKeys: result.deletedIngestionKeys,
     deletedVectors,
     deletedNodes: result.deletedNodes,
     deletedEdges: result.deletedEdges,

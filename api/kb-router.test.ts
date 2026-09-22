@@ -37,6 +37,8 @@ import { vectorEngine } from "./lib/vector";
  */
 function createDb() {
   const sqlite = new Database(":memory:");
+  // 线上真库的三条外键（PRAGMA foreign_key_list 实测），单测带上才拦得住 FK 违反类 bug
+  sqlite.pragma("foreign_keys = ON");
   sqlite.exec(`
     CREATE TABLE kb_documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT, folderId INTEGER, title TEXT NOT NULL, content TEXT,
@@ -50,8 +52,14 @@ function createDb() {
       createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE kb_document_versions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, documentId INTEGER NOT NULL, versionNumber INTEGER NOT NULL,
-      title TEXT NOT NULL, content TEXT, format TEXT, tags TEXT, metadata TEXT, changeNote TEXT, createdBy INTEGER,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, documentId INTEGER NOT NULL REFERENCES kb_documents(id),
+      versionNumber INTEGER NOT NULL, title TEXT NOT NULL, content TEXT, format TEXT, tags TEXT,
+      contentHash TEXT, source TEXT, changedBy INTEGER, changeReason TEXT,
+      createdAt INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE kb_ingestion_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, documentId INTEGER NOT NULL REFERENCES kb_documents(id),
+      idempotencyKey TEXT, source TEXT, externalId TEXT, contentHash TEXT,
       createdAt INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE kb_search_events (
@@ -59,7 +67,7 @@ function createDb() {
       durationMs INTEGER, userId INTEGER, createdAt INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE document_chunks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, documentId INTEGER NOT NULL, itemId INTEGER, content TEXT NOT NULL,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, documentId INTEGER NOT NULL REFERENCES kb_documents(id), itemId INTEGER, content TEXT NOT NULL,
       chunkIndex INTEGER NOT NULL DEFAULT 0, embedding TEXT, embeddingModel TEXT, metadata TEXT,
       createdAt INTEGER NOT NULL DEFAULT 0
     );

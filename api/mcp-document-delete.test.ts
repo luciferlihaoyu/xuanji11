@@ -106,6 +106,8 @@ describe("MCP document_delete", () => {
       deletedVectors: 3,
       deletedNodes: 1,
       deletedEdges: 2,
+      deletedVersions: 0,
+      deletedIngestionKeys: 0,
     });
 
     const res = await handleMcpRequest(
@@ -130,6 +132,8 @@ describe("MCP document_delete", () => {
         deletedVectors: 3,
         deletedNodes: 1,
         deletedEdges: 2,
+        deletedVersions: 0,
+        deletedIngestionKeys: 0,
       });
     }
     expect(deleteDocumentCascade).toHaveBeenCalled();

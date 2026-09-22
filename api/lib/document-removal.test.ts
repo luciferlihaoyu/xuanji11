@@ -22,6 +22,10 @@ import { vectorEngine } from "./vector";
 
 function createDb() {
   const sqlite = new Database(":memory:");
+  // 线上真库存在三条指向 kb_documents 的外键（PRAGMA foreign_key_list 实测）：
+  //   document_chunks / kb_document_versions / kb_ingestion_keys
+  // 手写 DDL 若不带外键，FK 违反类 bug（删除时漏清子表）在单测里看不见——线上就踩过一次 500。
+  sqlite.pragma("foreign_keys = ON");
   sqlite.exec(`
     CREATE TABLE kb_documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,9 +43,24 @@ function createDb() {
       deletedReason TEXT,
       mergedIntoId INTEGER
     );
+    CREATE TABLE kb_document_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      documentId INTEGER NOT NULL REFERENCES kb_documents(id),
+      versionNumber INTEGER NOT NULL DEFAULT 1,
+      title TEXT NOT NULL DEFAULT '',
+      content TEXT, format TEXT, tags TEXT, contentHash TEXT, source TEXT, changedBy INTEGER,
+      changeReason TEXT,
+      createdAt INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE kb_ingestion_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      documentId INTEGER NOT NULL REFERENCES kb_documents(id),
+      idempotencyKey TEXT, source TEXT, externalId TEXT, contentHash TEXT,
+      createdAt INTEGER NOT NULL DEFAULT 0
+    );
     CREATE TABLE document_chunks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      documentId INTEGER NOT NULL,
+      documentId INTEGER NOT NULL REFERENCES kb_documents(id),
       itemId INTEGER,
       content TEXT NOT NULL,
       chunkIndex INTEGER NOT NULL DEFAULT 0,
@@ -65,8 +84,8 @@ function createDb() {
     );
     CREATE TABLE knowledge_edges (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sourceId INTEGER NOT NULL,
-      targetId INTEGER NOT NULL,
+      sourceId INTEGER NOT NULL REFERENCES knowledge_nodes(id),
+      targetId INTEGER NOT NULL REFERENCES knowledge_nodes(id),
       label TEXT,
       type TEXT NOT NULL DEFAULT 'related',
       weight REAL DEFAULT 1,
@@ -275,5 +294,47 @@ describe("previewDocumentDeletion（破坏性操作 dryRun：只报数，不改�
     const preview = await previewDocumentDeletion(db, vectorEngine, docId);
     expect(preview.wouldDelete).toEqual({ chunks: 2, vectors: 0, graphNodes: 0, graphEdges: 0 });
     expect(vectorEngine.countByDocumentId).toHaveBeenCalledWith(docId);
+  });
+});
+
+describe("带子表引用（外键）的文档删除：线上 500 回归", () => {
+  it("文档有版本历史/入库键时，删除必须清掉子表而不是 FOREIGN KEY constraint failed", async () => {
+    const db = createDb();
+    const docId = seedDocument(db, true);
+    db.insert(schema.kbDocumentVersions)
+      .values([
+        { documentId: docId, versionNumber: 1, title: "v1", content: "c", contentHash: "h1", createdAt: new Date(0) },
+        { documentId: docId, versionNumber: 2, title: "v2", content: "c2", contentHash: "h2", createdAt: new Date(0) },
+      ])
+      .run();
+    db.insert(schema.kbIngestionKeys)
+      .values({ documentId: docId, idempotencyKey: "ingest-key", source: "test", contentHash: "h1", createdAt: new Date(0) })
+      .run();
+
+    const r = await deleteDocumentCascade(db, vectorEngine, docId);
+
+    expect(r.deletedVersions).toBe(2);
+    expect(r.deletedIngestionKeys).toBe(1);
+    expect(db.select().from(schema.kbDocuments).all()).toHaveLength(0);
+    expect(db.select().from(schema.kbDocumentVersions).all()).toHaveLength(0);
+    expect(db.select().from(schema.kbIngestionKeys).all()).toHaveLength(0);
+  });
+
+  it("批量删除（文件夹场景）同样不清子表就会炸：purgeDocumentsCascade 全清", async () => {
+    const db = createDb();
+    const a = seedDocument(db, false);
+    const b = seedDocument(db, false);
+    for (const id of [a, b]) {
+      db.insert(schema.kbDocumentVersions)
+        .values({ documentId: id, versionNumber: 1, title: "v", content: "c", contentHash: "hx", createdAt: new Date(0) })
+        .run();
+    }
+
+    const r = await purgeDocumentsCascade(db, vectorEngine as never, [a, b]);
+
+    expect(r.failed).toEqual([]);
+    expect(r.purged).toBe(2);
+    expect(r.deletedVersions).toBe(2);
+    expect(db.select().from(schema.kbDocumentVersions).all()).toHaveLength(0);
   });
 });
