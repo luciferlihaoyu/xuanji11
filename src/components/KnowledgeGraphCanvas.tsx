@@ -95,8 +95,6 @@ const THEME = {
   fallbackColor: '#22d3ee',
   /** 尘埃填充色（浅亮蓝白） */
   dustFill: '#cfe3ff',
-  /** 神经元亮核（中心高光白） */
-  coreDot: 'rgba(255,255,255,0.9)',
   /** 导出 PNG 的垫色（与页面深空底一致，不然导出图背景比所见亮） */
   exportPad: '#0a0d14',
   /** 选中脉冲：周期（毫秒）与半径幅度（世界单位） */
@@ -145,6 +143,91 @@ function boundsRadius(nodeCount: number): number {
 
 const LABEL_FONT = '11px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
 
+/** hex 与 白/黑 混合（星球明暗用；t∈[0,1]，0=原色） */
+function mixWith(hex: string, toWhite: boolean, t: number): string {
+  const h = hex.replace('#', '');
+  const v = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  const n = parseInt(v, 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const target = toWhite ? 255 : 0;
+  const m = (c: number) => Math.round(c + (target - c) * t);
+  return `rgb(${m(r)},${m(g)},${m(b)})`;
+}
+
+/**
+ * 星球精灵：分类 → 一类行星（离线预渲染一次，逐帧 drawImage，不走每帧渐变）。
+ * 视觉：左上受光、右下背光的明暗球体（limb darkening）+ 该类的行星特征 + 高光。
+ * 精灵尺寸固定 128，球半径 R=0.26*S，环行星的光环也在精灵内（≤1.7R≈0.44S < 半径）。
+ */
+function makePlanetSprite(color: string, kind: string): HTMLCanvasElement {
+  const S = 128, c = S / 2, R = S * 0.26;
+  const cv = document.createElement('canvas');
+  cv.width = S; cv.height = S;
+  const x = cv.getContext('2d')!;
+  const disc = () => { x.beginPath(); x.arc(c, c, R, 0, 6.283); };
+
+  // 1) 球体：偏移径向渐变 → 受光面亮、背光面暗
+  const g = x.createRadialGradient(c - R * 0.4, c - R * 0.4, R * 0.1, c, c, R);
+  g.addColorStop(0, mixWith(color, true, 0.6));
+  g.addColorStop(0.45, color);
+  g.addColorStop(1, mixWith(color, false, 0.62));
+  x.fillStyle = g; disc(); x.fill();
+
+  // 2) 行星特征（裁剪进球面）
+  x.save(); disc(); x.clip();
+  const px = (fx: number) => c - R + fx * R * 2;
+  const py = (fy: number) => c - R + fy * R * 2;
+  switch (kind) {
+    case 'concept': // 气态巨行星：横向云带
+      for (let i = 0; i < 5; i++) {
+        x.fillStyle = i % 2 ? 'rgba(255,255,255,0.10)' : 'rgba(0,20,60,0.14)';
+        x.fillRect(c - R, c - R + i * (R * 2 / 5), R * 2, R * 2 / 5);
+      }
+      break;
+    case 'document': // 岩石行星：陨石坑
+      for (const [dx, dy, r] of [[0.32, 0.30, 0.13], [0.62, 0.56, 0.10], [0.46, 0.72, 0.08], [0.72, 0.34, 0.07]] as const) {
+        x.fillStyle = 'rgba(0,0,0,0.22)';
+        x.beginPath(); x.arc(px(dx), py(dy), r * R * 2, 0, 6.283); x.fill();
+      }
+      break;
+    case 'topic': // 熔岩行星：亮缝
+      x.strokeStyle = 'rgba(255,214,110,0.55)'; x.lineWidth = S * 0.018; x.lineCap = 'round';
+      for (const [x1, y1, x2, y2] of [[0.22, 0.42, 0.58, 0.55], [0.52, 0.24, 0.56, 0.76], [0.30, 0.70, 0.72, 0.70]] as const) {
+        x.beginPath(); x.moveTo(px(x1), py(y1)); x.lineTo(px(x2), py(y2)); x.stroke();
+      }
+      break;
+    case 'note': // 冰行星：顶部冰冠 + 霜弧
+      x.fillStyle = 'rgba(255,255,255,0.32)';
+      x.beginPath(); x.ellipse(c, c - R * 0.52, R * 0.58, R * 0.30, 0, 0, 6.283); x.fill();
+      x.strokeStyle = 'rgba(255,255,255,0.20)'; x.lineWidth = S * 0.012;
+      x.beginPath(); x.arc(c, c, R * 0.62, 2.4, 4.2); x.stroke();
+      break;
+    case 'tag': // 海洋行星：深色陆块
+      x.fillStyle = 'rgba(10,70,110,0.38)';
+      for (const [dx, dy, r] of [[0.36, 0.42, 0.17], [0.62, 0.64, 0.11], [0.60, 0.30, 0.07]] as const) {
+        x.beginPath(); x.arc(px(dx), py(dy), r * R * 2, 0, 6.283); x.fill();
+      }
+      break;
+    // entity = 环行星，光环画在球体之外（见下）
+  }
+  x.restore();
+
+  // 3) 受光高光
+  x.fillStyle = 'rgba(255,255,255,0.55)';
+  x.beginPath(); x.arc(c - R * 0.38, c - R * 0.40, R * 0.13, 0, 6.283); x.fill();
+
+  // 4) 光环（仅实体）：倾斜椭圆环，前景半圈 + 背景半圈（叠在球后/前）
+  if (kind === 'entity') {
+    x.strokeStyle = hexToRgba(color, 0.75); x.lineWidth = S * 0.030;
+    x.save(); x.translate(c, c); x.rotate(-0.42);
+    x.beginPath(); x.ellipse(0, 0, R * 1.65, R * 0.46, 0, 0, 6.283); x.stroke();
+    x.strokeStyle = 'rgba(255,255,255,0.25)'; x.lineWidth = S * 0.012;
+    x.beginPath(); x.ellipse(0, 0, R * 1.45, R * 0.40, 0, 0, 6.283); x.stroke();
+    x.restore();
+  }
+  return cv;
+}
+
 /** 分类色 → 预渲染光晕精灵（radial gradient），避免每帧建渐变 */
 function makeGlowSprite(color: string): HTMLCanvasElement {
   const size = 64;
@@ -190,6 +273,7 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
     const cool = useRef(false);
     const rafId = useRef(0);
     const glowCache = useRef<Map<string, HTMLCanvasElement>>(new Map());
+    const planetCache = useRef<Map<string, HTMLCanvasElement>>(new Map());
     // 景深尘埃（两层）：初始化一次，固定种子稳定分布
     const dustNear = useRef(makeDust(THEME.dust.near));
     const dustFar = useRef(makeDust(THEME.dust.far));
@@ -245,6 +329,16 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
       if (!sprite) {
         sprite = makeGlowSprite(color);
         glowCache.current.set(color, sprite);
+      }
+      return sprite;
+    }, []);
+
+    const getPlanet = useCallback((color: string, kind: string) => {
+      const key = `${kind}|${color}`;
+      let sprite = planetCache.current.get(key);
+      if (!sprite) {
+        sprite = makePlanetSprite(color, kind);
+        planetCache.current.set(key, sprite);
       }
       return sprite;
     }, []);
@@ -580,7 +674,7 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         ctx.stroke();
       }
 
-      // 节点（神经元：软晕外圈 + 彩色体 + 亮核；选中带脉冲环）
+      // 节点 = 星球（大气软晕 + 该类的行星体；选中带公转轨道环）
       const nodeAlphaBase = edgesEmphasis ? 0.55 : 1;
       for (let i = 0; i < ns.length; i++) {
         const nd = ns[i];
@@ -591,41 +685,34 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         const dim = focusing && !neighborSet.has(i);
         const alpha = (dim ? 0.10 : 1) * nodeAlphaBase;
 
-        // 软晕外圈（渐变精灵）：选中/悬停更大更亮
+        // 大气软晕（渐变精灵）：选中/悬停更大更亮
         const glowR = r * (isSel ? 8 : isHov ? 6 : 4);
         ctx.globalAlpha = alpha * (isSel ? 1 : isHov ? 0.85 : 0.55);
         ctx.drawImage(getGlow(color), nd.x - glowR, nd.y - glowR, glowR * 2, glowR * 2);
 
-        // 彩色体
+        // 行星体：精灵内球半径占 0.26，故绘到半径 r 需放大 r/0.26 ≈ r*3.85
+        const pr = (r + (isHov ? 0.5 : 0)) / 0.26;
         ctx.globalAlpha = alpha;
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(nd.x, nd.y, r + (isHov ? 0.5 : 0), 0, 6.283);
-        ctx.fill();
+        ctx.drawImage(getPlanet(color, nd.category), nd.x - pr, nd.y - pr, pr * 2, pr * 2);
 
-        // 亮核（轴突高光）：中心更亮的小白点 → 神经元感；径随半径缩放但保底
-        if (!dim) {
-          ctx.globalAlpha = alpha * 0.9;
-          ctx.fillStyle = THEME.coreDot;
-          ctx.beginPath();
-          ctx.arc(nd.x, nd.y, Math.max(0.6, r * 0.3), 0, 6.283);
-          ctx.fill();
-        }
-
-        // 选中：主题色脉冲环（呼吸），比白环更有"活"感
+        // 选中：倾斜公转轨道环（呼吸 + 缓转），星球主题的"选中"语义
         if (isSel) {
           const phase = (nowMs % THEME.pulse.period) / THEME.pulse.period;
-          const pr = r + 3.5 + Math.sin(phase * 6.283) * THEME.pulse.amp;
-          ctx.globalAlpha = 0.85;
+          const orbR = r + 3.5 + Math.sin(phase * 6.283) * THEME.pulse.amp;
+          ctx.save();
+          ctx.translate(nd.x, nd.y);
+          ctx.rotate(-0.42 + phase * 0.5); // 缓转
           ctx.strokeStyle = color;
+          ctx.globalAlpha = 0.85;
           ctx.lineWidth = 1.4 / scale.current;
           ctx.beginPath();
-          ctx.arc(nd.x, nd.y, pr, 0, 6.283);
+          ctx.ellipse(0, 0, orbR * 1.5, orbR * 0.5, 0, 0, 6.283);
           ctx.stroke();
-          ctx.globalAlpha = 0.3;
+          ctx.globalAlpha = 0.25;
           ctx.beginPath();
-          ctx.arc(nd.x, nd.y, pr + 2.5, 0, 6.283);
+          ctx.ellipse(0, 0, (orbR + 2.5) * 1.5, (orbR + 2.5) * 0.5, 0, 0, 6.283);
           ctx.stroke();
+          ctx.restore();
         }
       }
       ctx.globalAlpha = 1;

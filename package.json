@@ -68,6 +68,7 @@
     "drizzle-orm": "^0.45.1",
     "echarts": "^6.1.0",
     "embla-carousel-react": "^8.6.0",
+    "fast-xml-parser": "^5.11.2",
     "hono": "^4.12.28",
     "input-otp": "^1.4.2",
     "jose": "6.1.3",
