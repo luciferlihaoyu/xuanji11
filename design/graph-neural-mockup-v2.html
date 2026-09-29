@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>璇玑 · 类脑图谱 设计预览 v2</title>
+<style>
+  html,body{margin:0;height:100%;background:#04060b;overflow:hidden;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+  canvas{display:block}
+  .hud{position:fixed;left:18px;top:16px;color:#9fb4d8;font-size:12px;letter-spacing:.4px;user-select:none}
+  .hud b{color:#e6edf7;font-size:14px;display:block;margin-bottom:4px;letter-spacing:1px}
+  .hud .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;box-shadow:0 0 6px currentColor}
+  .legend{position:fixed;right:18px;top:16px;color:#9fb4d8;font-size:11px;line-height:20px;background:rgba(12,16,26,.55);border:1px solid rgba(120,160,220,.14);border-radius:10px;padding:10px 14px;backdrop-filter:blur(6px)}
+  .hint{position:fixed;left:18px;bottom:16px;color:#6c7f9f;font-size:11px}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div class="hud"><b>璇玑 · 类脑图谱</b>软晕 + 亮核神经元 · 渐变突触 · 景深尘埃 · 邻域聚焦</div>
+<div class="legend" id="legend"></div>
+<div class="hint">悬停节点看邻域聚焦 · 拖空白平移 · 滚轮缩放</div>
+<script>
+const THEME={guideStrong:'rgba(150,190,235,0.18)',guideFaint:'rgba(150,190,235,0.07)',edgeLine:'rgba(120,160,220,0.20)',edgeLineEmphasis:'rgba(120,160,220,0.34)',edgeDim:'rgba(120,160,220,0.05)',edgeActive:.8,labelStroke:'rgba(8,12,20,.9)',labelFill:'#e6edf7',dust:{near:70,far:110,nearA:.5,farA:.22,nearR:1.5,farR:.9,twinkle:.16},pulse:{period:1400,amp:1.6}};
+const COLORS={concept:'#4cc9f0',document:'#52e5a7',topic:'#ffc94d',entity:'#ff6b9d',note:'#a78bfa',tag:'#22d3ee'};
+const LBL={concept:'概念',document:'文档',topic:'主题',entity:'实体',note:'笔记',tag:'标签'};
+function hexToRgba(h,a){h=h.replace('#','');const v=h.length===3?h.split('').map(c=>c+c).join(''):h;const n=parseInt(v,16);return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`}
+function makeDust(n){let s=1337;const r=()=>((s=(s*1103515245+12345)&0x7fffffff)/0x7fffffff);return Array.from({length:n},()=>({x:r(),y:r(),p:r()*6.283}))}
+const dustN=makeDust(THEME.dust.near),dustF=makeDust(THEME.dust.far);
+// 示例数据：一个概念中枢 + 各类节点 + 有机聚类
+const cats=Object.keys(COLORS);
+const names={concept:['混合检索','图谱','向量召回','重排序','缓存','索引'],document:['错题库解析','对标调研','记忆增量','题库汇总','巡检报告'],topic:['不动产','openclaw','璇玑','备份','前端'],entity:['璇玑系统','碧霄','织女','知识库'],note:['教训笔记','决策记录','坑位备忘'],tag:['性能','bug','设计','评测','线上']};
+const nodes=[];let nid=0;
+const center={id:'n0',name:'混合检索（Hybrid Search）',cat:'concept',x:0,y:0,deg:9};nodes.push(center);
+cats.forEach((cat,ci)=>{const arr=names[cat];arr.forEach((nm,i)=>{const ang=(ci/cats.length)*6.283+i*.7;const rad=120+ (i%3)*70 + Math.random()*30;nodes.push({id:'n'+(++nid),name:nm,cat,x:Math.cos(ang)*rad,y:Math.sin(ang)*rad,deg:1+Math.floor(Math.random()*6)})})});
+nodes.forEach((n,i)=>{if(n.id==='n0')return;n.deg=Math.min(8,n.deg)});
+const edges=[];nodes.forEach(n=>{if(n.id==='n0')return;edges.push({a:0,b:+n.id.slice(1)});if(Math.random()<.5){const t=Math.floor(Math.random()*nodes.length);if(t!==+n.id.slice(1))edges.push({a:+n.id.slice(1),b:t})}});
+// 交互
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+let tx=0,ty=0,scale=1,hov=-1,drag=false,px=0,py=0;
+function resize(){const d=Math.min(devicePixelRatio||1,2);cv.width=innerWidth*d;cv.height=innerHeight*d;cv.style.width=innerWidth+'px';cv.style.height=innerHeight+'px'}addEventListener('resize',resize);
+const glowCache={};
+function glow(c){if(glowCache[c])return glowCache[c];const s=64,cc=document.createElement('canvas');cc.width=cc.height=s;const g2=cc.getContext('2d');const gr=g2.createRadialGradient(s/2,s/2,0,s/2,s/2,s/2);gr.addColorStop(0,c+'cc');gr.addColorStop(.25,c+'55');gr.addColorStop(.6,c+'1a');gr.addColorStop(1,c+'00');g2.fillStyle=gr;g2.fillRect(0,0,s,s);return glowCache[c]=cc}
+function render(now=0){
+  const d=Math.min(devicePixelRatio||1,2),W=cv.clientWidth,H=cv.clientHeight;
+  ctx.setTransform(d,0,0,d,0,0);ctx.clearRect(0,0,W,H);
+  const tw=now/1000;
+  const dust=(pts,base,rad,pa)=>{ctx.fillStyle='#cfe3ff';for(const p of pts){const tw2=1+THEME.dust.twinkle*Math.sin(p.p+tw*.9);ctx.globalAlpha=base*tw2*Math.min(1.4,.6+scale*.5);ctx.beginPath();ctx.arc(p.x*W+tx*pa,p.y*H+ty*pa,rad*(0.7+0.6*Math.abs(Math.sin(p.p+tw*.5))),0,6.283);ctx.fill()}};
+  dust(dustF,THEME.dust.farA,THEME.dust.farR,.05);dust(dustN,THEME.dust.nearA,THEME.dust.nearR,.12);ctx.globalAlpha=1;
+  ctx.save();ctx.translate(W/2+tx,H/2+ty);ctx.scale(scale,scale);
+  const ns=nodes,es=edges;
+  const focusId=hov>=0?ns[hov].id:undefined;const nb=new Set();
+  if(focusId!==undefined){const fi=+focusId.slice(1);nb.add(fi);es.forEach(e=>{if(e.a===fi)nb.add(e.b);if(e.b===fi)nb.add(e.a)})}
+  const focusing=focusId!==undefined;
+  ctx.lineWidth=1/scale;
+  for(const e of es){const a=ns[e.a],b=ns[e.b];const active=!focusing||(nb.has(e.a)&&nb.has(e.b));
+    if(focusing&&!active){ctx.strokeStyle=THEME.edgeDim}
+    else if(focusing&&active){const g=ctx.createLinearGradient(a.x,a.y,b.x,b.y);g.addColorStop(0,hexToRgba(COLORS[a.cat],THEME.edgeActive));g.addColorStop(1,hexToRgba(COLORS[b.cat],THEME.edgeActive));ctx.strokeStyle=g}
+    else ctx.strokeStyle=THEME.edgeLine;
+    ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke()}
+  for(let i=0;i<ns.length;i++){const n=ns[i],c=COLORS[n.cat];const r=3.2+Math.min(3.2,Math.log(1+n.deg)*1.25);const isH=hov===i;const dim=focusing&&!nb.has(i);const al=dim?.1:1;
+    const gr=r*(isH?6:4);ctx.globalAlpha=al*(isH?.85:.55);ctx.drawImage(glow(c),n.x-gr,n.y-gr,gr*2,gr*2);
+    ctx.globalAlpha=al;ctx.fillStyle=c;ctx.beginPath();ctx.arc(n.x,n.y,r+(isH?.5:0),0,6.283);ctx.fill();
+    if(!dim){ctx.globalAlpha=al*.9;ctx.fillStyle='rgba(255,255,255,.9)';ctx.beginPath();ctx.arc(n.x,n.y,Math.max(.6,r*.3),0,6.283);ctx.fill()}
+    if(isH){const ph=(now%THEME.pulse.period)/THEME.pulse.period;const pr=r+3.5+Math.sin(ph*6.283)*THEME.pulse.amp;ctx.globalAlpha=.85;ctx.strokeStyle=c;ctx.lineWidth=1.4/scale;ctx.beginPath();ctx.arc(n.x,n.y,pr,0,6.283);ctx.stroke()}
+  }
+  ctx.globalAlpha=1;
+  if(hov>=0){const n=ns[hov];ctx.font='11px -apple-system,"PingFang SC",sans-serif';ctx.lineWidth=3/scale;ctx.strokeStyle=THEME.labelStroke;ctx.fillStyle=THEME.labelFill;ctx.globalAlpha=.98;ctx.strokeText(n.name,n.x+6,n.y-1);ctx.fillText(n.name,n.x+6,n.y-1)}
+  ctx.restore();requestAnimationFrame(render);
+}
+function hit(mx,my){const d=Math.min(devicePixelRatio||1,2);const wx=(mx-cv.clientWidth/2-tx)/scale,wy=(my-cv.clientHeight/2-ty)/scale;for(let i=nodes.length-1;i>=0;i--){const n=nodes[i];const dx=wx-n.x,dy=wy-n.y;if(dx*dx+dy*dy<64)return i}return -1}
+cv.addEventListener('mousemove',e=>{if(drag){tx+=e.clientX-px;ty+=e.clientY-py;px=e.clientX;py=e.clientY}else hov=hit(e.clientX,e.clientY)});
+cv.addEventListener('mousedown',e=>{drag=true;px=e.clientX;py=e.clientY});addEventListener('mouseup',()=>drag=false);
+cv.addEventListener('wheel',e=>{e.preventDefault();const f=e.deltaY<0?1.1:0.9;scale=Math.max(.2,Math.min(4,scale*f))},{passive:false});
+// 图例
+document.getElementById('legend').innerHTML=Object.keys(COLORS).map(c=>`<span class="dot" style="background:${COLORS[c]};color:${COLORS[c]}"></span>${LBL[c]}`).join('<br>');
+resize();requestAnimationFrame(render);
+</script>
+</body>
+</html>

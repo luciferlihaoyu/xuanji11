@@ -71,6 +71,45 @@ interface SimEdge {
   rest: number;
 }
 
+/**
+ * 「类脑 / Neural」主题（深空底 + 发光神经元节点 + 聚焦渐变突触 + 景深尘埃）。
+ * 参考手法：beautiful-graph（vignette 氛围 + 两层景深尘埃 + 悬停邻域聚焦）、
+ * 神经网络/脑图谱可视化（发光核 + 软晕 + 突触连线）。全部为只读常量——调观感只改这里。
+ */
+const THEME = {
+  /** 背景线框球：浅亮蓝、低透明，衬深色底 */
+  guideStrong: 'rgba(150,190,235,0.18)',
+  guideFaint: 'rgba(150,190,235,0.07)',
+  /** 基础边：单色素描线（每帧每边建渐变太贵，1958 条边只给聚焦态做渐变） */
+  edgeLine: 'rgba(120,160,220,0.20)',
+  edgeLineEmphasis: 'rgba(120,160,220,0.34)',
+  edgeDim: 'rgba(120,160,220,0.05)',
+  /** 聚焦态边：源→目标 渐变 + 提亮 */
+  edgeActive: 0.8,
+  /** 标签：深底上用「亮字 + 深色描边光晕」 */
+  labelStroke: 'rgba(8,12,20,0.9)',
+  labelFill: '#e6edf7',
+  /** 景深尘埃：两层（近层稍大稍亮，带视差与微闪） */
+  dust: { near: 70, far: 110, nearA: 0.5, farA: 0.22, nearR: 1.5, farR: 0.9, twinkle: 0.16 },
+  /** 选中脉冲：周期（毫秒）与半径幅度（世界单位） */
+  pulse: { period: 1400, amp: 1.6 },
+} as const;
+
+/** hex → rgba（聚焦态边做渐变用；分类色恒为 #rrggbb） */
+function hexToRgba(hex: string, alpha: number): string {
+  const h = hex.replace('#', '');
+  const v = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  const n = parseInt(v, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
+/** 景深尘埃点（固定种子：分布稳定，不随重渲染抖动）；屏幕空间坐标，单位化到 [-1,1] */
+function makeDust(count: number): { x: number; y: number; p: number }[] {
+  let s = 1337;
+  const rnd = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  return Array.from({ length: count }, () => ({ x: rnd(), y: rnd(), p: rnd() * 6.283 }));
+}
+
 /** 物理参数（源自云霄设计稿，按真实 163 节点调过） */
 const PHYS = {
   repulsion: 1800,
@@ -143,6 +182,9 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
     const cool = useRef(false);
     const rafId = useRef(0);
     const glowCache = useRef<Map<string, HTMLCanvasElement>>(new Map());
+    // 景深尘埃（两层）：初始化一次，固定种子稳定分布
+    const dustNear = useRef(makeDust(THEME.dust.near));
+    const dustFar = useRef(makeDust(THEME.dust.far));
 
     // 视口变换
     const tx = useRef(0);
@@ -426,6 +468,30 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, W, H);
+      const nowMs = performance.now();
+
+      // 景深尘埃（屏幕空间，在视口变换之前）：远层小且暗、近层稍大且亮，
+      // 都跟随平移做轻微视差并微闪 → 深空"活"感；缩放时近层随放大更明显（深度提示）。
+      {
+        const tw = nowMs / 1000;
+        const draw = (pts: { x: number; y: number; p: number }[], base: number, radius: number, parallax: number) => {
+          ctx.fillStyle = '#cfe3ff';
+          for (const pt of pts) {
+            const twinkle = 1 + THEME.dust.twinkle * Math.sin(pt.p + tw * 0.9);
+            const a = base * twinkle * Math.min(1.4, 0.6 + scale.current * 0.5);
+            ctx.globalAlpha = a;
+            const x = pt.x * W + tx.current * parallax;
+            const y = pt.y * H + ty.current * parallax;
+            ctx.beginPath();
+            ctx.arc(x, y, radius * (0.7 + 0.6 * Math.abs(Math.sin(pt.p + tw * 0.5))), 0, 6.283);
+            ctx.fill();
+          }
+        };
+        draw(dustFar.current, THEME.dust.farA, THEME.dust.farR, 0.05);
+        draw(dustNear.current, THEME.dust.nearA, THEME.dust.nearR, 0.12);
+        ctx.globalAlpha = 1;
+      }
+
       ctx.save();
       ctx.translate(tx.current, ty.current);
       ctx.scale(scale.current, scale.current);
@@ -445,14 +511,14 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         cy /= ns.length;
         const R = boundsRadius(ns.length);
         const lw = 1 / scale.current;
-        // 外圆（浅色底用深灰蓝）
-        ctx.strokeStyle = 'rgba(90,110,135,0.22)';
+        // 外圆（深空底：浅亮蓝、低透明，衬底不抢戏）
+        ctx.strokeStyle = THEME.guideStrong;
         ctx.lineWidth = lw;
         ctx.beginPath();
         ctx.arc(cx, cy, R, 0, 6.283);
         ctx.stroke();
         // 经线椭圆（竖）
-        ctx.strokeStyle = 'rgba(90,110,135,0.10)';
+        ctx.strokeStyle = THEME.guideFaint;
         ctx.beginPath();
         ctx.ellipse(cx, cy, R, R * 0.32, 0, 0, 6.283);
         ctx.stroke();
@@ -481,27 +547,32 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
       }
       const focusing = focusId !== undefined;
 
-      // 连线（1px 视觉恒定）
+      // 连线：非聚焦 = 单色素描线（省渐变开销）；聚焦邻域 = 源→目标 渐变提亮（突触感）
       ctx.lineWidth = 1 / scale.current;
       const edgesEmphasis = viewModeRef.current === 'edges';
       for (const e of es) {
         const a = ns[e.a];
         const b = ns[e.b];
         const active = !focusing || (neighborSet.has(e.a) && neighborSet.has(e.b));
-        ctx.strokeStyle = !focusing
-          ? edgesEmphasis
-            ? 'rgba(110,125,140,0.55)'
-            : 'rgba(110,125,140,0.38)'
-          : active
-            ? 'rgba(100,115,135,0.75)'
-            : 'rgba(130,140,150,0.10)';
+        if (focusing && !active) {
+          ctx.strokeStyle = THEME.edgeDim;
+        } else if (focusing && active) {
+          const ca = colorsRef.current[a.category] ?? '#7dcfff';
+          const cb = colorsRef.current[b.category] ?? '#7dcfff';
+          const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+          g.addColorStop(0, hexToRgba(ca, THEME.edgeActive));
+          g.addColorStop(1, hexToRgba(cb, THEME.edgeActive));
+          ctx.strokeStyle = g;
+        } else {
+          ctx.strokeStyle = edgesEmphasis ? THEME.edgeLineEmphasis : THEME.edgeLine;
+        }
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
         ctx.stroke();
       }
 
-      // 节点（光晕 + 实心点）
+      // 节点（神经元：软晕外圈 + 彩色体 + 亮核；选中带脉冲环）
       const nodeAlphaBase = edgesEmphasis ? 0.55 : 1;
       for (let i = 0; i < ns.length; i++) {
         const nd = ns[i];
@@ -510,27 +581,42 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         const isSel = sel === nd.id;
         const isHov = hovId === nd.id;
         const dim = focusing && !neighborSet.has(i);
-        const alpha = (dim ? 0.12 : 1) * nodeAlphaBase;
+        const alpha = (dim ? 0.10 : 1) * nodeAlphaBase;
 
-        // 光晕（渐变精灵）：选中/悬停更大更亮
-        const glowR = r * (isSel ? 7 : isHov ? 5.5 : 3.6);
-        ctx.globalAlpha = alpha * (isSel ? 0.95 : isHov ? 0.8 : 0.5);
+        // 软晕外圈（渐变精灵）：选中/悬停更大更亮
+        const glowR = r * (isSel ? 8 : isHov ? 6 : 4);
+        ctx.globalAlpha = alpha * (isSel ? 1 : isHov ? 0.85 : 0.55);
         ctx.drawImage(getGlow(color), nd.x - glowR, nd.y - glowR, glowR * 2, glowR * 2);
 
-        // 实心点
+        // 彩色体
         ctx.globalAlpha = alpha;
         ctx.fillStyle = color;
         ctx.beginPath();
         ctx.arc(nd.x, nd.y, r + (isHov ? 0.5 : 0), 0, 6.283);
         ctx.fill();
 
-        // 选中白环
-        if (isSel) {
-          ctx.globalAlpha = 0.9;
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 1.2 / scale.current;
+        // 亮核（轴突高光）：中心更亮的小白点 → 神经元感；径随半径缩放但保底
+        if (!dim) {
+          ctx.globalAlpha = alpha * 0.9;
+          ctx.fillStyle = 'rgba(255,255,255,0.9)';
           ctx.beginPath();
-          ctx.arc(nd.x, nd.y, r + 3.5, 0, 6.283);
+          ctx.arc(nd.x, nd.y, Math.max(0.6, r * 0.3), 0, 6.283);
+          ctx.fill();
+        }
+
+        // 选中：主题色脉冲环（呼吸），比白环更有"活"感
+        if (isSel) {
+          const phase = (nowMs % THEME.pulse.period) / THEME.pulse.period;
+          const pr = r + 3.5 + Math.sin(phase * 6.283) * THEME.pulse.amp;
+          ctx.globalAlpha = 0.85;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.4 / scale.current;
+          ctx.beginPath();
+          ctx.arc(nd.x, nd.y, pr, 0, 6.283);
+          ctx.stroke();
+          ctx.globalAlpha = 0.3;
+          ctx.beginPath();
+          ctx.arc(nd.x, nd.y, pr + 2.5, 0, 6.283);
           ctx.stroke();
         }
       }
@@ -549,11 +635,12 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         for (const i of labelTargets) {
           const nd = ns[i];
           const isPrimary = sel === nd.id || hov === i;
-          ctx.globalAlpha = isPrimary ? 0.98 : 0.82;
+          ctx.globalAlpha = isPrimary ? 0.98 : 0.85;
           ctx.lineWidth = 3 / scale.current;
-          ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+          // 深底：亮字 + 深色描边光晕（原来白描边 + 深字是浅底方案，已不适配）
+          ctx.strokeStyle = THEME.labelStroke;
           ctx.strokeText(nd.name, nd.x + 6, nd.y - 1);
-          ctx.fillStyle = '#2b3440';
+          ctx.fillStyle = THEME.labelFill;
           ctx.fillText(nd.name, nd.x + 6, nd.y - 1);
         }
         ctx.globalAlpha = 1;

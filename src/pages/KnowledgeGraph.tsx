@@ -8,14 +8,18 @@ import BgImageUpload from '@/components/BgImageUpload';
 import KnowledgeGraphCanvas, { type KnowledgeGraphCanvasHandle } from '@/components/KnowledgeGraphCanvas';
 import { Plus, Link2, X, ExternalLink, Edit3, Trash2 } from 'lucide-react';
 
-/** Tokyo Night 配色（云霄设计稿定稿色板） */
+/**
+ * 「类脑 / Neural」霓虹调色板（深空底专用）。
+ * 原 Tokyo Night 色板是为暗底设计，却铺在浅色背景上导致发灰、没有科技感；
+ * 现改为"深空底 + 高饱和霓虹"，保持每类一个语义色，亮而不刺眼。
+ */
 const CATEGORY_COLORS: Record<string, string> = {
-  concept: '#7aa2f7',
-  document: '#9ece6a',
-  topic: '#e0af68',
-  entity: '#f7768e',
-  note: '#bb9af7',
-  tag: '#7dcfff',
+  concept: '#4cc9f0',  // 概念 · 电光蓝
+  document: '#52e5a7', // 文档 · 春芽绿
+  topic: '#ffc94d',    // 主题 · 琥珀
+  entity: '#ff6b9d',   // 实体 · 珊瑚
+  note: '#a78bfa',     // 笔记 · 紫罗兰
+  tag: '#22d3ee',      // 标签 · 青
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -392,12 +396,13 @@ export default function KnowledgeGraph() {
           backgroundRepeat: 'no-repeat',
           // 100% ≈ 宽度铺满；用户可调 20%~200%
           backgroundSize: graphBgImage ? `${graphBgScale}% auto` : undefined,
-          backgroundColor: '#f2f4f8',
+          backgroundColor: '#0a0d14',
         }}
       >
         {!graphBgImage && (
+          // 类脑主题：深空底 + 中心微亮的径向晕（vignette 氛围，参考 beautiful-graph）
           <div className="absolute inset-0" style={{
-            background: 'radial-gradient(ellipse at 50% 42%, #ffffff 0%, #f2f4f8 62%, #e4e9f0 100%)',
+            background: 'radial-gradient(ellipse at 50% 42%, #12161f 0%, #0a0d14 55%, #04060b 100%)',
           }} />
         )}
       </div>
