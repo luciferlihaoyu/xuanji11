@@ -91,6 +91,14 @@ const THEME = {
   labelFill: '#e6edf7',
   /** 景深尘埃：两层（近层稍大稍亮，带视差与微闪） */
   dust: { near: 70, far: 110, nearA: 0.5, farA: 0.22, nearR: 1.5, farR: 0.9, twinkle: 0.16 },
+  /** 分类色缺失时的回退色（与 CATEGORY_COLORS.tag 一致） */
+  fallbackColor: '#22d3ee',
+  /** 尘埃填充色（浅亮蓝白） */
+  dustFill: '#cfe3ff',
+  /** 神经元亮核（中心高光白） */
+  coreDot: 'rgba(255,255,255,0.9)',
+  /** 导出 PNG 的垫色（与页面深空底一致，不然导出图背景比所见亮） */
+  exportPad: '#0a0d14',
   /** 选中脉冲：周期（毫秒）与半径幅度（世界单位） */
   pulse: { period: 1400, amp: 1.6 },
 } as const;
@@ -103,7 +111,7 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
 }
 
-/** 景深尘埃点（固定种子：分布稳定，不随重渲染抖动）；屏幕空间坐标，单位化到 [-1,1] */
+/** 景深尘埃点（固定种子：分布稳定，不随重渲染抖动）；屏幕空间坐标，范围 [0,1) */
 function makeDust(count: number): { x: number; y: number; p: number }[] {
   let s = 1337;
   const rnd = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
@@ -475,7 +483,7 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
       {
         const tw = nowMs / 1000;
         const draw = (pts: { x: number; y: number; p: number }[], base: number, radius: number, parallax: number) => {
-          ctx.fillStyle = '#cfe3ff';
+          ctx.fillStyle = THEME.dustFill;
           for (const pt of pts) {
             const twinkle = 1 + THEME.dust.twinkle * Math.sin(pt.p + tw * 0.9);
             const a = base * twinkle * Math.min(1.4, 0.6 + scale.current * 0.5);
@@ -557,8 +565,8 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         if (focusing && !active) {
           ctx.strokeStyle = THEME.edgeDim;
         } else if (focusing && active) {
-          const ca = colorsRef.current[a.category] ?? '#7dcfff';
-          const cb = colorsRef.current[b.category] ?? '#7dcfff';
+          const ca = colorsRef.current[a.category] ?? THEME.fallbackColor;
+          const cb = colorsRef.current[b.category] ?? THEME.fallbackColor;
           const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
           g.addColorStop(0, hexToRgba(ca, THEME.edgeActive));
           g.addColorStop(1, hexToRgba(cb, THEME.edgeActive));
@@ -576,7 +584,7 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
       const nodeAlphaBase = edgesEmphasis ? 0.55 : 1;
       for (let i = 0; i < ns.length; i++) {
         const nd = ns[i];
-        const color = colorsRef.current[nd.category] ?? '#7dcfff';
+        const color = colorsRef.current[nd.category] ?? THEME.fallbackColor;
         const r = 3.2 + Math.min(3.2, Math.log(1 + nd.deg) * 1.25);
         const isSel = sel === nd.id;
         const isHov = hovId === nd.id;
@@ -598,7 +606,7 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         // 亮核（轴突高光）：中心更亮的小白点 → 神经元感；径随半径缩放但保底
         if (!dim) {
           ctx.globalAlpha = alpha * 0.9;
-          ctx.fillStyle = 'rgba(255,255,255,0.9)';
+          ctx.fillStyle = THEME.coreDot;
           ctx.beginPath();
           ctx.arc(nd.x, nd.y, Math.max(0.6, r * 0.3), 0, 6.283);
           ctx.fill();
@@ -939,7 +947,7 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         out.height = cv.height;
         const octx = out.getContext('2d');
         if (!octx) return;
-        octx.fillStyle = '#17171a';
+        octx.fillStyle = THEME.exportPad;
         octx.fillRect(0, 0, out.width, out.height);
         octx.drawImage(cv, 0, 0);
         const link = document.createElement('a');

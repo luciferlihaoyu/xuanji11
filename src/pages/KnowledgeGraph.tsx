@@ -409,13 +409,13 @@ export default function KnowledgeGraph() {
 
       {/* Loading */}
       {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center z-10" style={{ backgroundColor: '#f2f4f8' }}>
+        <div className="absolute inset-0 flex items-center justify-center z-10" style={{ backgroundColor: '#0a0d14' }}>
           <div className="flex flex-col items-center gap-4">
             <div className="relative w-10 h-10">
-              <div className="animate-rotate w-10 h-10 border-2 border-t-transparent rounded-full" style={{ borderColor: '#7aa2f7', borderTopColor: 'transparent' }} />
-              <div className="absolute inset-1 rounded-full" style={{ border: '1px solid #7aa2f7', opacity: 0.3 }} />
+              <div className="animate-rotate w-10 h-10 border-2 border-t-transparent rounded-full" style={{ borderColor: 'var(--accent-cyan)', borderTopColor: 'transparent' }} />
+              <div className="absolute inset-1 rounded-full" style={{ border: '1px solid var(--accent-cyan)', opacity: 0.3 }} />
             </div>
-            <span className="text-sm tracking-wider" style={{ color: '#8a9099' }}>
+            <span className="text-sm tracking-wider" style={{ color: '#9fb4d8' }}>
               正在加载知识图谱<span className="animate-pulse">...</span>
             </span>
           </div>
@@ -515,14 +515,14 @@ export default function KnowledgeGraph() {
             </button>
           </div>
           {edgeMode && (
-            <p className="text-[10px] mt-2" style={{ color: '#7aa2f7' }}>
+            <p className="text-[10px] mt-2" style={{ color: 'var(--accent-cyan)' }}>
               点击目标节点完成连线
             </p>
           )}
           <button
             onClick={() => { setShowAutoLinkModal(true); setAutoLinkPreview(null); }}
             className="btn-ghost w-full text-xs py-1.5 mt-2 flex items-center justify-center gap-1"
-            style={{ color: '#7aa2f7' }}
+            style={{ color: 'var(--accent-cyan)' }}
           >
             <Link2 className="w-3.5 h-3.5" />
             一键自动建边
@@ -621,7 +621,7 @@ export default function KnowledgeGraph() {
               <div>
                 <div className="flex justify-between text-xs font-medium mb-1.5" style={{ color: 'var(--text-primary)' }}>
                   <span>重要性</span>
-                  <span style={{ color: '#7aa2f7' }}>{newNode.importance}/10</span>
+                  <span style={{ color: 'var(--accent-cyan)' }}>{newNode.importance}/10</span>
                 </div>
                 <input
                   type="range"
@@ -630,7 +630,7 @@ export default function KnowledgeGraph() {
                   value={newNode.importance}
                   onChange={(e) => setNewNode((p) => ({ ...p, importance: Number(e.target.value) }))}
                   className="w-full h-1 rounded-full appearance-none cursor-pointer"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', accentColor: '#7aa2f7' }}
+                  style={{ backgroundColor: 'var(--bg-tertiary)', accentColor: 'var(--accent-cyan)' }}
                 />
               </div>
               <div>
@@ -655,9 +655,9 @@ export default function KnowledgeGraph() {
       {/* Auto-Link Modal */}
       {showAutoLinkModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(30,40,60,0.35)' }}>
-          <div className="rounded-lg border p-4 sm:p-6 w-[480px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col" style={{ backgroundColor: '#ffffff', borderColor: 'rgba(30,40,60,0.12)' }}>
+          <div className="rounded-lg border p-4 sm:p-6 w-[480px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col" style={{ backgroundColor: '#12161f', borderColor: 'rgba(120,160,220,0.16)' }}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold" style={{ color: '#2b3440' }}>一键自动建边</h3>
+              <h3 className="text-lg font-bold" style={{ color: '#e6edf7' }}>一键自动建边</h3>
               <button onClick={() => setShowAutoLinkModal(false)} className="p-1 rounded hover:bg-black/5">
                 <X className="w-5 h-5" style={{ color: '#8a9099' }} />
               </button>
@@ -667,15 +667,15 @@ export default function KnowledgeGraph() {
               阈值越高建边越少越精确；只有互相都排在对方 top3 的节点对才会建边。
             </p>
             <div className="mb-4">
-              <div className="flex justify-between text-xs font-medium mb-1.5" style={{ color: '#2b3440' }}>
+              <div className="flex justify-between text-xs font-medium mb-1.5" style={{ color: '#cdd7e6' }}>
                 <span>相似度阈值</span>
-                <span style={{ color: '#7aa2f7' }}>{autoLinkThreshold}%</span>
+                <span style={{ color: 'var(--accent-cyan)' }}>{autoLinkThreshold}%</span>
               </div>
               <input
                 type="range" min={45} max={85} value={autoLinkThreshold}
                 onChange={(e) => { setAutoLinkThreshold(Number(e.target.value)); setAutoLinkPreview(null); }}
                 className="w-full h-1 rounded-full appearance-none cursor-pointer"
-                style={{ backgroundColor: '#e4e9f0', accentColor: '#7aa2f7' }}
+                style={{ backgroundColor: '#232a38', accentColor: 'var(--accent-cyan)' }}
               />
               <div className="flex justify-between text-[10px] mt-1" style={{ color: '#8a9099' }}>
                 <span>45% 多而宽</span><span>85% 少而准</span>
@@ -684,15 +684,15 @@ export default function KnowledgeGraph() {
 
             {autoLinkPreview ? (
               <div className="flex-1 overflow-y-auto mb-4">
-                <p className="text-xs mb-2" style={{ color: '#2b3440' }}>
-                  找到 <b style={{ color: '#7aa2f7' }}>{autoLinkPreview.totalCandidates}</b> 条候选边
+                <p className="text-xs mb-2" style={{ color: '#cdd7e6' }}>
+                  找到 <b style={{ color: 'var(--accent-cyan)' }}>{autoLinkPreview.totalCandidates}</b> 条候选边
                   {autoLinkPreview.isolated > 0 && <span style={{ color: '#8a9099' }}>（另有 {autoLinkPreview.isolated} 个完全孤立节点）</span>}
                 </p>
                 <div className="space-y-1">
                   {autoLinkPreview.candidates.slice(0, 20).map((c, i) => (
-                    <div key={i} className="text-[11px] flex items-center gap-1.5 px-2 py-1 rounded" style={{ backgroundColor: '#f2f4f8', color: '#2b3440' }}>
+                    <div key={i} className="text-[11px] flex items-center gap-1.5 px-2 py-1 rounded" style={{ backgroundColor: '#1a2030', color: '#cdd7e6' }}>
                       <span className="flex-1 truncate">{c.sourceTitle}</span>
-                      <span style={{ color: '#7aa2f7' }}>↔</span>
+                      <span style={{ color: 'var(--accent-cyan)' }}>↔</span>
                       <span className="flex-1 truncate">{c.targetTitle}</span>
                       <span className="font-mono shrink-0" style={{ color: '#8a9099' }}>{(c.score * 100).toFixed(0)}%</span>
                     </div>
@@ -740,7 +740,7 @@ export default function KnowledgeGraph() {
             className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
             style={{ color: 'var(--text-secondary)' }}
           >
-            <ExternalLink className="w-3.5 h-3.5" style={{ color: '#7aa2f7' }} />
+            <ExternalLink className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
             查看详情
           </button>
           <button
@@ -748,7 +748,7 @@ export default function KnowledgeGraph() {
             className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
             style={{ color: 'var(--text-secondary)' }}
           >
-            <Edit3 className="w-3.5 h-3.5" style={{ color: '#7aa2f7' }} />
+            <Edit3 className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
             编辑节点
           </button>
           <button
@@ -756,7 +756,7 @@ export default function KnowledgeGraph() {
             className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
             style={{ color: 'var(--text-secondary)' }}
           >
-            <Link2 className="w-3.5 h-3.5" style={{ color: '#7aa2f7' }} />
+            <Link2 className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
             连线
           </button>
           <div style={{ borderTop: '1px solid var(--border-subtle)' }} className="my-1" />
