@@ -167,7 +167,14 @@ export default function IngestionPage() {
             const total = job.totalItems ?? 0;
             const processed = job.processedItems ?? 0;
             const failed = job.failedItems ?? 0;
-            const progress = total > 0 ? Math.round(((processed + failed) / total) * 100) : 0;
+            // 终态作业一律按 100% 计（t11 问题 B）。后端计数改诚实后 processedItems 只代表
+            // "真正入库成功"的条目，跳过项不再计入：于是"全部跳过"的 completed 作业
+            // 会是 processed=0/failed=0 → 进度 0%，与"已完成"徽章自相矛盾。
+            // 被跳过的条目确实经过检查并判定无需入库，作业确实跑完了 → 进度视为 100%。
+            // 失败没有被 100% 掩盖：状态徽章（statusBadge）+ 本卡片下方的
+            // `项目: processed/total` 与 `失败 N`（failed > 0 时以 rose 色显示）照旧呈现真实计数。
+            const isTerminal = job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled';
+            const progress = isTerminal ? 100 : total > 0 ? Math.round(((processed + failed) / total) * 100) : 0;
             return (
               <div key={job.id} className="card-base p-4">
                 <div className="flex items-start justify-between mb-2">

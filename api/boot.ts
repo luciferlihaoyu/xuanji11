@@ -365,7 +365,13 @@ app.get("/api/upload/:id/ingestion", async (c) => {
       .select()
       .from(ingestionItems)
       .where(
-        sql`json_extract(${ingestionItems.metadata}, '$.uploadedFileId') = ${String(id)}`,
+        // ⚠️ 必须 CAST 成 TEXT 再比：SQLite 3.38+ 的 json_extract / `->>` 按**原生存储类**返回
+        // （JSON 数字 → SQL INTEGER），而这里比的是 `String(id)`（TEXT 绑定）。SQLite 不做
+        // INTEGER↔TEXT 隐式相等 → 对 api/lib/ingestion.ts:185 落的 {"uploadedFileId":7} **恒不命中**，
+        // 接口永远返回空 items，上传页便永不写 ingestionStatus、2 秒轮询永不停止（UploadPage.tsx:68）。
+        // 统一口径先例：api/lib/document-node-match.ts（2026-09-22 线上 graph_orphans 事故）、
+        // api/datasource-router.ts:294（t14）、api/ingestion-router.ts:63（t15，本查询的孪生）。
+        sql`CAST(json_extract(${ingestionItems.metadata}, '$.uploadedFileId') AS TEXT) = ${String(id)}`,
       )
       .orderBy(desc(ingestionItems.createdAt));
     return c.json({ success: true, items });

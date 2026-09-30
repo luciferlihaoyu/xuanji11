@@ -17,7 +17,7 @@
 </head>
 <body>
 <canvas id="cv"></canvas>
-<div class="hud"><b>璇玑 · 类脑图谱</b>六类星球 · 大气软晕 · 渐变突触 · 景深尘埃 · 邻域聚焦</div>
+<div class="hud"><b>璇玑 · 类脑图谱</b>六阶段恒星 · 星芒 + 炽核 · 渐变突触 · 景深尘埃 · 邻域聚焦</div>
 <div class="legend" id="legend"></div>
 <div class="hint">悬停节点看邻域聚焦 · 拖空白平移 · 滚轮缩放</div>
 <script>
@@ -29,20 +29,8 @@ function makeDust(n){let s=1337;const r=()=>((s=(s*1103515245+12345)&0x7fffffff)
 const dustN=makeDust(THEME.dust.near),dustF=makeDust(THEME.dust.far);
 
 function mixWith(hex,toWhite,t){const h=hex.replace('#','');const v=h.length===3?h.split('').map(c=>c+c).join(''):h;const n=parseInt(v,16);const r=(n>>16)&255,g=(n>>8)&255,b=n&255;const tg=toWhite?255:0;const m=c=>Math.round(c+(tg-c)*t);return `rgb(${m(r)},${m(g)},${m(b)})`}
-const planetCache={};
-function planet(color,kind){const key=kind+'|'+color;if(planetCache[key])return planetCache[key];const S=128,c=S/2,R=S*0.26;const cv=document.createElement('canvas');cv.width=cv.height=S;const x=cv.getContext('2d');const disc=()=>{x.beginPath();x.arc(c,c,R,0,6.283)};
-  const g=x.createRadialGradient(c-R*.4,c-R*.4,R*.1,c,c,R);g.addColorStop(0,mixWith(color,true,.6));g.addColorStop(.45,color);g.addColorStop(1,mixWith(color,false,.62));x.fillStyle=g;disc();x.fill();
-  x.save();disc();x.clip();const px=f=>c-R+f*R*2,py=f=>c-R+f*R*2;
-  if(kind==='concept'){for(let i=0;i<5;i++){x.fillStyle=i%2?'rgba(255,255,255,.10)':'rgba(0,20,60,.14)';x.fillRect(c-R,c-R+i*(R*2/5),R*2,R*2/5)}}
-  else if(kind==='document'){for(const [dx,dy,r] of [[.32,.30,.13],[.62,.56,.10],[.46,.72,.08],[.72,.34,.07]]){x.fillStyle='rgba(0,0,0,.22)';x.beginPath();x.arc(px(dx),py(dy),r*R*2,0,6.283);x.fill()}}
-  else if(kind==='topic'){x.strokeStyle='rgba(255,214,110,.55)';x.lineWidth=S*.018;x.lineCap='round';for(const [x1,y1,x2,y2] of [[.22,.42,.58,.55],[.52,.24,.56,.76],[.30,.70,.72,.70]]){x.beginPath();x.moveTo(px(x1),py(y1));x.lineTo(px(x2),py(y2));x.stroke()}}
-  else if(kind==='note'){x.fillStyle='rgba(255,255,255,.32)';x.beginPath();x.ellipse(c,c-R*.52,R*.58,R*.30,0,0,6.283);x.fill();x.strokeStyle='rgba(255,255,255,.20)';x.lineWidth=S*.012;x.beginPath();x.arc(c,c,R*.62,2.4,4.2);x.stroke()}
-  else if(kind==='tag'){x.fillStyle='rgba(10,70,110,.38)';for(const [dx,dy,r] of [[.36,.42,.17],[.62,.64,.11],[.60,.30,.07]]){x.beginPath();x.arc(px(dx),py(dy),r*R*2,0,6.283);x.fill()}}
-  x.restore();
-  x.fillStyle='rgba(255,255,255,.55)';x.beginPath();x.arc(c-R*.38,c-R*.40,R*.13,0,6.283);x.fill();
-  if(kind==='entity'){x.strokeStyle=hexToRgba(color,.75);x.lineWidth=S*.030;x.save();x.translate(c,c);x.rotate(-.42);x.beginPath();x.ellipse(0,0,R*1.65,R*.46,0,0,6.283);x.stroke();x.strokeStyle='rgba(255,255,255,.25)';x.lineWidth=S*.012;x.beginPath();x.ellipse(0,0,R*1.45,R*.40,0,0,6.283);x.stroke();x.restore()}
-  return planetCache[key]=cv}
-
+const STARS={concept:{stage:'蓝巨星',glow:5.2,spikes:2.4,core:1.0,twinkle:.08},document:{stage:'类太阳星',glow:4.4,spikes:1.5,core:1.0,twinkle:.05},topic:{stage:'红巨星',glow:6.4,spikes:1.7,core:1.15,twinkle:.12},entity:{stage:'脉冲星',glow:4.6,spikes:3.2,core:.8,twinkle:.22},note:{stage:'白矮星',glow:3.1,spikes:.8,core:.75,twinkle:.03},tag:{stage:'原恒星',glow:4.0,spikes:1.2,core:.9,twinkle:.10}};
+const STAR_SPIKE='rgba(255,255,255,0.6173)',STAR_CORE='rgba(255,255,255,0.95)';
 // 示例数据：一个概念中枢 + 各类节点 + 有机聚类
 const cats=Object.keys(COLORS);
 const names={concept:['混合检索','图谱','向量召回','重排序','缓存','索引'],document:['错题库解析','对标调研','记忆增量','题库汇总','巡检报告'],topic:['不动产','openclaw','璇玑','备份','前端'],entity:['璇玑系统','碧霄','织女','知识库'],note:['教训笔记','决策记录','坑位备忘'],tag:['性能','bug','设计','评测','线上']};
@@ -75,8 +63,10 @@ function render(now=0){
     else ctx.strokeStyle=THEME.edgeLine;
     ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke()}
   for(let i=0;i<ns.length;i++){const n=ns[i],c=COLORS[n.cat];const r=3.2+Math.min(3.2,Math.log(1+n.deg)*1.25);const isH=hov===i;const dim=focusing&&!nb.has(i);const al=dim?.1:1;
-    const gr=r*(isH?6:4);ctx.globalAlpha=al*(isH?.85:.55);ctx.drawImage(glow(c),n.x-gr,n.y-gr,gr*2,gr*2);
-    const pr=(r+(isH?.5:0))/0.26;ctx.globalAlpha=al;ctx.drawImage(planet(c,n.cat),n.x-pr,n.y-pr,pr*2,pr*2);
+    const st=STARS[n.cat];const twk=1-st.twinkle+st.twinkle*Math.sin(now/700+i*2.39);const al2=al*twk;
+    const gr=r*st.glow*(isH?1.3:1);ctx.globalAlpha=al2*(isH?.9:.62);ctx.drawImage(glow(c),n.x-gr,n.y-gr,gr*2,gr*2);
+    if(!dim&&st.spikes>0.5){const L=r*st.spikes*(isH?1.25:1)*3,w=Math.max(0.4/scale,r*.10);ctx.globalAlpha=al2*.8;ctx.fillStyle=STAR_SPIKE;ctx.beginPath();ctx.moveTo(n.x-L,n.y);ctx.lineTo(n.x,n.y-w);ctx.lineTo(n.x+L,n.y);ctx.lineTo(n.x,n.y+w);ctx.closePath();ctx.moveTo(n.x,n.y-L);ctx.lineTo(n.x-w,n.y);ctx.lineTo(n.x,n.y+L);ctx.lineTo(n.x+w,n.y);ctx.closePath();ctx.fill()}
+    const coreR=r*st.core*(isH?1.12:1);ctx.globalAlpha=al2;ctx.fillStyle=mixWith(c,true,.78);ctx.beginPath();ctx.arc(n.x,n.y,coreR*.55,0,6.283);ctx.fill();ctx.globalAlpha=al2*.95;ctx.fillStyle=STAR_CORE;ctx.beginPath();ctx.arc(n.x,n.y,Math.max(.5/scale,coreR*.22),0,6.283);ctx.fill();
     if(isH){const ph=(now%THEME.pulse.period)/THEME.pulse.period;const orbR=r+3.5+Math.sin(ph*6.283)*THEME.pulse.amp;ctx.save();ctx.translate(n.x,n.y);ctx.rotate(-.42+ph*.5);ctx.strokeStyle=c;ctx.globalAlpha=.85;ctx.lineWidth=1.4/scale;ctx.beginPath();ctx.ellipse(0,0,orbR*1.5,orbR*.5,0,0,6.283);ctx.stroke();ctx.restore()}
   }
   ctx.globalAlpha=1;
@@ -88,7 +78,7 @@ cv.addEventListener('mousemove',e=>{if(drag){tx+=e.clientX-px;ty+=e.clientY-py;p
 cv.addEventListener('mousedown',e=>{drag=true;px=e.clientX;py=e.clientY});addEventListener('mouseup',()=>drag=false);
 cv.addEventListener('wheel',e=>{e.preventDefault();const f=e.deltaY<0?1.1:0.9;scale=Math.max(.2,Math.min(4,scale*f))},{passive:false});
 // 图例
-document.getElementById('legend').innerHTML=Object.keys(COLORS).map(c=>`<span class="dot" style="background:${COLORS[c]};color:${COLORS[c]}"></span>${LBL[c]}`).join('<br>');
+document.getElementById('legend').innerHTML=Object.keys(COLORS).map(c=>`<span class="dot" style="background:${COLORS[c]};color:${COLORS[c]}"></span>${LBL[c]} · ${STARS[c].stage}`).join('<br>');
 resize();requestAnimationFrame(render);
 </script>
 </body>

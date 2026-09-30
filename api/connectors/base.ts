@@ -25,6 +25,12 @@ export interface CloudConnector {
   listFiles(config: Record<string, unknown>, parentId?: string): Promise<CloudFile[]>;
   /** 获取下载链接 */
   getDownloadUrl(config: Record<string, unknown>, fileId: string): Promise<string | null>;
+  /** 可选：连接器直接提供文档正文（RSS 等"非文件"数据源用）。
+   *  返回 null 表示该条目无内联正文，调用方回退到 downloadUrl 抓取。 */
+  getContent?(
+    config: Record<string, unknown>,
+    fileId: string,
+  ): Promise<{ fileName: string; mimeType: string; content: string } | null>;
   /** 上传/备份文件（备份用） */
   uploadFile(config: Record<string, unknown>, fileName: string, content: Buffer): Promise<{ success: boolean; path: string }>;
   /** 同步文件到本地（返回下载的文件信息） */

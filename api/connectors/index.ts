@@ -7,6 +7,7 @@ import "./115";
 import "./aliyundrive";
 import "./nas";
 import "./alist";
+import "./rss";
 
 export { listConnectors, getConnector };
 export * from "./base";
