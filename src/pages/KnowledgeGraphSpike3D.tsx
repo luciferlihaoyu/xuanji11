@@ -31,8 +31,8 @@ function glowTexture(color: string): THREE.CanvasTexture {
   const x = cv.getContext('2d')!;
   const g = x.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
   g.addColorStop(0, '#ffffff');
-  g.addColorStop(0.18, color);
-  g.addColorStop(0.45, color + '66');
+  g.addColorStop(0.08, color);
+  g.addColorStop(0.22, color + '88');
   g.addColorStop(1, color + '00');
   x.fillStyle = g;
   x.fillRect(0, 0, S, S);
@@ -70,7 +70,7 @@ export default function KnowledgeGraphSpike3D() {
         .backgroundColor('rgba(0,0,0,0)')
         .graphData({ nodes, links })
         .nodeThreeObject((nd) => {
-          const size = 6 + Math.min(14, Math.log(1 + nd.deg) * 4);
+          const size = 11 + Math.min(22, Math.log(1 + nd.deg) * 4.2);
           const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
             map: glowTexture(COLORS[nd.cat] || COLORS.tag),
             transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
@@ -79,6 +79,7 @@ export default function KnowledgeGraphSpike3D() {
           return sprite;
         })
         .nodeLabel((nd) => `${nd.name} ｜ ${LABELS[nd.cat] || nd.cat}`)
+        .warmupTicks(90)
         .linkColor(() => 'rgba(130,170,230,0.35)')
         .linkWidth(0.6)
         .linkOpacity(0.35)
@@ -90,6 +91,11 @@ export default function KnowledgeGraphSpike3D() {
             nd as never, 1200,
           );
         });
+
+      const charge = graph.d3Force('charge') as unknown as { strength: (v: number) => void } | null;
+      charge?.strength(-45);
+      const linkF = graph.d3Force('link') as unknown as { distance: (v: number) => void } | null;
+      linkF?.distance(9);
 
       // 背景星野：1200 个远景星点围成球壳
       const starGeo = new THREE.BufferGeometry();
@@ -110,14 +116,24 @@ export default function KnowledgeGraphSpike3D() {
       // Bloom 辉光（科技感核心）
       const bloom = new UnrealBloomPass(
         new THREE.Vector2(containerRef.current.clientWidth, containerRef.current.clientHeight),
-        1.6, 0.7, 0.08,
+        1.15, 0.5, 0.15,
       );
       graph.postProcessingComposer().addPass(bloom);
 
       const ctl = graph.controls() as { autoRotate: boolean; autoRotateSpeed: number };
       ctl.autoRotate = true;
       ctl.autoRotateSpeed = 0.6;
-      graph.cameraPosition({ x: 0, y: 0, z: 340 });
+      // 布局沉降后按图云包围盒手动取景（starfield 会干扰 zoomToFit 的 bbox 语义）
+      setTimeout(() => {
+        // 自己从节点坐标算包围盒（getGraphBbox 在此版本返回默认值，不可靠）
+        const gd = graph.graphData() as { nodes: SpikeNode[]; links: unknown[] };
+        const xs = gd.nodes.map(n => n.x ?? 0), ys = gd.nodes.map(n => n.y ?? 0), zs = gd.nodes.map(n => n.z ?? 0);
+        const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+        const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+        const cz = (Math.min(...zs) + Math.max(...zs)) / 2;
+        const dim = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), Math.max(...zs) - Math.min(...zs), 1);
+        graph.cameraPosition({ x: cx, y: cy, z: cz + dim * 0.6 }, { x: cx, y: cy, z: cz } as never, 1200);
+      }, 1200);
     } catch (e) {
       if (!disposed) setError(e instanceof Error ? e.message : String(e));
     }
