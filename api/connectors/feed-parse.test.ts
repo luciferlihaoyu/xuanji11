@@ -20,6 +20,7 @@ import {
   MAX_MARKUP_ABSOLUTE_SPAN,
   findMarkupStart,
   isWellFormedMarkupAt,
+  createMarkupScanContext,
   utf8ByteLength,
   HTML_NAMED,
 } from "./feed-parse";
@@ -50,6 +51,68 @@ const redditAtom = readFixture("reddit-atom.xml");
 function expectNoMarkup(text: string, where = "文本"): void {
   const at = findMarkupStart(text);
   expect(at, `${where} 不应残留 well-formed 标签形态，实际起点 ${at}: ${JSON.stringify(text.slice(0, 80))}`).toBe(-1);
+}
+
+/* ==================================================================================
+ * 第七轮 item1：FeedInputTooLargeError 的三条文案改成【模板锚定】
+ * ----------------------------------------------------------------------------------
+ * 为什么必须换：此前这几处只有关键字钉（/字节/、/上限/、/规范化/、数字串），复核实测
+ * 把实现里的「已达」改成「达到」、把「超过上限」改成「超出上限」、甚至整句语序重排，
+ * 237 条用例【全绿】—— 同义替换与重排能静默漂过。这条错误文案是运维排障时判断
+ * "该缩源还是该调上限"的唯一线索，漂了等于没有。本项目第五轮已经栽过一次同类问题
+ * （NotAFeedError 文案零断言 ⇒ 漂移无法归因，已在 r6-item6 组补齐），这条是残留的同类洞。
+ * 现在的做法：固定部分逐字写进 ^…$ 锚定模板（片段从实现原文逐字抄出），
+ * 动态部分（实际字符数/字节数/上限值）用捕获组取出后单独核对数值 ⇒ 【改一个字必红】。
+ * 能咬住的改动类别：
+ *   ① 同义替换（已达→达到、超过→超出、疑似→疑是）② 语序重排（"超过上限 X 字节"↔"X 字节超过上限"）
+ *   ③ 增删字/删尾注（去掉"——疑似畸形/被截断的大输入"、去掉"（UTF-8）"）
+ *   ④ 标点与全半角漂移（，→, 、（→( 、——→-）⑤ 数字位丢失或与预算不符
+ * ================================================================================== */
+
+/** 把固定文案片段逐字拼成 ^…$ 锚定正则；动态数字位用 null 占位（编译成捕获组 (\\d+)）。
+ *  每个片段都先做正则转义，文案里的 () . / 等符号不会退化成正则元字符。 */
+function anchoredTemplate(segs: Array<string | null>): RegExp {
+  const body = segs
+    .map((s) => (s === null ? "(\\d+)" : s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+    .join("");
+  return new RegExp(`^${body}$`);
+}
+
+/** 文案①「字符数前置快速拒绝」锚定模板（上限数字绑定导出常量，常量本身另有专门用例钉值）。 */
+const PIN_TOO_LARGE_CHARS = anchoredTemplate([
+  "输入 ",
+  null,
+  " 字符，超过字符数前置上限 ",
+  String(MAX_FEED_INPUT_CHARS),
+  " 字节量级（8MiB）——疑似畸形/被截断的大输入",
+]);
+/** 文案②「原始字节超限（前置拒绝）」锚定模板。 */
+const PIN_TOO_LARGE_BYTES = anchoredTemplate([
+  "输入 ",
+  null,
+  " 字节（UTF-8），超过上限 ",
+  String(MAX_FEED_INPUT_BYTES),
+  " 字节（8MiB）——疑似畸形/被截断的大输入（CJK 等多字节文本按字符数看不出来，故按字节拦）",
+]);
+/** 文案③「裸 & 规范化放大越界」锚定模板。 */
+const PIN_TOO_LARGE_NORMALIZED = anchoredTemplate([
+  "裸 & 规范化（'&'→'&amp;'，最多 5 倍放大）后已达 ",
+  null,
+  " 字节（UTF-8），超过上限 ",
+  String(MAX_FEED_INPUT_BYTES),
+  " 字节（8MiB）——原始输入本身未超限，但实际要解析的串超限（畸形/被截断的大输入）",
+]);
+
+/** 断言文案【逐字】命中锚定模板，并把捕获到的动态数字按顺序交回调用方核对。
+ *  不命中即抛（用例红），红字里带上实际文案原文，便于归因是哪一段漂了。 */
+function expectMessageTemplate(message: string, pin: RegExp, where: string): number[] {
+  const m = pin.exec(message);
+  if (!m) {
+    throw new Error(
+      `${where}：文案已漂移，不再逐字命中锚定模板\n  实际: ${JSON.stringify(message)}\n  模板: ${pin.source}`,
+    );
+  }
+  return m.slice(1).map((v) => Number(v));
 }
 
 describe("parseFeed 三种根形态（结构性断言）", () => {
@@ -783,8 +846,15 @@ describe("P1 输入上限口径：按 UTF-8 字节计（CJK feed 不再被放行
       caught = e;
     }
     expect(caught).toBeInstanceOf(FeedInputTooLargeError);
-    expect((caught as Error).message).toMatch(/字节/);
-    expect((caught as Error).message).toMatch(/上限/);
+    // 第七轮 item1：原来的关键字钉（/字节/、/上限/）换成模板锚定 ——
+    // "已达→达到"这类同义替换、以及语序重排、删尾注，改一个字必红。
+    // 上限值是模板里的字面量（绑定导出常量），报出的字节数是捕获组，另核对它等于真实预算数。
+    const [bytesReported] = expectMessageTemplate(
+      (caught as Error).message,
+      PIN_TOO_LARGE_BYTES,
+      "原始字节超限文案",
+    );
+    expect(bytesReported).toBe(Buffer.byteLength(big, "utf8")); // 报的必须是真正计入预算的那个数
   });
 
   it("1.2M 个 CJK 字符（约 3.6MB）在 8MiB 预算内：不得被体积上限误杀", () => {
@@ -970,10 +1040,19 @@ describe("M-A 体积预算按【实际要解析的串】计（裸 & 规范化不
     }
     expect(caught).toBeInstanceOf(FeedInputTooLargeError);
     const message = (caught as Error).message;
-    expect(message).toMatch(/字节/);
-    expect(message).toMatch(/上限/);
-    expect(message).toMatch(MAX_FEED_INPUT_BYTES.toString());
-    expect(message).toMatch(/规范化/);
+    // 第七轮 item1：原来四条关键字钉（/字节/ /上限/ 数字串 /规范化/）换成一条模板锚定。
+    // 锚定本身就要求"字节 / 上限 / 规范化 / 8388608 / 括号标点"逐字在场且【顺序正确】，
+    // 比那几个关键字的并集强得多——同义替换（已达→达到）、重排（超过上限 X 字节 ↔
+    // X 字节超过上限）、删尾注（去掉"——原始输入本身未超限…"）都会立刻红。
+    const [bytesReported] = expectMessageTemplate(
+      message,
+      PIN_TOO_LARGE_NORMALIZED,
+      "规范化放大越界文案",
+    );
+    // 报出的累计字节数必须落在"首次越过上限"那一格：规范化每遇一个裸 & 至多 +5 字节，
+    // 越界立即中止（不是先把 40MB 构造完再数字节），故超出量必在 (0, 5] 内。
+    expect(bytesReported).toBeGreaterThan(MAX_FEED_INPUT_BYTES);
+    expect(bytesReported).toBeLessThanOrEqual(MAX_FEED_INPUT_BYTES + 5);
   });
 
   it("超大【原始】输入走前置拒绝（文案是原始超限，不是规范化超限）——不为规范化把大串读进来", () => {
@@ -987,6 +1066,15 @@ describe("M-A 体积预算按【实际要解析的串】计（裸 & 规范化不
     }
     expect(caught).toBeInstanceOf(FeedInputTooLargeError);
     expect((caught as Error).message).not.toMatch(/规范化/);
+    // 第七轮 item1：这条串的字符数就已越过前置上限 ⇒ 命中的是【字符数快速拒绝】那条文案，
+    // 钉住它逐字等于模板（并确认它不是规范化文案），"前置拒绝不念放大文案"才算真钉住。
+    const [charsReported] = expectMessageTemplate(
+      (caught as Error).message,
+      PIN_TOO_LARGE_CHARS,
+      "前置拒绝文案（字符数口径）",
+    );
+    expect(charsReported).toBe(huge.length);
+    expect(PIN_TOO_LARGE_NORMALIZED.test((caught as Error).message)).toBe(false);
   }, 30_000);
 
   it("字符数前置上限仍然先拦：超限输入不必再数字节", () => {
@@ -998,7 +1086,13 @@ describe("M-A 体积预算按【实际要解析的串】计（裸 & 规范化不
       caught = e;
     }
     expect(caught).toBeInstanceOf(FeedInputTooLargeError);
-    expect((caught as Error).message).toMatch(/字符/);
+    // 第七轮 item1：/字符/ 关键字钉换成模板锚定，并核对报出的字符数就是越界的那个数。
+    const [charsReported] = expectMessageTemplate(
+      (caught as Error).message,
+      PIN_TOO_LARGE_CHARS,
+      "字符数前置上限文案",
+    );
+    expect(charsReported).toBe(over.length);
   }, 30_000);
 
   it("反向对照（不误杀）：约 6MiB 的正常 ASCII 文档（含少量 &amp;）照样解析", () => {
@@ -1202,7 +1296,14 @@ describe("M-C 标识符出口（id / link）的紧凑清洗口径 —— 逐条�
       '<rss version="2.0"><channel><title>T</title><item><title>We\u0007ird<b>x</b></title></item></channel></rss>',
     ).entries[0];
     expect(entry.title).toBe("We ird x");
-    expect(entry.id).toBe("We ird x"); // title 兜底时 id 与 title 同值（清洗对已清洗值幂等）
+    // 【第六轮 item4 口径变更登记（不是悄悄改期望）】
+    //  旧期望是 "We ird x"，它建立在"兜底拿的是【已按散文口径清洗过的 title】再过一遍标识符清洗"
+    //  上——于是 id 里留着散文口径插进去的分隔空格，而 identityOf 的注释却声称"每个候选值都过
+    //  toIdentifierText，所以 id 永远满足标识符清洗规则"（第四轮 M-C 的未闭项：注释与代码矛盾）。
+    //  现在 title 兜底改成对【原始 title】跑标识符口径：元素之间不插分隔（"We ird x" → "Weirdx"），
+    //  控制符删除而非换空格。散文出口 title 本身一字未变（上一条断言仍在）。
+    //  为什么可以改：RSS 功能未上线 ⇒ 没有历史主键要迁；上线后这条链再动就是全量重复入库。
+    expect(entry.id).toBe("Weirdx");
   });
 });
 
@@ -2238,5 +2339,383 @@ describe("反自指钉桩：常数取值与判定边界用字面量钉", () => {
     for (const body of ["<b>a</b> b", "<b>a</b>\nb", "<b>a</b>\t\tb"]) {
       expect(/  /.test(contentOf(body)), `空白后不重复补：${body}`).toBe(false);
     }
+  });
+});
+
+/* ==================================================================================
+ * 第六轮（冻结前收口轮）·t1 r6 —— 复核给出的 6 条最小清单，逐条上护栏
+ * ----------------------------------------------------------------------------------
+ * 这一节的存在理由：上一轮之前这些角度全是【改坏实现却依然全绿】的盲区
+ *  · R1（第 1 条）字面 '<' 旁路绕过 emit() ⇒ 正文被插入源中不存在的空格 + 两路径分裂
+ *  · Y12（第 2 条）全串无 '>' 的快退护栏零断言（删掉它 212 全绿，0.17MiB 输入实测 39.4s）
+ *  · Y17（第 3 条）CLOSE_TAG_NAME 的 i 标志零断言（删掉它 212 全绿，大写 HTML 真退化）
+ *  · item4（第 4 条）标识符出口吃泛型守卫 ⇒ 源站加/删一个 </div> 就能换主键
+ *  · item5（第 5 条）死条件 !closing（实现侧删除，由全量绿 + 变异体检验收）
+ *  · item6（第 6 条）两个可判别错误的【文案】零断言（事故重建前后措辞已漂移过）+ 三处申报
+ * ================================================================================== */
+
+describe("r6-item1 R1 字面 '<' 必须走 emit：边界不许被推到 '<' 之后（静默插空格 + 两路径分裂）", () => {
+  /** Atom content type="xhtml" 的结构路径（与 contentOf 的 CDATA 标记剥离路径互为对照） */
+  const structPath = (inner: string) =>
+    parseFeed(
+      '<feed xmlns="http://www.w3.org/2005/Atom"><title>T</title><entry><id>e</id>' +
+        '<content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">' +
+        inner +
+        "</div></content></entry></feed>",
+    ).entries[0].content;
+
+  // [CDATA 里的字面形态, 结构路径里【等价】的 XML 形态（同一段字面 '<'，XML 里必须转义）, 两条路径共同的期望结果]
+  const forms: Array<[string, string, string]> = [
+    ["A<em>x</em><3>B", "A<em>x</em>&lt;3&gt;B", "A x<3>B"],
+    ["x<br/><b c d>y", "x<br/>&lt;b c d&gt;y", "x<b c d>y"],
+    ["a<i>b</i><3>c", "a<i>b</i>&lt;3&gt;c", "a b<3>c"],
+    ["<p>a</p><3>b", "<p>a</p>&lt;3&gt;b", "a<3>b"],
+  ];
+
+  it("四个形态：CDATA 路径不再插入源中不存在的空格（缺陷 R1 的直接钉）", () => {
+    for (const [literal, , want] of forms) expect(contentOf(literal), `CDATA：${literal}`).toBe(want);
+  });
+
+  it("两路径同结果（R1 把 CDATA 路径改得和结构路径不一致，这条就是为它设的不变式）", () => {
+    for (const [literal, xmlForm, want] of forms) {
+      expect(contentOf(literal), `标记剥离路径：${literal}`).toBe(want);
+      expect(structPath(xmlForm), `结构路径：${xmlForm}`).toBe(want);
+    }
+  });
+
+  it("其余字面 '<' 形态同样不吞边界、不造空格（含『源里本来就有空格』的对照档）", () => {
+    expect(contentOf("text<b></b><3>y")).toBe("text<3>y");
+    expect(contentOf("<em>term</em><3>")).toBe("term<3>");
+    expect(contentOf("word<b>bold</b><4>x")).toBe("word bold<4>x");
+    expect(contentOf("a<b>x</b> <3>y")).toBe("a x <3>y"); // 源里的真空格保留，且只有一个
+    expect(/  /.test(contentOf("A<em>x</em><3>B")), "字面 '<' 不得造出双空格").toBe(false);
+  });
+
+  it("串尾孤立 '<' / 连续 '<'：emit 之后边界必须被消费（R1 修法的反向对照）", () => {
+    expect(contentOf("a<b>x</b><")).toBe("a x<");
+    expect(contentOf("a<b>x</b><<y")).toBe("a x<<y"); // 旧行为给 "a x<< y"（空格落在字面 '<' 之后）
+    expect(contentOf("a<b>x</b><!--")).toBe("a x<!--"); // 串尾未闭合注释整段留字面，且不造空格
+  });
+});
+
+describe("r6-item2 Y12 全串无 '>' 的病态输入：lastGt 快退是零断言护栏，本轮补上（现版线性，删掉快退实测 39.4s）", () => {
+  it("【第七轮 item3 秒级档】'<a href=z'×5000（45KB，全串无 '>'）⇒ 结果一字不改 + 耗时预算 500ms（护栏被删时 ~2.1s 就红）", () => {
+    // 为什么要再加这一档：下面那条 ×20000 的大样本是【边界证据】（证明护栏在 0.17MiB 这个量级
+    // 上真的做事），但它报警太慢——把 `if (c.lastGt <= i) return -1;` 删掉后，那条用例要跑满
+    // 一百多秒才红（本机实测变异态 40.8s 纯计算 + 用例自身 3000ms 预算的判定）。有人删护栏
+    // 之后等这条红的时间，长到会让人以为"没影响"。这一档用 1/4 规模（n² 代价 ⇒ 1/16 时间），
+    // 健康态实测 ~6ms、变异态实测 ~2129ms ⇒ 预算 500ms：健康态有约 80 倍余量不会误报，
+    // 护栏被删则【2 秒内必红】。大样本那条【保留不删】，两档一个管报警速度、一个管边界证据。
+    const probe = "<a href=z".repeat(5000);
+    expect(probe).not.toContain(">"); // 关键形态：全串无 '>'，才撞得到这条快退
+    expect(probe.length).toBe(45000);
+    const start = Date.now();
+    const out = contentOf(probe);
+    const elapsed = Date.now() - start;
+    expect(out).toBe(probe); // 无 '>' ⇒ 每个 '<' 都按字面文本保留，一个字都不许改
+    expect(elapsed, `耗时 ${elapsed}ms 超出线性预算（护栏健在实测个位数 ms；500ms 档 = 快退被删）`).toBeLessThan(500);
+  }, 30_000);
+
+  it("'<a href=z'×20000（0.17MiB，一个 '>' 都没有）⇒ 结果一字不改 + 耗时在线性预算内", () => {
+    const probe = "<a href=z".repeat(20000);
+    // 关键形态条件：全串【不含 '>'】。现有那条病态用例含 '>'，撞不到这条快退 —— 这正是它零覆盖的原因。
+    expect(probe).not.toContain(">");
+    expect(probe.length).toBe(180000);
+    const start = Date.now();
+    const out = contentOf(probe);
+    const elapsed = Date.now() - start;
+    expect(out).toBe(probe); // 无 '>' ⇒ 每个 '<' 都按字面文本保留，一个字都不许改
+    // 预算 3000ms：现版实测约 40ms（2C 抖动留 70 倍余量），删掉 `if (c.lastGt <= i) return -1;`
+    // 的变异档实测 39400ms ⇒ 这个上限既能杀掉变异，又不会因机器抖动误报。
+    expect(elapsed, `耗时 ${elapsed}ms 超出线性预算（39s 档 = lastGt 快退被删）`).toBeLessThan(3000);
+  }, 120_000);
+
+  it("上下文与尺子单元：无 '>' 的串里 lastGt = -1，每个 '<' 都判散文", () => {
+    const s = "<a href=z".repeat(50);
+    const ctx = createMarkupScanContext(s);
+    expect(ctx.lastGt).toBe(-1);
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === "<") expect(isWellFormedMarkupAt(s, i, ctx), `i=${i}`).toBe(-1);
+    }
+  });
+
+  it("对照：只要串尾补一个 '>'，快退就不再适用（护栏管的是『再无 >』那一档，不是全部）", () => {
+    const ctx = createMarkupScanContext("<a href=z>");
+    expect(ctx.lastGt).toBe(9);
+    expect(isWellFormedMarkupAt("<a href=z>", 0, ctx)).toBe(10); // 1 个裸属性 + 有 '>' ⇒ 仍是标记
+  });
+});
+
+describe("r6-item3 Y17 大写闭合标签必须提供闭合证据：CLOSE_TAG_NAME 的 i 标志此前零断言", () => {
+  it("老式大写 HTML（站点现实里不罕见）：闭合标签给了证据 ⇒ 开标签剥净，不留 <DIV> 残留", () => {
+    expect(contentOf("文字<DIV>x</DIV>尾")).toBe("文字 x 尾");
+    expect(contentOf("文字<SPAN>y</SPAN>尾")).toBe("文字 y 尾");
+    expect(contentOf("a<DIV>b</DIV>c")).toBe("a b c");
+  });
+
+  it("大小写混排的两个方向都要有证据（开大闭小 / 开小闭大）", () => {
+    expect(contentOf("文字<B>x</b>尾")).toBe("文字 x 尾");
+    expect(contentOf("文字<b>x</B>尾")).toBe("文字 x 尾");
+  });
+
+  it("建表单元：大写闭合名同样进 closeNames（本地名 + 小写）；无闭合标签时表为空", () => {
+    expect(createMarkupScanContext("a<DIV>b</DIV>c").closeNames.has("div")).toBe(true);
+    expect(createMarkupScanContext("a</Div>b").closeNames.has("div")).toBe(true);
+    expect(createMarkupScanContext("a<P>x</P>b").closeNames.has("p")).toBe(true);
+    expect(createMarkupScanContext("a<b>x</b>c").closeNames.has("b")).toBe(true);
+    expect(createMarkupScanContext("a<b>x").closeNames.size).toBe(0);
+    // 前缀化闭合标签取本地名（</rss:item> 提供的是 item 的证据）
+    expect(createMarkupScanContext("a<rss:item>x</rss:item>b").closeNames.has("item")).toBe(true);
+  });
+});
+
+describe("r6-item5 死条件 !closing 已删：闭合标签从不吃守卫，这本身就是可断言的行为", () => {
+  it("游离的闭合标签（全串没有对应开标签）照样被剥净 —— 它自己的名字就是闭合证据", () => {
+    // 这条同时是 item5 的验收：删掉 !closing 后行为不变（守卫对 closing 恒不成立），
+    // 而一旦建表正则丢了 `i`（见 r6-item3），闭合标签会被守卫判成散文 ⇒ 这里立刻变红。
+    expect(contentOf("文字x</DIV>尾")).toBe("文字x 尾");
+    expect(contentOf("文字x</div>尾")).toBe("文字x 尾");
+    expect(contentOf("a</b>c")).toBe("a c");
+    expect(contentOf("a</foo>bar")).toBe("a bar");
+  });
+
+  it("闭合标签带属性也照剥（attrCount 与它无关，守卫更管不到）", () => {
+    expect(contentOf("a</div x>b")).toBe("a b");
+    expect(contentOf("x</a>b")).toBe("x b");
+  });
+
+  it("自闭合标签不吃泛型守卫：`!selfClosing` 是【活判据】（变异体检 M13 逼出来的钉）", () => {
+    // 第六轮变异体检：删掉守卫条件里的 `!selfClosing &&` ⇒ 236 全绿（当时的真实盲区）。
+    // 自闭合形态天然没有闭合证据（`<b/>` 不等于 `</b>`），若让它进守卫，
+    // `a<b/>c` 会被判散文而留下字面残留。这两条断言把该退化钉死。
+    expect(contentOf("a<b/>c")).toBe("a c");
+    expect(contentOf("词<foo/>尾")).toBe("词 尾");
+    expect(contentOf("a<my-el/>b")).toBe("a b");
+  });
+});
+
+describe("r6-item4 标识符出口【不吃泛型守卫】（主键稳定性；散文出口口径不变）", () => {
+  const rssItem = (inner: string) =>
+    '<rss version="2.0"><channel><title>T</title><item>' + inner + "</item></channel></rss>";
+  const idOf = (inner: string) => parseFeed(rssItem(inner)).entries[0].id;
+  const linkOfT = (inner: string) => parseFeed(rssItem("<title>t</title>" + inner)).entries[0].link;
+  const rdf = (attrs: string, inner: string) =>
+    '<rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999-02-22-rdf-syntax-ns#">' +
+    "<item" +
+    attrs +
+    ">" +
+    inner +
+    "</item></rdf:RDF>";
+
+  it("① 主键稳定：guid 自身文本里【有无同名闭合标签】不再改变 id（复核点名的唯一残留静默风险）", () => {
+    const pairs: Array<[string, string, string]> = [
+      ["tag:x&lt;b&gt;1", "tag:x&lt;b&gt;1&lt;/b&gt;", "tag:x1"],
+      ["urn:uuid:7&lt;div&gt;abc", "urn:uuid:7&lt;div&gt;abc&lt;/div&gt;", "urn:uuid:7abc"],
+      ["https://x/a&lt;b&gt;c", "https://x/a&lt;b&gt;c&lt;/b&gt;", "https://x/ac"],
+      ["https://e.com/p?w=800&lt;img&gt;", "https://e.com/p?w=800&lt;img&gt;&lt;/img&gt;", "https://e.com/p?w=800"],
+    ];
+    for (const [bare, closed, want] of pairs) {
+      const noEvidence = idOf("<guid>" + bare + "</guid>");
+      const withEvidence = idOf("<guid>" + closed + "</guid>");
+      expect(noEvidence, `无闭合证据：${bare}`).toBe(want);
+      expect(withEvidence, `有闭合证据：${closed}`).toBe(want);
+      expect(noEvidence, `同字段有无闭合标签必须同值：${bare}`).toBe(withEvidence);
+    }
+  });
+
+  it("①b 其余标识符出口同样稳定（link 文本 / link href / dc:identifier / rdf:about / enclosure url）", () => {
+    // `<b>` 整段是标签 ⇒ 字母 b 随标签一起消失，只剩前后文本相接（"https://x/a" + "c" ⇒ "https://x/ac"）
+    expect(linkOfT("<link>https://x/a&lt;b&gt;c</link>")).toBe("https://x/ac");
+    expect(linkOfT("<link>https://x/a&lt;b&gt;c&lt;/b&gt;</link>")).toBe("https://x/ac");
+    expect(linkOfT('<link href="https://x/a&lt;b&gt;c"/>')).toBe("https://x/ac");
+    expect(linkOfT('<link href="https://x/a&lt;b&gt;c&lt;/b&gt;"/>')).toBe("https://x/ac");
+    expect(parseFeed(rdf("", "<dc:identifier>doi:10.1/a&lt;b&gt;c</dc:identifier>")).entries[0].id).toBe("doi:10.1/ac");
+    expect(
+      parseFeed(rdf("", "<dc:identifier>doi:10.1/a&lt;b&gt;c&lt;/b&gt;</dc:identifier>")).entries[0].id,
+    ).toBe("doi:10.1/ac");
+    expect(parseFeed(rdf(' rdf:about="https://x/a&lt;b&gt;c"', "<title>t</title>")).entries[0].id).toBe("https://x/ac");
+    expect(
+      parseFeed(rdf(' rdf:about="https://x/a&lt;b&gt;c&lt;/b&gt;"', "<title>t</title>")).entries[0].id,
+    ).toBe("https://x/ac");
+    expect(parseFeed(rssItem('<enclosure url="https://cdn/a&lt;b&gt;c.mp3"/>')).entries[0].id).toBe(
+      "https://cdn/ac.mp3",
+    );
+    expect(parseFeed(rssItem('<enclosure url="https://cdn/a&lt;b&gt;c.mp3&lt;/b&gt;"/>')).entries[0].id).toBe(
+      "https://cdn/ac.mp3",
+    );
+  });
+
+  it("② title 兜底改走【原始 title + 标识符口径】：id 紧凑、title 仍是散文（M-C 注释与代码终于一致）", () => {
+    const structural = parseFeed(
+      '<rss version="2.0"><channel><title>C</title><item><title>A<b>B</b>C</title></item></channel></rss>',
+    ).entries[0];
+    expect(structural.title).toBe("A B C"); // 散文口径：元素之间补分隔
+    expect(structural.id).toBe("ABC"); // 标识符口径：不补（旧行为是拿散文 title 再洗一遍 ⇒ "A B C"）
+
+    const escaped = parseFeed(
+      '<rss version="2.0"><channel><title>C</title><item><title>A&lt;b&gt;B&lt;/b&gt;C</title></item></channel></rss>',
+    ).entries[0];
+    expect(escaped.id).toBe("ABC"); // 同一段 HTML 的两种源形态 ⇒ 同一个主键
+    expect(escaped.title).toBe("A B C");
+
+    const controlChars = parseFeed(
+      '<rss version="2.0"><channel><title>C</title><item><title>We\u0007ird<b>x</b></title></item></channel></rss>',
+    ).entries[0];
+    expect(controlChars.title).toBe("We ird x"); // 散文：控制符换空格 + 补分隔
+    expect(controlChars.id).toBe("Weirdx"); // 标识符：控制符删除 + 不补分隔
+  });
+
+  it("③ 散文出口继续吃守卫（本轮只动标识符出口，比较/泛型语义照旧保住）", () => {
+    expect(contentOf("变量 a<b>c 时")).toBe("变量 a<b>c 时");
+    expect(contentOf("std::vector<int> v;")).toBe("std::vector<int> v;");
+    // 同一段文本进 title：散文口径保住字面比较语义；标识符口径不吃守卫 ⇒ 那一处 <b> 被剥（代价见 ⑤）
+    const entry = parseFeed(
+      '<rss version="2.0"><channel><title>C</title><item><title>变量 a&lt;b&gt;c 时</title></item></channel></rss>',
+    ).entries[0];
+    expect(entry.title).toBe("变量 a<b>c 时");
+    expect(entry.id).toBe("变量 ac 时");
+  });
+
+  it("④ 标识符出口仍保留守卫之外的两条判据（数字开头 / 多个裸属性 ⇒ 照旧留字面）", () => {
+    expect(idOf("<guid>http://e.com/1&lt;2&gt;0</guid>")).toBe("http://e.com/1<2>0");
+    expect(idOf("<guid>id&lt;1abc&gt;x&lt;/1abc&gt;</guid>")).toBe("id<1abc>x</1abc>");
+    expect(idOf("<guid>x&lt;a href=1 y z&gt;c</guid>")).toBe("x<a href=1 y z>c");
+  });
+
+  it("⑤【申报·有意如此】标识符出口放弃泛型保护：guid 里的 List<T> 会被剥成 List（口径代价，别当 bug 改回去）", () => {
+    expect(idOf("<guid>List&lt;T&gt;item</guid>")).toBe("Listitem");
+    expect(idOf("<guid>std::vector&lt;int&gt;v</guid>")).toBe("std::vectorv");
+    // 对照：散文出口同样输入照旧保住（两条口径分开的正是这一档）
+    expect(contentOf("std::vector<int> v;")).toBe("std::vector<int> v;");
+  });
+
+  it("⑤b【申报·有意如此】放弃守卫的【后果】：两个不同的源值 collapse 成同一主键 ⇒ 同源两条并成一条（改回去 = 重新引入 guid 翻转）", () => {
+    // ── 为什么这条断言必须存在 ──
+    // ⑤ 只申报了【机理】（`List<T>` → `List`），没申报【后果】：守卫一让，两个本来不同的
+    // 源值可能清洗成同一个主键。不钉住并写清取舍，将来一定有人当 bug"顺手修回去"——
+    // 而修回去就是第五轮那个坑：guid 取值取决于【该字段自身文本里有没有同名闭合标签】，
+    // 源站改一次正文就换一次主键 ⇒ 下游按 id 去重失效 ⇒ 同一篇文章重复入库，改一次换一个键。
+    // 两个方向的风险对比（这就是选前者的理由）：
+    //   · collapse：概率低（要同源同时出现两种写法且恰好撞键）＋后果有界（条目数 -1，其余
+    //     字段按第五轮 M-E 的字段并集【补空位】保留；见下面 toEqual 的实测）＋源站写法一改
+    //     自然消失，不会持续产生新脏 ⇒ 可容忍。
+    //   · 换键：概率高（正文天天改）＋后果是不可逆的重复入库（同文两条、且每改一次再换一次
+    //     键，脏数据持续累积、无法回收）⇒ 不可容忍。
+    // ⇒ 宁可极少数撞键合并，不可高频换键重复。本条是【有意如此】的口径，不是缺陷。
+
+    // ① 两个【不同源值】落进【同一个主键】（实测，非推演）
+    const escaped = idOf("<guid>https://x/a&lt;b&gt;c</guid>"); // 双层转义写法（&lt;b&gt; 解出 <b> 后被守卫放宽剥掉）
+    const plain = idOf("<guid>https://x/ac</guid>"); // 明文写法
+    expect(escaped).toBe("https://x/ac");
+    expect(plain).toBe("https://x/ac");
+    expect(escaped).toBe(plain); // ← 这一句就是"collapse 有意如此"的钉子
+
+    // ② 同一份源里两种写法同时出现 ⇒ 两条本不相同的 item 合并成一条（实测条数 / id / 字段）
+    const merged = parseFeed(
+      '<rss version="2.0"><channel><title>源标题</title>' +
+        "<item><guid>https://x/a&lt;b&gt;c</guid><title>甲条（双层转义写法）</title>" +
+        "<description>只有甲条有的正文A</description><link>https://x/link-jia</link></item>" +
+        "<item><guid>https://x/ac</guid><title>乙条（明文写法）</title>" +
+        "<summary>只有乙条有的摘要B</summary><pubDate>Tue, 30 Sep 2025 01:00:00 +0000</pubDate></item>" +
+        "</channel></rss>",
+    );
+    // 条数：2 → 1（这就是 collapse 的代价，如实钉住；不是"解析丢条目"，是撞键后按 id 合并）
+    expect(merged.entries).toHaveLength(1);
+    // 字段：id 用撞出来的那个；两边互补的字段都保住（乙的 pubDate 补进空位）；
+    // 冲突字段取"更完整者为底"（甲），所以乙的摘要B 不进记录 —— 与 M-E 的补空位口径一致。
+    expect(merged.entries[0]).toEqual({
+      id: "https://x/ac",
+      title: "甲条（双层转义写法）",
+      link: "https://x/link-jia",
+      publishedAt: new Date("2025-09-30T01:00:00.000Z"),
+      summary: "只有甲条有的正文A",
+      content: "只有甲条有的正文A",
+    });
+
+    // ③ 对照：散文出口【不 collapse】——同一段文本进 title 照旧保住字面 `<b>`，
+    // 两条口径分开正是为了让"正文改一个 </div>"不影响主键、也不影响散文的读感。
+    const prose = parseFeed(
+      '<rss version="2.0"><channel><title>C</title>' +
+        "<item><guid>g-1</guid><title>路径 a&lt;b&gt;c 在这里保住字面</title></item>" +
+        "<item><guid>g-2</guid><title>路径 ac</title></item>" +
+        "</channel></rss>",
+    );
+    expect(prose.entries.map((e) => e.title)).toEqual([
+      "路径 a<b>c 在这里保住字面",
+      "路径 ac",
+    ]);
+  });
+
+  it("⑥ 出口不变式在新口径下仍然成立：真实固件每条 id/link 两把尺零命中", () => {
+    for (const feed of [parseFeed(hnRss2), parseFeed(natureRdf), parseFeed(redditAtom)]) {
+      for (const entry of feed.entries) {
+        for (const value of [entry.id, entry.link]) {
+          if (!value) continue;
+          expect(findMarkupStart(value)).toBe(-1);
+          expectNoWideMarkup(value, "真实固件标识符出口（宽尺）");
+          expect(value).toBe(value.trim());
+          expect(/  /.test(value)).toBe(false);
+        }
+      }
+    }
+  });
+});
+
+describe("r6-item6 错误文案钉 + 三处申报用例化", () => {
+  const grab = (xml: string): { name: string; message: string } => {
+    try {
+      parseFeed(xml);
+    } catch (e) {
+      const err = e as Error;
+      return { name: err.name, message: err.message };
+    }
+    throw new Error("期望抛错但 parseFeed 正常返回了");
+  };
+
+  it("NotAFeedError：类型 + 三条文案全部钉死（此前只断言类型，措辞漂移无人管）", () => {
+    expect(grab("").name).toBe("NotAFeedError");
+    expect(grab("").message).toMatch(/^输入为空，无法识别为 feed$/);
+    expect(grab('{"hello": "world"}').message).toMatch(
+      /^输入不是合法 XML，也找不到 rss \/ rdf:RDF \/ feed 根标签，可能不是 RSS\/Atom 数据源$/,
+    );
+    expect(grab("<!DOCTYPE html><html><body><p>hello</p></body></html>").message).toMatch(
+      /^根标签不是 rss \/ rdf:RDF \/ feed，输入可能不是 RSS\/Atom 数据源（顶层节点:\s*html）$/,
+    );
+  });
+
+  it("MalformedXMLError：类型 + 文案前缀钉死（尾部带解析器原始报错，不锁死它）", () => {
+    const err = grab("<rss><channel><title>T</title><item><title>x</title>");
+    expect(err.name).toBe("MalformedXMLError");
+    expect(err.message).toMatch(/^feed 语法有瑕疵，无法解析（如标签未闭合\/非法字符）: .+/);
+    expect(() => parseFeed("<rss><channel><title>T</title><item><title>x</title>")).toThrowError(MalformedXMLError);
+  });
+
+  it("申报①：守卫的『紧贴』判据只看前一个字符 ⇒ f(x)<y>z / \"a\"<b>c / a <b>c 会被吞（不为它放宽判据）", () => {
+    expect(contentOf("f(x)<y>z")).toBe("f(x) z");
+    expect(contentOf('"a"<b>c')).toBe('"a" c');
+    expect(contentOf("a <b>c")).toBe("a c");
+    // 对照：紧贴标识符字符才是守卫认的那一档
+    expect(contentOf("a<b>c")).toBe("a<b>c");
+    expect(contentOf("1<b>c")).toBe("1<b>c");
+  });
+
+  it("申报②：注释/声明/PI 仍受 4096 跨度上限 ⇒ 超长那一段整块进正文（数量级样本：100KB 注释）", () => {
+    const comment = contentOf("A<!--" + "u".repeat(100000) + "-->B");
+    expect(comment.length).toBeGreaterThan(100000); // 实测 100009 字注释体进了正文
+    expect(comment).toContain("<!--");
+    const decl = contentOf("A<!DOCTYPE " + "d".repeat(100000) + ">B");
+    expect(decl.length).toBeGreaterThan(100000);
+    const pi = contentOf("A<?pi " + "p".repeat(100000) + "?>B");
+    expect(pi.length).toBeGreaterThan(100000);
+  });
+
+  it("申报③：独立宽尺是【测试语料回归网】，不是运行期拦截 ⇒ 真实源里同类脏照样入库、不抛、不丢条目", () => {
+    const dirty =
+      '<rss version="2.0"><channel><title>T</title><item><guid>g1</guid>' +
+      "<description><![CDATA[x <a href=x y z>y]]></description></item></channel></rss>";
+    const entry = parseFeed(dirty).entries[0];
+    expect(entry.content).toBe("x <a href=x y z>y");
+    expect(wideMarkupSpans(entry.content)).toEqual(["<a"]); // 宽尺会抓到它 —— 但那只发生在测试里
+    expect(entry.id).toBe("g1");
   });
 });

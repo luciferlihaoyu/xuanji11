@@ -19,15 +19,23 @@
  *   跨度上限 MAX_MARKUP_SPAN：超过它就不当标记（防止 `<b` + 50KB 正文 + `>` 把整段
  *   正文静默吞掉；尺子两边同界，所以"留下"与"断言"依然一致）。
  * - 实体只解【已知】的（HTML_NAMED + 数字型）；未知实体（如 &fjorde;）保守保留原文。
- * - 【两把清洗口径，刻意分开】（第四轮 M-C 定稿）：
+ * - 【两把清洗口径，刻意分开】（第四轮 M-C 定稿，第六轮 item4 收口为最终口径）：
  *   · 散文出口 title / content / summary —— toPlainText：元素之间【补一个分隔空格】
- *     （防 "AlphaBeta" 粘连），C0/DEL 换成空格（同一条理由）。
+ *     （防 "AlphaBeta" 粘连），C0/DEL 换成空格（同一条理由），并且【吃】泛型/比较守卫
+ *     （`1<2>0`、`std::vector<int>`、`变量 a<b>c 时` 这类字面语义保住）。
  *   · 标识符出口 id / link —— toIdentifierText：解实体 → 剥标签但【不插】分隔符 →
- *     删除 C0/DEL/零宽 → 折叠空白 → trim。它们是标识符不是散文：
- *     `<guid>tag:x<b>1</b></guid>` 的语义就是 tag:x1，给它插空格等于给同一条目换主键。
+ *     删除 C0/DEL/零宽 → 折叠空白 → trim，并且【不吃】泛型/比较守卫。它们是标识符不是散文：
+ *     `<guid>tag:x<b>1</b></guid>` 的语义就是 tag:x1，给它插空格等于给同一条目换主键；
+ *     而守卫的判据取决于"该字段自身文本里早先有没有出现过同名闭合标签"，让 id 吃它就等于
+ *     把主键交给源站的正文细节（加/删一个 `</div>` ⇒ id 翻转 ⇒ 同一篇文章入库两条）。
+ *     最终口径（交付文档用这一句）：**标识符出口（guid/id、rdf:about、dc:identifier、
+ *     enclosure url、link 的 href 与文本、以及 title 兜底）一律不吃泛型守卫；散文出口
+ *     （title/content/summary）继续吃；名字首字符、属性必须带 =、至多 1 个裸属性这三条
+ *     判据两出口共用。**
+ *     申报代价：guid/id 里的 `List<T>` 会被剥成 `List`（测试 r6-item4 ⑤ 已钉住，别当 bug 改回）。
  *     ⚠️ 迁移窗口：RSS 功能尚未上线，现在定口径没有历史数据要迁；一旦上线后再改这套
  *     规则，所有已入库条目的 id 都会变 → 下游按 id 判为新条目 → 全量重复入库。
- *     所以口径由测试逐条钉死（实体解码 / 剥标签不插分隔 / 空白折叠 / 控制符删除），
+ *     所以口径由测试逐条钉死（实体解码 / 剥标签不插分隔 / 空白折叠 / 控制符删除 / 不吃守卫），
  *     后人"顺手把两套口径统一"必然变红。
  * - 容错：真实世界 feed 常见游离裸 &（如 URL 里 ?a=1&b=2），解析前规范为 &amp;；
  *   feed 形状但语法有瑕疵 → MalformedXMLError；根标签不对 → NotAFeedError。
@@ -505,20 +513,39 @@ function isMarkupSpace(ch: string | undefined): boolean {
 /** 尺子的扫描上下文（第五轮：去掉 4096 跨度上限后，靠它把代价重新按住线性）。
  *  - closeNames：全串出现过的闭合标签名（小写本地名）。泛型守卫要问"这段有没有闭合证据"，
  *    逐标签 `indexOf` 会退化成 O(标签数 × n)；这里一次正则建表 ⇒ O(n) 建表 + O(1) 查询。
+ *    ⚠️ 建表正则 CLOSE_TAG_NAME 必须带 `i`：老式 HTML 写 `<DIV>x</DIV>`，闭合证据的名字是大写的，
+ *    丢了 `i` 就查不到证据 ⇒ 开标签被当成散文留下（第六轮 item3/Y17，行为已用断言钉住）。
  *  - lastGt / lastDoubleQuote / lastSingleQuote：全串最后一个 '>' / 引号的位置。
  *    判定过程中一旦越过它们，就不可能再闭合 ⇒ 立即返回 -1，
- *    避免"每个孤立 '<' 都扫满 1MiB"的病态放大。 */
+ *    避免"每个孤立 '<' 都扫满 1MiB"的病态放大。
+ *    ⚠️ 这条快退【有断言了】（第六轮 item2/Y12）：删掉它，'<a href=z'×20000（0.17MiB、全串无 '>'）
+ *    会从 ~40ms 掉到实测 39.4s —— 生产上一个 200KB 的马虎条目就能把请求打成几十秒。
+ *  - skipGenericGuard：【第六轮 item4 口径】标识符出口（guid/id、rdf:about、dc:identifier、
+ *    enclosure url、link href 与 link 文本）不吃泛型/比较守卫。理由：守卫的初衷是保住散文里的
+ *    `1<2>0`、`std::vector<int>`，而 id 不是散文；标识符里出现 `<` 几乎必然是老式 HTML 包裹的
+ *    guid，本就该剥。更重要的是【主键稳定性】：守卫的判据依赖"该字段自身文本里早先是否出现过
+ *    同名闭合标签"，源站正文里加/删一个 `</div>` 就会让 guid 在"剥净 / 留字面"之间翻转
+ *    ⇒ id 变 ⇒ 下游按 id 去重失效 ⇒ 同一篇文章两条记录。散文出口（title/content/summary）不变。
+ *    ⚠️ 这条口径的【代价与后果】申报见 toIdentifierText 的注释（第七轮 item2）：放弃守卫之后，
+ *    两个本来不同的源值可能清洗成同一个主键而被合并（实测 `a&lt;b&gt;c` 与 `ac` 同为 `ac`）——
+ *    【有意如此】，风险对比（低频撞键合并 vs 高频换键重复）与断言都在测试 ⑤b，别当 bug 改回去。 */
 export interface MarkupScanContext {
   closeNames: Set<string>;
   lastGt: number;
   lastDoubleQuote: number;
   lastSingleQuote: number;
+  /** true = 本次扫描不吃泛型/比较守卫（标识符出口专用；缺省 = 吃） */
+  skipGenericGuard?: boolean;
 }
 
+/** 建表正则：`</NAME`（本地名一律小写进表）。`i` 标志是【行为护栏】，不是装饰 —— 见上面 Y17 说明。 */
 const CLOSE_TAG_NAME = /<\/([a-z_:#][a-z0-9_.:-]*)/gi;
 
 /** 为一次扫描建上下文（同一条串反复判定时务必复用；单次调用 O(n)） */
-export function createMarkupScanContext(s: string): MarkupScanContext {
+export function createMarkupScanContext(
+  s: string,
+  opts?: { skipGenericGuard?: boolean },
+): MarkupScanContext {
   const closeNames = new Set<string>();
   CLOSE_TAG_NAME.lastIndex = 0;
   let m: RegExpExecArray | null;
@@ -528,6 +555,7 @@ export function createMarkupScanContext(s: string): MarkupScanContext {
     lastGt: s.lastIndexOf(">"),
     lastDoubleQuote: s.lastIndexOf('"'),
     lastSingleQuote: s.lastIndexOf("'"),
+    ...(opts?.skipGenericGuard ? { skipGenericGuard: true } : {}),
   };
 }
 
@@ -542,12 +570,30 @@ export function createMarkupScanContext(s: string): MarkupScanContext {
  *     `<input readonly>`、`<td nowrap bgcolor="red">` 是真实老式 HTML 的常态）；
  *     出现第 2 个裸属性名就与散文无法区分 ⇒ 判散文（`a<b and c>d`、`x <a href=x y z>y` 保住）。
  *  3. 标签总跨度不设 4096 上限（长 data URI 必须能剥掉），只设 MAX_MARKUP_ABSOLUTE_SPAN。
- * 泛型/比较守卫（M-G 的第二半，只在【四个条件同时成立】时把标签判为散文）：
- *  非闭合标签 + 零属性 + 非自闭合 + '<' 紧贴标识符字符 + 该名字在全串【没有任何闭合证据】
- *  + 不在 HTML void 名单内 ⇒ 判散文。
+ * 泛型/比较守卫（M-G 的第二半，只在【五个条件同时成立】时把标签判为散文）：
+ *  零属性 + 非自闭合 + '<' 紧贴标识符字符 + 该名字在全串【没有任何闭合证据】+ 不在 HTML void
+ *  名单内 ⇒ 判散文。（旧版本这里还有一条 `!closing`，第六轮 item5 删掉：闭合标签自己的名字
+ *  必然被 CLOSE_TAG_NAME 扫进 closeNames，`closing=true` 时 `!closeNames.has(name)` 恒 false，
+ *  所以 `!closing` 是【由 createMarkupScanContext 的构造保证】的死条件 —— 留着只会让人误以为
+ *  它在把关。简化比堆砌有价值，改动它不需要新断言：全量用例 + 变异体检验收。
+ *  ⚠️ 这条"死"有前提：建表正则必须带 `i`。第六轮变异 M3（去掉 `i`）实测大写 `</DIV>` 进不了表
+ *  ⇒ 连闭合标签自己都被判成散文留下残留（旧用例「HTML 块/标签大小写不敏感」当场变红）。
+ *  `i` 标志已由测试 r6-item3 钉住；"游离闭合标签仍必须剥净（守卫管不到闭合标签）"由 r6-item5 钉住。
  *  这条守卫救的是 `变量 a<b>c 时`、`std::vector<int>`、`List<T>`：它们与 `word<b>bold</b>`
  *  的唯一区别就是"源里到底有没有 </b>"，所以证据取自闭合标签名集合，代价由 ctx 一次性建表按住。
- *  已知代价：`文字<div>`（非 void、紧贴词、全串无闭合）会被当散文留下 —— 这种写法在真实
+ * 【ctx.skipGenericGuard = true（标识符出口，第六轮 item4）】：整条守卫跳过，只看上面三条判据。
+ *  代价如实申报：guid/id 里的 `List<T>` 会被剥成 `List`（散文出口照旧保住）。换来的是主键稳定
+ *  ——id 不再取决于"该字段文本里恰好有没有一个同名闭合标签"。
+ * 已知代价（三条，全部有申报用例，见测试 r6-item6）：
+ *  ① "紧贴"判据【只看 '<' 前那一个字符】⇒ `f(x)<y>z`、`"a"<b>c`、`a <b>c`（空格隔开）会被吞。
+ *    不为它放宽判据：放宽就要把"前一个字符是标点/空白"再细分成"是不是词尾"，整套启发式重新
+ *    复杂化，而这三档在真实 feed 里远比 `a<b>c` 罕见 —— 有意如此，不要再改。
+ *  ② 注释 `<!-- -->`、声明 `<![ ]>` / `<? ?>` 仍受 MAX_MARKUP_SPAN=4096 约束（它们吞掉的是
+ *    【体】）。跨度越界就整段留字面 ⇒ 数量级实测：100KB 的注释会让约 100009 字注释体进正文。
+ *    这是【保留正文优先于剥净标记】的取向，不是漏网：真要在意，改的是这一条上限而不是加特例。
+ *  ③ 测试里那把【独立宽尺】是"测试语料回归网"，不是运行期拦截器：真实源里出现同类脏数据
+ *    照样入库（不抛、不丢条目），宽尺只在跑测试时把新残留抓出来。
+ * 已知代价：`文字<div>`（非 void、紧贴词、全串无闭合）会被当散文留下 —— 这种写法在真实
  *  HTML 里等于标签本身没写完，宁可留残留也不吞正文；独立宽尺会把这类残留抓出来。
  * 导出给测试做不变式断言用；批量扫描请传 ctx（单次调用不带 ctx 时本函数自建，O(n)）。
  */
@@ -640,9 +686,16 @@ export function isWellFormedMarkupAt(s: string, i: number, ctx?: MarkupScanConte
     if (j >= absLimit) return -1;
   }
 
-  // 泛型/比较守卫（见函数注释第 3 段）
+  // 泛型/比较守卫（见函数注释第 3 段）。第六轮两处收口：
+  //  · item4：ctx.skipGenericGuard = true（标识符出口）时整条守卫跳过 ⇒ 主键不再取决于闭合证据。
+  //  · item5：删掉 !closing —— 它是【由建表构造保证】的死条件：谓词接受的闭合标签名必然被
+  //    CLOSE_TAG_NAME（带 `i`）扫进 closeNames，closing=true 时 !closeNames.has(name) 恒 false。
+  //    ⚠️ 这条"死"依赖 CLOSE_TAG_NAME 的 `i` 标志：去掉 `i`（老式大写 </DIV> 不进表）后，
+  //    闭合标签自己也会被守卫判成散文而留下残留 —— 第六轮变异体检 M3 实测正是如此（旧用例
+  //    「HTML 块/标签大小写不敏感」当场变红）。所以 `i` 标志有断言钉（测试 r6-item3），
+  //    这里不必再留一个假把关的条件。
   if (
-    !closing &&
+    !c.skipGenericGuard &&
     !selfClosing &&
     attrCount === 0 &&
     i > 0 &&
@@ -685,13 +738,14 @@ function blockTagName(s: string, start: number, end: number): string | null {
  *   找不到 → 退化成"按普通标签吃到 >"，JS/CSS 正文泄漏进"纯文本"）
  * - sep 决定标记位置留什么：散文口径 " "（与 textOfNodes 同口径，边界延迟结算 +
  *   标点感知，见 shouldInsertSep / isGlueChar），标识符口径 ""（不插）
+ * - opts.skipGenericGuard（第六轮 item4）：标识符口径不吃泛型/比较守卫，透传给建表上下文。
  * 已知可辩护取舍：`<script>` / `<style>` 开了却【全串无闭合】时，按普通标签只吃掉开标签
  * 本身（残留的 JS/CSS 留在文本里）；`<` 后是标记形态但跨度超 MAX_MARKUP_SPAN 时整段留作
  * 字面文本。两种残留都不违反不变式——尺子只有一把，实现与断言同时认它。
  */
-function stripMarkup(s: string, sep: string): string {
+function stripMarkup(s: string, sep: string, opts?: { skipGenericGuard?: boolean }): string {
   const lower = s.toLowerCase();
-  const ctx = createMarkupScanContext(s); // 一次建表，逐点复用（O(n)），绝不在循环里重建
+  const ctx = createMarkupScanContext(s, opts); // 一次建表，逐点复用（O(n)），绝不在循环里重建
   const missingCloses = new Set<string>(); // 已确认全串不存在的闭合块名（小写），避免逐块全串搜索退化为 O(n²)
   let out = "";
   let lastChar = "";
@@ -714,9 +768,13 @@ function stripMarkup(s: string, sep: string): string {
     emit(s.slice(i, lt));
     const end = isWellFormedMarkupAt(s, lt, ctx);
     if (end === -1) {
-      // 不是 well-formed 标记：'<' 按作者本意的字面文本保留
-      out += "<";
-      lastChar = "<";
+      // 不是 well-formed 标记：'<' 按作者本意的字面文本保留。
+      // 【第六轮 item1 R1：必须走 emit()】旧写法 `out += "<"; lastChar = "<";` 绕过了 emit()，
+      // 于是 pendingBoundary 没被消费，被推到 '<' 之后的字面文本前面 ⇒ 正文里插入源中【不存在】
+      // 的空格（`A<em>x</em><3>B` → "A x< 3>B"），同时违反"两条路径同一结果"的不变式（结构路径
+      // 走 textOfNodes，那里一直是对的）。'<' 属 \p{S} ⇒ isGlueChar 判它粘合 ⇒ emit 既不插
+      // 空格又消费边界 ⇒ 两条路径一致。
+      emit("<");
       i = lt + 1;
       continue;
     }
@@ -766,16 +824,35 @@ function toPlainText(raw: string): string {
 /**
  * 标识符出口（id / link）的紧凑清洗：解实体 ↔ 剥标签（元素之间【不插】分隔符）迭代到
  * 不动点（≤4 轮）→ 删零宽 → 【删除】C0/DEL → 折叠空白为单空格 → trim。
- * 与散文口径的两处刻意差别（不要"顺手统一"，测试已逐条钉死）：
+ * 与散文口径的三处刻意差别（不要"顺手统一"，测试已逐条钉死）：
  *  1. 不插分隔符：`<guid>tag:x<b>1</b></guid>` 的语义就是 tag:x1；补空格会让同一条目换主键。
  *  2. 控制符删除而非换空格：正文换空格是防粘连，标识符换空格会把一个 URL 劈成两段。
+ *  3. 【第六轮 item4】不吃泛型/比较守卫（stripMarkup 传 skipGenericGuard）：守卫的初衷是保住
+ *     散文里的 `1<2>0`、`std::vector<int>`，而 id 不是散文。更要命的是它的判据是"该字段自身
+ *     文本里早先有没有出现过同名闭合标签"——源站正文加/删一个 `</div>` 就能让 guid 在"剥净 /
+ *     留字面"之间翻转 ⇒ id 变 ⇒ 下游按 id 去重失效 ⇒ 同一篇文章两条记录。
+ *     守卫之外的三条判据【照旧生效】：名字首字符不得为数字（`1<2>0` 仍留字面）、属性必须带 =、
+ *     多于一个裸属性名判散文（`x<a href=1 y z>c` 仍留字面）。
+ *     申报的代价：标识符里的 `List<T>` 会被剥成 `List`（散文出口照旧保住）——测试 ⑤ 已钉住。
+ *     【第七轮 item2 把这条代价的"后果"也写全，别只读机理就读过去】：守卫一让，
+ *     两个【本来不同】的源值可能落到【同一个主键】上。实测：
+ *       `guid = https://x/a&lt;b&gt;c`（双层转义得来）与 `guid = https://x/ac` ⇒ 都清洗成 `https://x/ac`。
+ *     于是一旦同一份源里两种写法同时出现，两条【本不相同】的条目会被 dedupeById 合并成
+ *     一条（先到者胜出的字段并集；冲突字段保留先到者的值，落选者的冲突值不进记录）。
+ *     为什么仍然选这个方向（【有意如此】，别当 bug 顺手"修回去"）：
+ *       · collapse：只在"同源里恰好同时存在两种写法且清洗后撞键"时发生——概率低、后果有界
+ *         （条目数 -1，其余字段按并集保留），且上游写法一改自然消失，不会持续产生新脏；
+ *       · 换键：只要源站正文加/删一个同名闭合标签，同一篇文章的 guid 就在"剥净/留字面"之间
+ *         翻转——概率高（正文天天改），后果是下游按 id 去重直接失效 ⇒ 同一篇文章重复入库，
+ *         而且改一次正文换一个键，脏数据持续累积、无法回收（第五轮正是这个坑）。
+ *     两害相权取其轻：宁可极少数撞键合并，不可高频换键重复。测试 ⑤b 把这条后果钉成有意如此。
  * ⚠️ 上线后改这套规则 = 全量条目被判新条目重复入库。现在（功能未上线）是唯一定口径窗口。
  */
 function toIdentifierText(raw: string): string {
   if (!raw) return "";
   let s = raw;
   for (let round = 0; round < 4; round++) {
-    const next = decodeEntitiesOnce(stripMarkup(s, ""));
+    const next = decodeEntitiesOnce(stripMarkup(s, "", { skipGenericGuard: true }));
     if (next === s) break;
     s = next;
   }
@@ -888,8 +965,16 @@ function toDate(nodes: OrderNode[]): Date | undefined {
  *  否则 id 退化成 title，源站改标题就等于换主键，下游按 id 去重会重复入库。
  *  【M-B 口径】判据是"有非空值"，不是"字段被声明过"：空 `<guid></guid>`、无 url 的
  *  `<enclosure/>`、只有 pubDate 的条目都拿不到身份，链会一路退到 title（也空 → ""）。
- *  【M-C 口径】每个候选值都过 toIdentifierText，所以 id 永远满足标识符清洗规则。 */
-function identityOf(nodes: OrderNode[], link: string, title: string, aboutAttr: string): string {
+ *  【M-C 口径】每个候选值都过 toIdentifierText，所以 id 永远满足标识符清洗规则。
+ *  【第六轮 item4 闭掉 M-C 未决项】title 兜底以前拿的是【已按散文口径清洗过的 title】再洗一遍，
+ *  于是注释与代码矛盾：`<title>A<b>B</b>C</title>` 的散文 title 是 "A B C"，紧凑口径本应得到
+ *  "ABC"（元素之间不插分隔），旧实现给的却是 "A B C" —— 主键里混进了散文口径的分隔符。
+ *  现在兜底直接拿【原始 title 文本】（identifierFieldText，元素之间不插分隔）走标识符口径，
+ *  注释与代码一致；title 出口本身仍是散文口径，两者互不影响。
+ *  ⚠️ 口径变更（登记于此）：靠 title 兜底拿主键的条目，其 id 从"散文 title 的紧凑化结果"
+ *  变为"原始 title 的紧凑结果"（如 "A B C" → "ABC"）。RSS 未上线 ⇒ 无历史数据需迁移；
+ *  一旦上线，这条链的任何改动都会换主键。 */
+function identityOf(nodes: OrderNode[], link: string, aboutAttr: string): string {
   const direct = toIdentifierText(identifierFieldText(nodes, ["guid", "id"]));
   if (direct) return direct;
   if (link) return link;
@@ -898,7 +983,7 @@ function identityOf(nodes: OrderNode[], link: string, title: string, aboutAttr: 
   if (identifier) return identifier;
   const enclosure = toIdentifierText(enclosureUrl(nodes));
   if (enclosure) return enclosure;
-  return toIdentifierText(title);
+  return toIdentifierText(identifierFieldText(nodes, ["title"]));
 }
 
 /** 条目取舍（缺陷 N4 的第二版；第四轮 M-B 修正方向）。
@@ -914,7 +999,8 @@ function toEntry(itemNode: OrderNode, nodes: OrderNode[]): FeedEntry | null {
   const content = toPlainText(mainRaw || fieldText(nodes, ["description", "summary"]));
   const summary = toPlainText(fieldText(nodes, ["description", "summary"]) || mainRaw);
   const aboutAttr = toIdentifierText(attrByLocal(itemNode, "about"));
-  const id = identityOf(nodes, link, title, aboutAttr);
+  // id 兜底链自己取【原始 title】走标识符口径（第六轮 item4）；这里的 title 是散文出口，两者分开。
+  const id = identityOf(nodes, link, aboutAttr);
   if (!id && !title && !link && !content && !summary) return null;
   const publishedAt = toDate(nodes);
   return { id, title, link, ...(publishedAt ? { publishedAt } : {}), summary, content };
