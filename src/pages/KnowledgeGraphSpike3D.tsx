@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { forceRadial } from 'd3-force-3d';
 import ForceGraph3D from '3d-force-graph';
 import { trpc } from '@/providers/trpc';
 
@@ -92,10 +93,20 @@ export default function KnowledgeGraphSpike3D() {
           );
         });
 
+      // ---- 布局力学（用户定调：星系式整体感）----
+      // 规模自适应：节点间距随 ∛N 增长 —— 节点/边变多时图云等比长大，密度不变；
+      // 径向向心力把所有星团（含不连通子图）收拢成一个星系，不散成"这里一团那里一团"。
+      const N = nodes.length;
+      const scale = Math.cbrt(N / 100);
       const charge = graph.d3Force('charge') as unknown as { strength: (v: number) => void } | null;
-      charge?.strength(-120);
+      charge?.strength(-55 * scale * scale);
       const linkF = graph.d3Force('link') as unknown as { distance: (v: number) => void } | null;
-      linkF?.distance(19);
+      linkF?.distance(10 * scale);
+      // 径向引力：弱而持续地把一切拉向质心 → 整体凝聚；强度随规模略增以抵消更大斥力
+      graph.d3Force('radial', forceRadial(0, 0, 0, 0).strength(Math.min(0.10, 0.035 * scale)) as never);
+      graph.d3Force('x', null as never); // 撤掉默认的轴向居中，交给径向力（3D 各向同性）
+      graph.d3Force('y', null as never);
+      graph.d3Force('z', null as never);
 
       // 背景星野：1200 个远景星点围成球壳
       const starGeo = new THREE.BufferGeometry();
@@ -132,7 +143,7 @@ export default function KnowledgeGraphSpike3D() {
         const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
         const cz = (Math.min(...zs) + Math.max(...zs)) / 2;
         const dim = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), Math.max(...zs) - Math.min(...zs), 1);
-        graph.cameraPosition({ x: cx, y: cy, z: cz + dim * 0.6 }, { x: cx, y: cy, z: cz } as never, 1200);
+        graph.cameraPosition({ x: cx, y: cy, z: cz + dim * 0.85 }, { x: cx, y: cy, z: cz } as never, 1200);
       }, 1200);
     } catch (e) {
       if (!disposed) setError(e instanceof Error ? e.message : String(e));
