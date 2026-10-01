@@ -93,9 +93,9 @@ export default function KnowledgeGraphSpike3D() {
         });
 
       const charge = graph.d3Force('charge') as unknown as { strength: (v: number) => void } | null;
-      charge?.strength(-45);
+      charge?.strength(-120);
       const linkF = graph.d3Force('link') as unknown as { distance: (v: number) => void } | null;
-      linkF?.distance(9);
+      linkF?.distance(19);
 
       // 背景星野：1200 个远景星点围成球壳
       const starGeo = new THREE.BufferGeometry();
