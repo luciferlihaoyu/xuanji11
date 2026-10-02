@@ -17,9 +17,9 @@ import * as http from "node:http";
 import * as https from "node:https";
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
-import { EgressError, isBlockedAddress, isPrivateNetAllowed, resolveHostForEgress } from "./egress";
+import { EgressError, isBlockedAddress, isPrivateNetAllowed, resolveHostForEgress, type EgressScope } from "./egress";
 
-/** safeFetch 的最小响应面（调用方现有用法：status/statusText/ok/headers.get/body 流/text()）。 */
+/** safeFetch 的最小响应面（调用方现有用法：status/statusText/ok/headers.get/body 流/text()/arrayBuffer()）。 */
 export interface SafeFetchResponse {
   readonly ok: boolean;
   readonly status: number;
@@ -27,6 +27,7 @@ export interface SafeFetchResponse {
   readonly headers: { get(name: string): string | null };
   readonly body: ReadableStream<Uint8Array> | null;
   text(): Promise<string>;
+  arrayBuffer(): Promise<ArrayBuffer>;
 }
 
 export interface SafeFetchInit {
@@ -35,6 +36,9 @@ export interface SafeFetchInit {
   /** 'manual'：3xx 不跟随，交回调用方；'follow'（默认）：自动跟随并逐跳重新校验，上限 5 跳 */
   redirect?: "manual" | "follow";
   signal?: AbortSignal;
+  /** 出网口径：**默认 "user"**（用户/上游可控 URL，恒不进内网，任何配置都开不了）；
+   *  管理员亲手配置的固定服务目标（网盘签名地址、LLM 端点等）显式传 "admin"。 */
+  scope?: EgressScope;
 }
 
 /** 测试运输口：注入后 safeFetch 直接透传（不打真网络、也不做校验），供既有单测桩复用。 */
@@ -68,8 +72,9 @@ export async function safeFetch(rawUrl: string, init: SafeFetchInit = {}): Promi
     if (current.protocol !== "http:" && current.protocol !== "https:") {
       throw new EgressError(`egress blocked: unsupported protocol ${current.protocol}`);
     }
-    // 策略**每跳重读**：与 RSS 连接器"每一跳都重新过闸"的既有口径一致（策略可能中途改变，缓存不算数）
-    const allowPrivate = await isPrivateNetAllowed();
+    // 策略**每跳重读**：与 RSS 连接器"每一跳重新过闸"的既有口径一致（策略可能中途改变，缓存不算数）。
+    // scope 默认 "user"：用户/上游可控 URL 恒不进内网；管理员配置目标显式传 "admin"。
+    const allowPrivate = await isPrivateNetAllowed(init.scope ?? "user");
     // ① 解析一次、逐地址判定；② 连接只允许去 pinned 那个地址
     const pinned = await resolveAndValidate(current.hostname, allowPrivate);
     const res = await requestOnce(current, init, pinned);
@@ -183,6 +188,12 @@ function toResponse(res: IncomingMessage): SafeFetchResponse {
       const chunks: Buffer[] = [];
       for await (const chunk of nodeStream) chunks.push(chunk as Buffer);
       return Buffer.concat(chunks).toString("utf-8");
+    },
+    arrayBuffer: async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of nodeStream) chunks.push(chunk as Buffer);
+      const buf = Buffer.concat(chunks);
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
     },
   };
 }

@@ -13,6 +13,7 @@ import {
 } from "@db/schema";
 import { vectorEngine } from "./vector";
 import { chunkText } from "./document-indexer";
+import { safeFetch } from "./safe-fetch";
 import * as fs from "fs";
 import * as path from "path";
 import { env } from "./env";
@@ -62,7 +63,10 @@ async function ensureLocalPath(options: IngestFileOptions): Promise<{ localPath:
   if (!url) {
     throw new Error("No local path or downloadable URL provided");
   }
-  const res = await fetch(url);
+  // 2026-10-01 拆雷：此处曾是全仓唯一一处完全不过 egress 门禁的裸 fetch。
+  // scope=admin：URL 来自管理员配置的网盘服务的签名地址（alist/115/aliyundrive）；
+  // 用户可控内容一律走 storagePath 本地路径，不经网络。协议白名单/私网判定/钉连接由 safeFetch 统一兜住。
+  const res = await safeFetch(url, { scope: "admin" });
   if (!res.ok) {
     throw new Error(`Download failed: ${res.status} ${res.statusText}`);
   }

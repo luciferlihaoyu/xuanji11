@@ -79,7 +79,7 @@ async function putOne(
   const target = joinFsPath(cfg.basePath, safePath);
   const parentDir = target.slice(0, target.lastIndexOf("/")) || "/";
   await ensureDir(cfg, token, parentDir);
-  await assertEgressAllowed(cfg.baseUrl);
+  await assertEgressAllowed(cfg.baseUrl, "admin");
   // 115 经 Cloudflare 的实传速率在 0.3~0.7MB/s 大幅波动（还会被限速），
   // 原先 30s + 5s/MB（10MB 分片仅 80s）预算过紧 → 大文件整批超时。
   // 改为 5 分钟基础 + 10s/MB：10MB 分片 ≈ 6.7 分钟预算，仍留有硬上限防挂死。
@@ -160,7 +160,7 @@ async function login(cfg: AlistConfig): Promise<string> {
   if (cached && Date.now() - cached.obtainedAt < TOKEN_TTL_MS) return cached.token;
 
   // SSRF guard：用户配置的站点地址，默认禁私网（EGRESS_ALLOW_PRIVATE_NET=true 放行内网部署）
-  await assertEgressAllowed(cfg.baseUrl);
+  await assertEgressAllowed(cfg.baseUrl, "admin");
   const res = await fetch(`${cfg.baseUrl}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -182,7 +182,7 @@ interface FsItem {
 
 /** 列目录；dirNotFound=true 时抛带 notFound 标记的错误 */
 async function fsList(cfg: AlistConfig, token: string, path: string): Promise<FsItem[]> {
-  await assertEgressAllowed(cfg.baseUrl);
+  await assertEgressAllowed(cfg.baseUrl, "admin");
   const res = await fetch(`${cfg.baseUrl}/api/fs/list`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: token },
@@ -200,7 +200,7 @@ async function fsList(cfg: AlistConfig, token: string, path: string): Promise<Fs
 }
 
 async function fsMkdir(cfg: AlistConfig, token: string, path: string): Promise<void> {
-  await assertEgressAllowed(cfg.baseUrl);
+  await assertEgressAllowed(cfg.baseUrl, "admin");
   const res = await fetch(`${cfg.baseUrl}/api/fs/mkdir`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: token },
@@ -265,7 +265,7 @@ async function removeTree(cfg: AlistConfig, token: string, absPath: string, dept
 async function fetchWholeFile(cfg: AlistConfig, safePath: string): Promise<Buffer | null> {
   const target = joinFsPath(cfg.basePath, safePath);
   const token = await login(cfg);
-  await assertEgressAllowed(cfg.baseUrl);
+  await assertEgressAllowed(cfg.baseUrl, "admin");
   // 恢复是慢速下行：给足 5 分钟（分片 ≤10MB，整文件路径也够用）
   const downloadTimeout = Math.max(TIMEOUT_MS, 5 * 60_000);
   const res = await fetch(`${cfg.baseUrl}/api/fs/get`, {
@@ -282,7 +282,7 @@ async function fetchWholeFile(cfg: AlistConfig, safePath: string): Promise<Buffe
   }
   const rawUrl = payload.data?.raw_url;
   if (!rawUrl) return null;
-  await assertEgressAllowed(rawUrl);
+  await assertEgressAllowed(rawUrl, "admin");
   const fileRes = await fetch(rawUrl, { signal: AbortSignal.timeout(downloadTimeout) });
   if (!fileRes.ok) {
     if (fileRes.status === 404) return null;
@@ -487,7 +487,7 @@ export const alistRepository: BackupRepository = {
     const dir = target.slice(0, target.lastIndexOf("/")) || "/";
     const name = target.slice(target.lastIndexOf("/") + 1);
     const token = await login(cfg);
-    await assertEgressAllowed(cfg.baseUrl);
+    await assertEgressAllowed(cfg.baseUrl, "admin");
 
     // 分片文件连带删除（先读清单拿片数；清单不可读不影响主删除）
     const names = [name];

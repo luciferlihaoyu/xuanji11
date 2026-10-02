@@ -327,7 +327,7 @@ async function fetchEmbeddingsWithConfig(texts: readonly string[], cfg: Embeddin
     ? { model: cfg.model, input: texts.map((text) => ({ type: "text", text })), encoding_format: "float", ...(cfg.model.includes("doubao-embedding-vision") ? { dimensions: cfg.dimension } : {}) }
     : { input: texts, model: cfg.model, encoding_format: "float" };
   // SSRF guard：嵌入端点来自用户可配置模板，默认禁私网（EGRESS_ALLOW_PRIVATE_NET=true 放行内网 LLM）
-  await assertEgressAllowed(endpoint);
+  await assertEgressAllowed(endpoint, "admin");
   const res = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.key}` },

@@ -86,20 +86,33 @@ describe("safeFetch", () => {
     await expect(safeFetch("not a url")).rejects.toThrow(/invalid url/i);
   });
 
-  it("【记录缺陷·现状】assertEgressAllowed 放行后不返回任何可钉住的地址，且 60s 缓存让换 DNS 后的复查直接通过", async () => {
-    // 这是 assertEgressAllowed 的 API 层事实（本轮不改它，safeFetch 调用方绕开它做安全判定）：
-    // 1) 返回 void ⇒ 调用方拿不到"判定通过的那个地址"，随后 fetch 只能自己再解析一次（TOCTOU 的根）；
-    // 2) 同 host 60s 内第二次校验直接短路 ⇒ 攻击者在窗口内换 DNS 也不会被发现。
+  it("【D3 后已修复】user 口径的复查是真复核：换 DNS 后当场暴露，不再被 60s 缓存短路", async () => {
+    // D3 细分后 user 口径不读 passCache：每次校验（含 RSS 缓存复核）都是实时解析+实时判定。
+    // 攻击者中途换 DNS 会被第二次校验当场拦下（此前的缺陷用例已随修复改写为本用例）。
+    let resolveCalls = 0;
+    setEgressPolicyForTests(async () => true);
+    setResolveHostForTests(async () => {
+      resolveCalls += 1;
+      return resolveCalls === 1 ? ["93.184.216.34"] : ["127.0.0.1"];
+    });
+    await expect(assertEgressAllowed("http://cachetest.invalid/feed", "user")).resolves.toBeUndefined();
+    // 攻击者此刻把 DNS 换成内网地址；user 口径同一 host 再查一次 → 真复核，当场拦截
+    await expect(assertEgressAllowed("http://cachetest.invalid/feed", "user")).rejects.toThrow(/private or blocked/i);
+    expect(resolveCalls).toBe(2); // 两次都是真解析
+  });
+
+  it("【记录现状】admin 口径仍有 60s passCache：换 DNS 后复查直接通过（实际连接由 safeFetch 钉住兜底）", async () => {
+    // admin 口径面向管理员配置的固定服务端点，保留 60s host 缓存换性能；
+    // 其安全性由 safeFetch 的"解析一次→钉住连接"兜底，不依赖复查新鲜度。
     let resolveCalls = 0;
     setEgressPolicyForTests(async () => false);
     setResolveHostForTests(async () => {
       resolveCalls += 1;
       return resolveCalls === 1 ? ["93.184.216.34"] : ["127.0.0.1"];
     });
-    await expect(assertEgressAllowed("http://cachetest.invalid/feed")).resolves.toBeUndefined();
-    // 攻击者此刻把 DNS 换成内网地址；同一 host 再查一次：
-    await expect(assertEgressAllowed("http://cachetest.invalid/feed")).resolves.toBeUndefined();
-    expect(resolveCalls).toBe(1); // 第二次压根没解析 ⇒ 60s 窗口坐实
+    await expect(assertEgressAllowed("http://admincachetest.invalid/feed", "admin")).resolves.toBeUndefined();
+    await expect(assertEgressAllowed("http://admincachetest.invalid/feed", "admin")).resolves.toBeUndefined();
+    expect(resolveCalls).toBe(1); // 第二次被 passCache 短路（记录在案的设计取舍）
   });
 
   it("IP 字面量指内网 → 直接拒绝（不查 DNS），靶机零访问", async () => {
@@ -132,7 +145,7 @@ describe("safeFetch", () => {
     });
     const port = (server.address() as AddressInfo).port;
     // host 是假域名（真 DNS 查不到），唯一能连上靶机的路径就是"按判定地址连接"
-    const res = await safeFetch(`http://pin.test:${port}/feed`);
+    const res = await safeFetch(`http://pin.test:${port}/feed`, { scope: "admin" });
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("<feed/>");
     expect(resolveCalls).toBe(1); // 只解析一次（解析与连接同源）
@@ -142,7 +155,7 @@ describe("safeFetch", () => {
   it("redirect:'manual'：3xx 原样返回，由调用方逐跳处理（RSS 现有语义）", async () => {
     setEgressPolicyForTests(async () => true);
     setResolveHostForTests(async () => ["127.0.0.1"]);
-    const res = await safeFetch(`${baseUrl}/redirect`, { redirect: "manual" });
+    const res = await safeFetch(`${baseUrl}/redirect`, { redirect: "manual", scope: "admin" });
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe(`${baseUrl}/final`);
   });
@@ -154,7 +167,7 @@ describe("safeFetch", () => {
       resolveCalls += 1;
       return ["127.0.0.1"];
     });
-    const res = await safeFetch(`${baseUrl}/hop-redirect`); // 默认 follow
+    const res = await safeFetch(`${baseUrl}/hop-redirect`, { scope: "admin" }); // 默认 follow
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("<feed/>");
     // 第一跳 host 是 IP 字面量（不查 DNS），第二跳 hop.test 查了一次 ⇒ 共 1 次解析
@@ -168,16 +181,35 @@ describe("safeFetch", () => {
     // safeFetch 每跳重读策略，第二跳解析出 10.9.9.9（内网）必须拦截
     setEgressPolicyForTests(async () => true);
     setResolveHostForTests(async (host) => (host === "private.test" ? ["10.9.9.9"] : ["127.0.0.1"]));
-    await expect(safeFetch(`${baseUrl}/redirect-blocked`)).rejects.toThrow(/private or blocked/i);
+    await expect(safeFetch(`${baseUrl}/redirect-blocked`, { scope: "admin" })).rejects.toThrow(/private or blocked/i);
     expect(hitCount("/redirect-blocked")).toBe(1); // 第一跳已发生
     expect(hitCount("/x")).toBe(0); // 第二跳没有发生
+  });
+
+  it("【D3 核心用例】管理员开了内网，默认 scope=user 仍拦内网靶机（配置开不了用户的门）", async () => {
+    setEgressPolicyForTests(async () => true);
+    setResolveHostForTests(async () => ["127.0.0.1"]);
+    const port = (server.address() as AddressInfo).port;
+    const before = hitCount("/feed"); // 计数器全文件累计，用差值断言"本轮请求零到达"
+    // 不传 scope —— 默认 user：RSS 订阅这类用户/上游可控 URL，任何配置都不许进内网
+    await expect(safeFetch(`http://user.test:${port}/feed`)).rejects.toThrow(/private or blocked/i);
+    expect(hitCount("/feed")).toBe(before);
+  });
+
+  it("arrayBuffer() 可读二进制响应体（ingestion 下载用）", async () => {
+    setEgressPolicyForTests(async () => true);
+    setResolveHostForTests(async () => ["127.0.0.1"]);
+    const port = (server.address() as AddressInfo).port;
+    const res = await safeFetch(`http://bin.test:${port}/feed`, { scope: "admin" });
+    const ab = await res.arrayBuffer();
+    expect(new TextDecoder().decode(ab)).toBe("<feed/>");
   });
 
   it("调用方传入的 AbortSignal 超时生效", async () => {
     setEgressPolicyForTests(async () => true);
     setResolveHostForTests(async () => ["127.0.0.1"]);
     await expect(
-      safeFetch(`${baseUrl}/hang`, { signal: AbortSignal.timeout(250) }),
+      safeFetch(`${baseUrl}/hang`, { signal: AbortSignal.timeout(250), scope: "admin" }),
     ).rejects.toThrow();
   });
 });

@@ -141,8 +141,15 @@ export function setEgressPolicyForTests(provider: EgressPolicyProvider): void {
   cachedPolicy = null;
 }
 
-/** 判定是否允许私网出网（管理员显式放行）。 */
-export async function isPrivateNetAllowed(): Promise<boolean> {
+/** 出网口径：admin=管理员亲手配置的固定服务目标；user=用户/上游可控 URL（订阅地址等）。 */
+export type EgressScope = "admin" | "user";
+
+/** 判定是否允许私网出网。
+ *  - scope="user"（默认）：**恒 false** —— 用户/上游可控 URL 不存在「放行内网」这个选项，
+ *    任何配置都开不了这扇门（2026-10-01 D3 细分：此前总闸一开对所有调用方放行，包括订阅地址）；
+ *  - scope="admin"：沿用管理员开关（系统设置 / EGRESS_ALLOW_PRIVATE_NET），60s 缓存。 */
+export async function isPrivateNetAllowed(scope: EgressScope = "user"): Promise<boolean> {
+  if (scope === "user") return false;
   if (cachedPolicy && cachedPolicy.expiresAt > Date.now()) return cachedPolicy.allowed;
   const allowed = await activePolicyProvider();
   cachedPolicy = { allowed, expiresAt: Date.now() + POLICY_CACHE_TTL_MS };
@@ -158,9 +165,14 @@ const PASS_CACHE_TTL_MS = 60_000;
  * - 协议必须为 http/https；
  * - hostname 为 IP 字面量时直接判定；
  * - 否则 DNS 解析后对全部地址判定（任一命中即拒绝，防多记录绕过）；
- * - EGRESS_ALLOW_PRIVATE_NET=true 时跳过私网判定（自托管内网部署）。
+ * - scope="admin" 且管理员开关开启 → 跳过私网判定（自托管内网部署），并可用 60s passCache；
+ * - scope="user"（默认）→ **永不跳过、永不读 passCache**：用户/上游可控 URL 的每次校验
+ *   （含 RSS 缓存复核）都必须是实时解析+实时判定的「真复核」——旧实现靠「开关放行时提前
+ *   返回」的副作用避开 passCache，D3 细分后由 scope 显式表达（2026-10-01）。
  */
-export async function assertEgressAllowed(rawUrl: string): Promise<void> {
+/** scope：user（默认）=用户/上游可控 URL，恒不因管理员开关跳过检查；
+ *  admin =管理员亲手配置的固定服务目标，开关开启时跳过私网判定（自托管 NAS 场景）。 */
+export async function assertEgressAllowed(rawUrl: string, scope: EgressScope = "user"): Promise<void> {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
@@ -170,11 +182,13 @@ export async function assertEgressAllowed(rawUrl: string): Promise<void> {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new EgressError(`egress blocked: unsupported protocol ${parsed.protocol}`);
   }
-  if (await isPrivateNetAllowed()) return;
+  if (scope === "admin" && (await isPrivateNetAllowed("admin"))) return;
 
   const host = parsed.hostname.replace(/^\[|\]$/g, "");
-  const cachedAt = passCache.get(host);
-  if (cachedAt && Date.now() - cachedAt < PASS_CACHE_TTL_MS) return;
+  if (scope === "admin") {
+    const cachedAt = passCache.get(host);
+    if (cachedAt && Date.now() - cachedAt < PASS_CACHE_TTL_MS) return;
+  }
 
   const addresses = /^[0-9a-f:.]+$/i.test(host) && host.includes(":")
     ? [host]
@@ -192,5 +206,5 @@ export async function assertEgressAllowed(rawUrl: string): Promise<void> {
       throw new EgressError(`egress blocked: private or blocked address`);
     }
   }
-  passCache.set(host, Date.now());
+  if (scope === "admin") passCache.set(host, Date.now());
 }

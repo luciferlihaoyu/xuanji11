@@ -95,20 +95,31 @@ describe("isPrivateNetAllowed 策略来源", () => {
     setEgressPolicyForTests(async () => false);
   });
 
-  it("默认（注入 false provider）拒绝内网出网", async () => {
+  it("scope=admin：默认（注入 false provider）拒绝内网出网", async () => {
     setEgressPolicyForTests(async () => false);
-    expect(await isPrivateNetAllowed()).toBe(false);
+    expect(await isPrivateNetAllowed("admin")).toBe(false);
   });
 
-  it("管理员在系统设置开启后放行（注入 true provider）", async () => {
+  it("scope=admin：管理员在系统设置开启后放行（注入 true provider）", async () => {
     setEgressPolicyForTests(async () => true);
-    expect(await isPrivateNetAllowed()).toBe(true);
+    expect(await isPrivateNetAllowed("admin")).toBe(true);
   });
 
-  it("setEgressPolicyForTests 切换后立即生效（清缓存）", async () => {
+  it("scope=admin：setEgressPolicyForTests 切换后立即生效（清缓存）", async () => {
     setEgressPolicyForTests(async () => true);
-    expect(await isPrivateNetAllowed()).toBe(true);
+    expect(await isPrivateNetAllowed("admin")).toBe(true);
     setEgressPolicyForTests(async () => false);
+    expect(await isPrivateNetAllowed("admin")).toBe(false);
+  });
+
+  // —— 2026-10-01 D3 细分：用户/上游可控 URL 不存在「放行内网」这个选项 ——
+  it("scope=user 恒拒绝：即使管理员开了内网，配置也开不了这扇门", async () => {
+    setEgressPolicyForTests(async () => true);
+    expect(await isPrivateNetAllowed("user")).toBe(false);
+  });
+
+  it("默认 scope 即 user（安全默认）", async () => {
+    setEgressPolicyForTests(async () => true);
     expect(await isPrivateNetAllowed()).toBe(false);
   });
 });

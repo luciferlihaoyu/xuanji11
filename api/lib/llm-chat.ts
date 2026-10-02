@@ -27,7 +27,7 @@ export async function chatCompletion(
     ? config.apiUrl
     : `${config.apiUrl.replace(/\/$/, "")}/chat/completions`;
 
-  await assertEgressAllowed(url);
+  await assertEgressAllowed(url, "admin");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 30_000);
@@ -85,7 +85,7 @@ export async function chatCompletionStream(
     ? config.apiUrl
     : `${config.apiUrl.replace(/\/$/, "")}/chat/completions`;
 
-  await assertEgressAllowed(url);
+  await assertEgressAllowed(url, "admin");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 60_000);

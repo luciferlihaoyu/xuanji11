@@ -104,6 +104,9 @@ beforeEach(() => {
   setSafeFetchTransportForTests(
     async (url, init) => fetchMock(url as unknown as string, init as unknown as RequestInit),
   );
+  // user 口径下 assertEgressAllowed 不再因放行开关跳过 DNS（2026-10-01 D3）：
+  // 默认把假域名解析成公网 IP，个别用例如需内网/特定解析自行覆盖（重定向组用例已有自己的注入）。
+  setResolveHostForTests(async () => ["93.184.216.34"]);
   clearFeedCacheForTests();
   setEgressPolicyForTests(async () => true);
 });
