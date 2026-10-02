@@ -1,14 +1,17 @@
 /**
- * 3D 星云预览页（实验路由 /spike3d）——「璇玑浑天仪」版。
+ * 3D 星云预览页（实验路由 /spike3d）——「太极八卦 · 三生万物」层级版。
  *
- * 设计定调（用户 + 博士调研 2026-10）：
- * ① 球形充盈 —— 分层径向力 rᵢ=R·∛(rank/N) 构造性均匀体积填充（斥力+边界只能得空心壳）；
- * ② 浑天仪环 —— 三层差速同心环：天池太极（中心自转）+ 卦环（卦符+卦名+方位三件套）
- *    + 24 刻度外环（反向旋转），两条朱砂「天心十道」正交准线，倾角 15° 保仪器正位感；
- *    （参考：风水罗盘分层 / I Ching Sphere / tai-chi-diagram-science 的「Scholarly not mystical」）
- * ③ 活体脑核 —— 递质粒子流（只给核心边）+ 节点错相位脉冲呼吸 + FogExp2 深度雾 + 分级节点；
- *    （参考：Eyewire 荧光分色 / Jarvis UI 分级节点 / 3d-force-graph 内置粒子流）
- * ④ 配色纪律 —— 深空 #09090b（禁纯黑）、学士金 #d4a853、朱砂 #c8433c 仅天心十道一处。
+ * 设计定调（用户 2026-10-02）：八卦是图谱的**组织逻辑**，不是表面外观：
+ *   太极中枢（一生二）→ 八卦二级枢纽（二生三，八方宫位）→ 知识节点（三生万物，逐层挂接）。
+ * 外观参考：用户上传的 Jarvis UI 星系视图截图（/115/碧霄/知识脑图）。
+ *
+ * 结构实现：
+ * - 中枢太极钉在球心；八卦枢纽钉在八方宫位（乾上天·坤下地，其余六卦布立方体顶点）；
+ * - 知识节点按类别归宫：乾=主题(天) 坤=文档(地) 离=概念(火) 坎=笔记(水)
+ *   震=实体(雷) 巽=标签(风) 艮=库藏(山) 兑=精选(泽·备用)；
+ * - 层级连线可见：太极→八卦（金色主脉+粒子流）、八卦→知识节点（极淡金支脉），
+ *   原有有机连线保留（蓝调）——"逐层连接"是结构本身的可视化；
+ * - 布局：分层径向力填球（构造性均匀）+ 宫位引力（节点向所属宫位轻拉，成簇不散）。
  */
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
@@ -27,24 +30,33 @@ const LABELS: Record<string, string> = {
   entity: '实体', note: '笔记', tag: '标签',
 };
 
-/** 浑天仪配色纪律 */
-const GOLD_DARK = '#d4a853';   // 学士金（深空主题）
-const GOLD_LIGHT = '#9c7a2e';  // 昼白下加深保对比
-const CINNABAR = '#c8433c';    // 朱砂（仅天心十道）
+const GOLD_DARK = '#d4a853';
+const GOLD_LIGHT = '#9c7a2e';
 
-/** 先天八卦（序：乾兑离震巽坎艮坤）：三爻 true=阳(整) false=阴(断)，自下而上；配卦名与方位 */
+/** 先天八卦：三爻（true=阳 false=阴，自下而上）+ 卦名 + 象/方位 + 宫位方向 */
+const D = 1 / Math.sqrt(3);
 const TRIGRAMS = [
-  { lines: [true, true, true], name: '乾', dir: '天 · 南' },
-  { lines: [true, true, false], name: '兑', dir: '泽 · 东南' },
-  { lines: [true, false, true], name: '离', dir: '火 · 东' },
-  { lines: [true, false, false], name: '震', dir: '雷 · 东北' },
-  { lines: [false, true, true], name: '巽', dir: '风 · 西南' },
-  { lines: [false, true, false], name: '坎', dir: '水 · 西' },
-  { lines: [false, false, true], name: '艮', dir: '山 · 西北' },
-  { lines: [false, false, false], name: '坤', dir: '地 · 北' },
+  { lines: [true, true, true], name: '乾', dir: '天', pos: [0, 1, 0] as const },        // 天在上
+  { lines: [false, false, false], name: '坤', dir: '地', pos: [0, -1, 0] as const },     // 地在下
+  { lines: [true, false, true], name: '离', dir: '火', pos: [D, D, D] as const },
+  { lines: [false, true, false], name: '坎', dir: '水', pos: [-D, -D, -D] as const },
+  { lines: [true, false, false], name: '震', dir: '雷', pos: [D, -D, D] as const },
+  { lines: [false, true, true], name: '巽', dir: '风', pos: [-D, D, -D] as const },
+  { lines: [false, false, true], name: '艮', dir: '山', pos: [-D, D, D] as const },
+  { lines: [true, true, false], name: '兑', dir: '泽', pos: [D, D, -D] as const },
 ];
 
-/** 发光纹理按主题分流：深色白热小核+紧晕；浅色实心色核（白核在白底隐形=清晰度全丢） */
+/** 类别 → 宫位（乾坤震巽坎离艮兑 各有其职） */
+const CAT2PALACE: Record<string, number> = {
+  topic: 0,    // 乾 · 天：纲举目张
+  document: 1, // 坤 · 地：厚德载物
+  concept: 2,  // 离 · 火：明照四方
+  note: 3,     // 坎 · 水：流转不息
+  entity: 4,   // 震 · 雷：动而显现
+  tag: 5,      // 巽 · 风：无孔不入
+};
+
+/** 发光纹理按主题分流：深色白热小核+紧晕；浅色实心色核 */
 const texCache = new Map<string, THREE.CanvasTexture>();
 function glowTexture(color: string, isDark: boolean): THREE.CanvasTexture {
   const key = color + (isDark ? '|d' : '|l');
@@ -74,10 +86,10 @@ function glowTexture(color: string, isDark: boolean): THREE.CanvasTexture {
   return tex;
 }
 
-/** 卦牌纹理：令牌底 + 金环双线 + 矢量三爻 + 卦名 + 方位（罗盘三件套） */
+/** 卦牌纹理：令牌底 + 金环双线 + 矢量三爻 + 卦名 + 卦象 */
 const trigramCache = new Map<string, THREE.CanvasTexture>();
 function trigramTexture(lines: boolean[], name: string, dir: string, gold: string, isDark: boolean): THREE.CanvasTexture {
-  const key = lines.map(Number).join('') + name + gold;
+  const key = lines.map(Number).join('') + name + gold + isDark;
   const hit = trigramCache.get(key);
   if (hit) return hit;
   const S = 512;
@@ -93,7 +105,6 @@ function trigramTexture(lines: boolean[], name: string, dir: string, gold: strin
   x.beginPath(); x.arc(cx, cx, R - S * 0.013, 0, Math.PI * 2); x.stroke();
   x.lineWidth = S * 0.007;
   x.beginPath(); x.arc(cx, cx, R - S * 0.045, 0, Math.PI * 2); x.stroke();
-  // 三爻（上半区）
   x.lineCap = 'round';
   x.lineWidth = S * 0.048;
   const barW = S * 0.46, gap = S * 0.1, cyBars = S * 0.36;
@@ -109,7 +120,6 @@ function trigramTexture(lines: boolean[], name: string, dir: string, gold: strin
     }
     x.stroke();
   });
-  // 卦名 + 方位（罗盘三件套的文字层）
   x.textAlign = 'center';
   x.textBaseline = 'middle';
   x.fillStyle = gold;
@@ -124,7 +134,7 @@ function trigramTexture(lines: boolean[], name: string, dir: string, gold: strin
   return tex;
 }
 
-/** 太极图纹理（天池）：经典阴阳鱼矢量构造 */
+/** 太极图纹理：经典阴阳鱼矢量构造 */
 function taijiTexture(gold: string, isDark: boolean): THREE.CanvasTexture {
   const S = 512;
   const cv = document.createElement('canvas');
@@ -132,67 +142,49 @@ function taijiTexture(gold: string, isDark: boolean): THREE.CanvasTexture {
   const x = cv.getContext('2d')!;
   const cx = S / 2, R = S * 0.46;
   const dark = isDark ? '#101b30' : '#2c3a52';
-  // 阴鱼底
   x.beginPath(); x.arc(cx, cx, R, 0, Math.PI * 2); x.fillStyle = dark; x.fill();
-  // 阳鱼（金）：右半圆 + 两条小半圆 S 曲线
   x.beginPath();
   x.arc(cx, cx, R, -Math.PI / 2, Math.PI / 2, false);
   x.arc(cx, cx + R / 2, R / 2, Math.PI / 2, -Math.PI / 2, true);
   x.arc(cx, cx - R / 2, R / 2, Math.PI / 2, -Math.PI / 2, false);
   x.closePath(); x.fillStyle = gold; x.fill();
-  // 鱼眼
   x.beginPath(); x.arc(cx, cx - R / 2, R * 0.09, 0, Math.PI * 2); x.fillStyle = dark; x.fill();
   x.beginPath(); x.arc(cx, cx + R / 2, R * 0.09, 0, Math.PI * 2); x.fillStyle = gold; x.fill();
-  // 外环
   x.strokeStyle = gold; x.lineWidth = S * 0.018;
   x.beginPath(); x.arc(cx, cx, R, 0, Math.PI * 2); x.stroke();
   return new THREE.CanvasTexture(cv);
 }
 
-/** 刻度环纹理：24 长刻度 + 96 短刻度 + 内外缘细线（仪器感） */
-function tickRingTexture(gold: string): THREE.CanvasTexture {
-  const S = 1024;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = S;
-  const x = cv.getContext('2d')!;
-  const cx = S / 2;
-  x.strokeStyle = gold;
-  for (let i = 0; i < 120; i++) {
-    const a = (i / 120) * Math.PI * 2;
-    const major = i % 5 === 0;
-    const r0 = S * (major ? 0.415 : 0.44);
-    const r1 = S * 0.475;
-    x.lineWidth = major ? S * 0.006 : S * 0.003;
-    x.beginPath();
-    x.moveTo(cx + Math.cos(a) * r0, cx + Math.sin(a) * r0);
-    x.lineTo(cx + Math.cos(a) * r1, cx + Math.sin(a) * r1);
-    x.stroke();
-  }
-  x.lineWidth = S * 0.004;
-  x.beginPath(); x.arc(cx, cx, S * 0.412, 0, Math.PI * 2); x.stroke();
-  x.beginPath(); x.arc(cx, cx, S * 0.478, 0, Math.PI * 2); x.stroke();
-  return new THREE.CanvasTexture(cv);
+/** 分层径向力（构造性充盈）+ 宫位引力（知识节点向所属卦位轻拉成簇）。
+ * 教训：全局斥力+边界容器只能得空心壳（壳定理）；恒力分层才能体积填充。 */
+interface ForceNode {
+  x?: number; y?: number; z?: number; vx?: number; vy?: number; vz?: number;
+  __palace?: readonly number[];
+  __hub?: boolean;
 }
-
-/** 分层径向力（构造性充盈）：每节点目标半径 rᵢ = R·∛(rank/N)（按 index 稳定排序），
- * 每 tick 恒力拉向自己那层（不乘 alpha —— 冷却后仍保持队形）。
- * 教训：全局斥力+边界容器只能得空心壳（壳定理下壳内斥力仍胜线性引力）。 */
-interface ForceNode { x?: number; y?: number; z?: number; vx?: number; vy?: number; vz?: number }
-function makeLayeredForce(R: number, onTick?: () => void) {
+function makeLayeredForce(R: number, palaceOrbit: number, onTick?: () => void) {
   let targets: Map<ForceNode, number> = new Map();
   const force = () => {
     for (const [n, r] of targets) {
       const d = Math.hypot(n.x ?? 0, n.y ?? 0, n.z ?? 0);
-      if (d < 1e-6) continue;
-      const k = ((d - r) / d) * 0.45;
-      n.vx = (n.vx ?? 0) - (n.x ?? 0) * k;
-      n.vy = (n.vy ?? 0) - (n.y ?? 0) * k;
-      n.vz = (n.vz ?? 0) - (n.z ?? 0) * k;
+      if (d > 1e-6) {
+        const k = ((d - r) / d) * 0.45;
+        n.vx = (n.vx ?? 0) - (n.x ?? 0) * k;
+        n.vy = (n.vy ?? 0) - (n.y ?? 0) * k;
+        n.vz = (n.vz ?? 0) - (n.z ?? 0) * k;
+      }
+      if (n.__palace) {
+        const [px, py, pz] = n.__palace;
+        n.vx = (n.vx ?? 0) + (px * palaceOrbit - (n.x ?? 0)) * 0.004;
+        n.vy = (n.vy ?? 0) + (py * palaceOrbit - (n.y ?? 0)) * 0.004;
+        n.vz = (n.vz ?? 0) + (pz * palaceOrbit - (n.z ?? 0)) * 0.004;
+      }
     }
     onTick?.();
   };
   (force as { initialize?: (nodes: ForceNode[]) => void }).initialize = (nodes) => {
-    const sorted = [...nodes].sort((a, b) =>
+    const free = nodes.filter(n => !n.__hub);
+    const sorted = [...free].sort((a, b) =>
       ((a as { index?: number }).index ?? 0) - ((b as { index?: number }).index ?? 0));
     const N = sorted.length;
     targets = new Map(sorted.map((n, i) => [n, R * Math.cbrt((i + 0.5) / N)]));
@@ -203,12 +195,17 @@ function makeLayeredForce(R: number, onTick?: () => void) {
 interface SpikeNode {
   id: number; name: string; cat: string; deg: number;
   x?: number; y?: number; z?: number;
+  fx?: number; fy?: number; fz?: number;
+  hub?: 'taiji' | 'trigram'; tri?: number;
+  __palace?: readonly number[];
+  __hub?: boolean;
   __sp?: THREE.Sprite; __baseSize?: number; __phase?: number;
 }
+interface SpikeLink { source: number; target: number; kind?: 'core' | 'branch' }
 
 export default function KnowledgeGraphSpike3D() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const graphRef = useRef<ReturnType<typeof ForceGraph3D<SpikeNode, { source: number; target: number }>> | null>(null);
+  const graphRef = useRef<ReturnType<typeof ForceGraph3D<SpikeNode, SpikeLink>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const theme = useAppStore(s => s.theme);
   const isDark = theme === 'dark';
@@ -217,29 +214,79 @@ export default function KnowledgeGraphSpike3D() {
   useEffect(() => {
     if (!containerRef.current || !graphQuery.data) return;
     const raw = graphQuery.data as { nodes: { id: number; title: string; type: string }[]; edges: { sourceId: number; targetId: number }[] };
+
+    // ---- 规模参数 ----
+    const N = raw.nodes.length;
+    const scale = Math.cbrt(N / 100);
+    const sphereR = 50 * scale;
+    const palaceR = sphereR * 0.45; // 八卦宫位半径
+
+    // ---- 知识节点（三生万物）----
     const nodes: SpikeNode[] = raw.nodes.map(n => ({ id: n.id, name: n.title, cat: n.type || 'concept', deg: 0 }));
     const idSet = new Set(nodes.map(n => n.id));
-    const links = raw.edges
+    const links: SpikeLink[] = raw.edges
       .filter(e => idSet.has(e.sourceId) && idSet.has(e.targetId))
       .map(e => ({ source: e.sourceId, target: e.targetId }));
     const deg = new Map<number, number>();
-    links.forEach(l => { deg.set(l.source as number, (deg.get(l.source as number) || 0) + 1); deg.set(l.target as number, (deg.get(l.target as number) || 0) + 1); });
+    links.forEach(l => { deg.set(l.source, (deg.get(l.source) || 0) + 1); deg.set(l.target, (deg.get(l.target) || 0) + 1); });
     nodes.forEach(n => { n.deg = deg.get(n.id) || 0; });
-
-    // 分级节点阈值（Jarvis UI 式：supernode 前 15% / ultranode 前 2%）
     const degs = nodes.map(n => n.deg).sort((a, b) => a - b);
     const p85 = degs[Math.floor(degs.length * 0.85)] ?? 0;
     const p98 = degs[Math.floor(degs.length * 0.98)] ?? 0;
 
+    // ---- 归宫：每个知识节点挂到所属卦位 ----
+    const palaceCount = new Array<number>(8).fill(0);
+    nodes.forEach(n => {
+      const pi = CAT2PALACE[n.cat] ?? 6; // 未识别类别入艮宫（山·库藏）
+      n.__palace = TRIGRAMS[pi].pos;
+      palaceCount[pi]++;
+    });
+
+    // ---- 中枢太极（一生二）+ 八卦枢纽（二生三）----
+    const hubId = (i: number) => -(i + 1);
+    const taijiNode: SpikeNode = {
+      id: -100, name: '太极 · 中枢', cat: 'hub', deg: 0,
+      hub: 'taiji', __hub: true, fx: 0, fy: 0, fz: 0,
+    };
+    const trigramNodes: SpikeNode[] = TRIGRAMS.map((tg, i) => ({
+      id: hubId(i), name: `${tg.name} · ${tg.dir}`, cat: 'hub', deg: 0,
+      hub: 'trigram', __hub: true, tri: i,
+      fx: tg.pos[0] * palaceR, fy: tg.pos[1] * palaceR, fz: tg.pos[2] * palaceR,
+    }));
+    // 层级连线：太极→八卦（主脉）+ 八卦→知识节点（支脉）
+    const coreLinks: SpikeLink[] = trigramNodes.map(t => ({ source: -100, target: t.id, kind: 'core' as const }));
+    const palace2hub = new Map<readonly number[], number>();
+    TRIGRAMS.forEach((tg, i) => palace2hub.set(tg.pos, hubId(i)));
+    const branchLinks: SpikeLink[] = nodes.map(n => ({ source: palace2hub.get(n.__palace!)!, target: n.id, kind: 'branch' as const }));
+    const allNodes = [taijiNode, ...trigramNodes, ...nodes];
+    const allLinks = [...coreLinks, ...branchLinks, ...links];
+
     const gold = isDark ? GOLD_DARK : GOLD_LIGHT;
     let disposed = false;
     try {
-      const graph = ForceGraph3D<SpikeNode, { source: number; target: number }>()(containerRef.current);
+      const graph = ForceGraph3D<SpikeNode, SpikeLink>()(containerRef.current);
       graphRef.current = graph;
       (window as unknown as { __spikeGraph?: unknown }).__spikeGraph = graph;
       graph
         .backgroundColor('rgba(0,0,0,0)')
         .nodeThreeObject((nd) => {
+          if (nd.hub === 'taiji') {
+            const s = sphereR * 0.34;
+            const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+              map: taijiTexture(gold, isDark), transparent: true, depthWrite: false,
+            }));
+            sp.scale.set(s, s, 1);
+            return sp;
+          }
+          if (nd.hub === 'trigram') {
+            const tg = TRIGRAMS[nd.tri!];
+            const s = sphereR * 0.24;
+            const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+              map: trigramTexture(tg.lines, tg.name, tg.dir, gold, isDark), transparent: true, depthWrite: false,
+            }));
+            sp.scale.set(s, s, 1);
+            return sp;
+          }
           const tier = nd.deg >= p98 ? 2.1 : nd.deg >= p85 ? 1.45 : 1;
           const base = (5.5 + Math.min(11, Math.log(1 + nd.deg) * 2.4)) * tier;
           const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
@@ -253,22 +300,28 @@ export default function KnowledgeGraphSpike3D() {
           nd.__phase = (nd.id * 2.399) % (Math.PI * 2); // 黄金角错相
           return sprite;
         })
-        .nodeLabel((nd) => `${nd.name} ｜ ${LABELS[nd.cat] || nd.cat}`)
+        .nodeLabel((nd) => nd.hub === 'taiji'
+          ? '太极 · 知识中枢'
+          : nd.hub === 'trigram'
+            ? `${TRIGRAMS[nd.tri!].name}宫 · ${TRIGRAMS[nd.tri!].dir}（${palaceCount[nd.tri!]} 节点）`
+            : `${nd.name} ｜ ${LABELS[nd.cat] || nd.cat}`)
         .warmupTicks(90)
-        .linkColor(() => (isDark ? 'rgba(130,170,230,0.28)' : 'rgba(55,82,128,0.5)'))
-        .linkWidth(isDark ? 0.6 : 0.9)
-        .linkOpacity(0.35)
-        .linkCurvature(0.12)
-        // 递质粒子流：只给核心边（双端度数都 ≥ P85），活体脑核的"放电"
-        .linkDirectionalParticles((l) => {
-          const s = l.source as unknown as SpikeNode, t = l.target as unknown as SpikeNode;
-          return (s.deg ?? 0) >= p85 && (t.deg ?? 0) >= p85 ? 2 : 0;
+        // 三层连线配色：主脉金亮、支脉极淡金、有机连线蓝调
+        .linkColor((l) => {
+          if (l.kind === 'core') return isDark ? 'rgba(212,168,83,0.85)' : 'rgba(156,122,46,0.9)';
+          if (l.kind === 'branch') return isDark ? 'rgba(212,168,83,0.10)' : 'rgba(156,122,46,0.16)';
+          return isDark ? 'rgba(130,170,230,0.28)' : 'rgba(55,82,128,0.5)';
         })
-        .linkDirectionalParticleWidth(1.7)
-        .linkDirectionalParticleSpeed(0.0045)
+        .linkWidth((l) => (l.kind === 'core' ? 1.6 : l.kind === 'branch' ? 0.3 : isDark ? 0.6 : 0.9))
+        .linkOpacity(0.35)
+        .linkCurvature((l) => (l.kind ? 0 : 0.12))
+        // 递质粒子流：主脉（太极→八卦）金色4粒 —— 能量自中枢流向八方
+        .linkDirectionalParticles((l) => (l.kind === 'core' ? 4 : 0))
+        .linkDirectionalParticleWidth(2.2)
+        .linkDirectionalParticleSpeed(0.006)
         .linkDirectionalParticleColor(() => gold)
         .onNodeClick((nd) => {
-          const dist = 60;
+          const dist = nd.hub ? 90 : 60;
           const ratio = 1 + dist / Math.hypot(nd.x || 0, nd.y || 0, nd.z || 0);
           graph.cameraPosition(
             { x: (nd.x || 0) * ratio, y: (nd.y || 0) * ratio, z: (nd.z || 0) * ratio },
@@ -276,75 +329,24 @@ export default function KnowledgeGraphSpike3D() {
           );
         });
 
-      // ---- 布局力学：规模自适应 + 分层径向填球 ----
-      const N = nodes.length;
-      const scale = Math.cbrt(N / 100);
-      const sphereR = 50 * scale;
+      // ---- 布局力学：分层径向填球 + 宫位成簇（八卦枢纽已钉死）----
       const charge = graph.d3Force('charge') as unknown as { strength: (v: number) => void } | null;
       charge?.strength(-8 * scale * scale);
-      const linkF = graph.d3Force('link') as unknown as { distance: (v: number) => void } | null;
-      linkF?.distance(10 * scale);
+      const linkF = graph.d3Force('link') as unknown as {
+        distance: (fn: (l: SpikeLink) => number) => void;
+        strength: (fn: (l: SpikeLink) => number) => void;
+      } | null;
+      // 层级连线定距定强：主脉钉距、支脉弱牵引、有机连线照旧
+      linkF?.distance((l) => (l.kind === 'core' ? palaceR : l.kind === 'branch' ? sphereR * 0.5 : 10 * scale));
+      linkF?.strength((l) => (l.kind === 'core' ? 0.9 : l.kind === 'branch' ? 0.05 : 0.3));
       graph.d3Force('x', null as never);
       graph.d3Force('y', null as never);
       graph.d3Force('z', null as never);
 
-      // ---- 浑天仪：三层差速同心环 + 天心十道 ----
-      const armillary = new THREE.Group();
-      armillary.rotation.x = 0.26; // 倾角 15°，保仪器正位感
-      const ringMedal = new THREE.Group();
-      const ringTicks = new THREE.Group();
-      const taijiSpin = new THREE.Group();
-      armillary.add(ringMedal, ringTicks, taijiSpin);
-
-      // 卦环：卦符+卦名+方位三件套令牌
-      TRIGRAMS.forEach((tg, i) => {
-        const a = (i / 8) * Math.PI * 2 + Math.PI / 2; // 乾居南（面向观者）
-        const sp = new THREE.Sprite(new THREE.SpriteMaterial({
-          map: trigramTexture(tg.lines, tg.name, tg.dir, gold, isDark),
-          transparent: true, depthWrite: false,
-        }));
-        const gSize = sphereR * 0.46;
-        sp.scale.set(gSize, gSize, 1);
-        sp.position.set(Math.cos(a) * sphereR * 1.32, 0, Math.sin(a) * sphereR * 1.32);
-        ringMedal.add(sp);
-      });
-
-      // 天池太极：球心平盘，自转
-      const taiji = new THREE.Mesh(
-        new THREE.PlaneGeometry(sphereR * 0.42, sphereR * 0.42),
-        new THREE.MeshBasicMaterial({ map: taijiTexture(gold, isDark), transparent: true, side: THREE.DoubleSide, depthWrite: false }),
-      );
-      taiji.rotation.x = -Math.PI / 2;
-      taijiSpin.add(taiji);
-
-      // 刻度外环：平盘贴图，反向旋转
-      const ticks = new THREE.Mesh(
-        new THREE.PlaneGeometry(sphereR * 3.6, sphereR * 3.6),
-        new THREE.MeshBasicMaterial({ map: tickRingTexture(gold), transparent: true, side: THREE.DoubleSide, depthWrite: false, opacity: 0.85 }),
-      );
-      ticks.rotation.x = -Math.PI / 2;
-      ringTicks.add(ticks);
-
-      // 天心十道：两条朱砂正交准线
-      for (const rz of [0, Math.PI / 2]) {
-        const line = new THREE.Mesh(
-          new THREE.PlaneGeometry(sphereR * 3.5, sphereR * 0.016),
-          new THREE.MeshBasicMaterial({ color: CINNABAR, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false }),
-        );
-        line.rotation.x = -Math.PI / 2;
-        line.rotation.z = rz;
-        armillary.add(line);
-      }
-      graph.scene().add(armillary);
-
-      // 分层径向力（tick 驱动：三环差速 + 节点脉冲呼吸）
+      // 分层径向力（tick 驱动节点脉冲呼吸）
       let t = 0;
-      graph.d3Force('layered', makeLayeredForce(sphereR, () => {
+      graph.d3Force('layered', makeLayeredForce(sphereR, sphereR * 0.72, () => {
         t += 0.016;
-        ringMedal.rotation.y += 0.0008;
-        ringTicks.rotation.y -= 0.0005;
-        taijiSpin.rotation.y += 0.006;
-        // 节点脉冲（黄金角错相位正弦呼吸，"活体"感）
         for (const nd of nodes) {
           const sp = nd.__sp;
           if (!sp || nd.__baseSize == null || nd.__phase == null) continue;
@@ -354,19 +356,17 @@ export default function KnowledgeGraphSpike3D() {
       }) as never);
 
       // 灌数据：warmupTicks 在 graphData 调用时同步跑 —— 必须在所有力学配置之后
-      graph.graphData({ nodes, links });
+      graph.graphData({ nodes: allNodes, links: allLinks });
 
-      // 目标球线框（稀疏经纬，暗示球体边界）
+      // 目标球线框（极淡，暗示边界）
       const wire = new THREE.LineSegments(
         new THREE.WireframeGeometry(new THREE.SphereGeometry(sphereR, 18, 12)),
-        new THREE.LineBasicMaterial({ color: isDark ? 0x3a5a8a : 0x8aa8d0, transparent: true, opacity: isDark ? 0.08 : 0.18 }),
+        new THREE.LineBasicMaterial({ color: isDark ? 0x3a5a8a : 0x8aa8d0, transparent: true, opacity: isDark ? 0.06 : 0.14 }),
       );
       graph.scene().add(wire);
 
-      // 深度雾（FogExp2）：远景衰减出纵深
+      // 深度雾 + 星野
       graph.scene().fog = new THREE.FogExp2(isDark ? 0x09090b : 0xeef2f8, 0.0006);
-
-      // 背景星野：1200 个远景星点围成球壳
       const starGeo = new THREE.BufferGeometry();
       const starPos = new Float32Array(1200 * 3);
       for (let i = 0; i < 1200; i++) {
@@ -382,7 +382,7 @@ export default function KnowledgeGraphSpike3D() {
         color: isDark ? 0x8fb4e8 : 0x7d9ac8, size: 2.2, transparent: true, opacity: isDark ? 0.55 : 0.4,
       })));
 
-      // Bloom 辉光（仅深色；浅色下发光必然洗白）
+      // Bloom（仅深色；阈值 0.75 让金牌不糊、白热核仍发光）
       if (isDark) {
         const bloom = new UnrealBloomPass(
           new THREE.Vector2(containerRef.current.clientWidth, containerRef.current.clientHeight),
@@ -391,15 +391,16 @@ export default function KnowledgeGraphSpike3D() {
         graph.postProcessingComposer().addPass(bloom);
       }
 
-      // HiDPI 锐度：渲染分辨率跟随设备像素比（封顶 2 防性能税）
+      // HiDPI 锐度
       graph.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       const ctl = graph.controls() as { autoRotate: boolean; autoRotateSpeed: number };
       ctl.autoRotate = true;
       ctl.autoRotateSpeed = 0.6;
-      // 布局沉降后按图云包围盒手动取景（getGraphBbox 此版本返回默认值，不可靠）
+      // 布局沉降后取景：相机抬高 20° 俯角
       setTimeout(() => {
         const gd = graph.graphData() as { nodes: SpikeNode[]; links: unknown[] };
-        const xs = gd.nodes.map(n => n.x ?? 0), ys = gd.nodes.map(n => n.y ?? 0), zs = gd.nodes.map(n => n.z ?? 0);
+        const free = gd.nodes.filter(n => !n.hub);
+        const xs = free.map(n => n.x ?? 0), ys = free.map(n => n.y ?? 0), zs = free.map(n => n.z ?? 0);
         const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
         const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
         const cz = (Math.min(...zs) + Math.max(...zs)) / 2;
@@ -417,35 +418,38 @@ export default function KnowledgeGraphSpike3D() {
     };
   }, [graphQuery.data, isDark]);
 
-  // 主题化配色
   const fg = isDark ? '#e6edf7' : '#26303e';
   const sub = isDark ? '#9fb4d8' : '#5a6a80';
   const faint = isDark ? '#6c7f9f' : '#8a98ad';
+  const gold = isDark ? GOLD_DARK : GOLD_LIGHT;
 
   return (
     <div style={{ position: 'fixed', inset: 0, top: 48, background: isDark ? '#09090b' : '#eef2f8', transition: 'background 0.4s' }}>
-      {/* key=theme：切主题时整棵 DOM 重挂载（旧 WebGL 上下文随旧 canvas 销毁），
-          避免同容器二次初始化 3d-force-graph 渲染不出来 */}
+      {/* key=theme：切主题时整棵 DOM 重挂载（旧 WebGL 上下文随旧 canvas 销毁） */}
       <div key={theme} ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
       {/* HUD */}
       <div style={{ position: 'absolute', left: 18, top: 16, zIndex: 10, color: sub, fontSize: 12, letterSpacing: 0.4, pointerEvents: 'none' }}>
         <b style={{ color: fg, fontSize: 15, display: 'block', marginBottom: 4, letterSpacing: 1.5 }}>
-          璇玑 · 浑天仪（3D 预览）
+          璇玑 · 太极八卦图（3D 预览）
         </b>
         {graphQuery.data
-          ? `${(graphQuery.data as { nodes: unknown[] }).nodes.length} 节点 · 天池太极 · 八卦差速环 · 递质放电`
+          ? `${(graphQuery.data as { nodes: unknown[] }).nodes.length} 节点 · 太极生两仪 · 八卦定八方 · 三生万物`
           : '载入中…'}
       </div>
       <div style={{ position: 'absolute', right: 18, top: 16, zIndex: 10, color: sub, fontSize: 12, lineHeight: '22px', background: isDark ? 'rgba(12,14,18,.55)' : 'rgba(255,255,255,.6)', border: `1px solid ${isDark ? 'rgba(120,160,220,.14)' : 'rgba(90,120,160,.2)'}`, borderRadius: 10, padding: '10px 14px', backdropFilter: 'blur(6px)' }}>
+        <div style={{ marginBottom: 4 }}>
+          <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', marginRight: 7, background: gold, boxShadow: `0 0 8px ${gold}` }} />
+          太极中枢 · 八卦宫位
+        </div>
         {Object.keys(COLORS).map(c => (
           <div key={c}>
             <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', marginRight: 7, background: COLORS[c], boxShadow: `0 0 8px ${COLORS[c]}` }} />
-            {LABELS[c]}
+            {LABELS[c]}（{TRIGRAMS[CAT2PALACE[c]].name}宫）
           </div>
         ))}
       </div>
       <div style={{ position: 'absolute', left: 18, bottom: 16, zIndex: 10, color: faint, fontSize: 11 }}>
-        拖动旋转 · 滚轮缩放 · 悬停看名称 · 点击聚焦 ｜ 跟随「昼白/深空」主题切换
+        拖动旋转 · 滚轮缩放 · 悬停看名称 · 点击聚焦 ｜ 金线=层级主脉（粒子流） · 蓝线=有机关联
       </div>
       {error && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ff6b9d', fontSize: 13, zIndex: 20 }}>
