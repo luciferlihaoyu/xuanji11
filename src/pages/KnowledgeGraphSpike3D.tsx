@@ -39,22 +39,33 @@ const TRIGRAMS: boolean[][] = [
 
 /** 发光纹理：平滑径向渐变（WebGL 纹理缩放无位图锯齿问题） */
 const texCache = new Map<string, THREE.CanvasTexture>();
-function glowTexture(color: string): THREE.CanvasTexture {
-  const hit = texCache.get(color);
+function glowTexture(color: string, isDark: boolean): THREE.CanvasTexture {
+  const key = color + (isDark ? '|d' : '|l');
+  const hit = texCache.get(key);
   if (hit) return hit;
   const S = 128;
   const cv = document.createElement('canvas');
   cv.width = cv.height = S;
   const x = cv.getContext('2d')!;
   const g = x.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
-  g.addColorStop(0, '#ffffff');
-  g.addColorStop(0.08, color);
-  g.addColorStop(0.22, color + '66');
-  g.addColorStop(1, color + '00');
+  if (isDark) {
+    // 深色：白热小核 + 紧晕（防加法叠加洗白，晕宁小勿大）
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(0.06, color);
+    g.addColorStop(0.16, color + '55');
+    g.addColorStop(1, color + '00');
+  } else {
+    // 浅色：实心色核（白核在白底上是隐形的 → 清晰度全丢），边缘快速衰减
+    g.addColorStop(0, color);
+    g.addColorStop(0.30, color);
+    g.addColorStop(0.46, color + 'aa');
+    g.addColorStop(0.72, color + '22');
+    g.addColorStop(1, color + '00');
+  }
   x.fillStyle = g;
   x.fillRect(0, 0, S, S);
   const tex = new THREE.CanvasTexture(cv);
-  texCache.set(color, tex);
+  texCache.set(key, tex);
   return tex;
 }
 
@@ -161,7 +172,7 @@ export default function KnowledgeGraphSpike3D() {
         .nodeThreeObject((nd) => {
           const size = 5.5 + Math.min(11, Math.log(1 + nd.deg) * 2.4);
           const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-            map: glowTexture(COLORS[nd.cat] || COLORS.tag),
+            map: glowTexture(COLORS[nd.cat] || COLORS.tag, isDark),
             transparent: true, depthWrite: false,
             // 浅色主题下加法发光必然洗白 → 普通混合
             ...(isDark ? { blending: THREE.AdditiveBlending } : {}),
@@ -171,8 +182,8 @@ export default function KnowledgeGraphSpike3D() {
         })
         .nodeLabel((nd) => `${nd.name} ｜ ${LABELS[nd.cat] || nd.cat}`)
         .warmupTicks(90)
-        .linkColor(() => (isDark ? 'rgba(130,170,230,0.35)' : 'rgba(70,100,150,0.4)'))
-        .linkWidth(0.6)
+        .linkColor(() => (isDark ? 'rgba(130,170,230,0.28)' : 'rgba(55,82,128,0.5)'))
+        .linkWidth(isDark ? 0.6 : 0.9)
         .linkOpacity(0.35)
         .onNodeClick((nd) => {
           const dist = 60;
@@ -252,7 +263,7 @@ export default function KnowledgeGraphSpike3D() {
       if (isDark) {
         const bloom = new UnrealBloomPass(
           new THREE.Vector2(containerRef.current.clientWidth, containerRef.current.clientHeight),
-          0.55, 0.35, 0.45,
+          0.38, 0.3, 0.5,
         );
         graph.postProcessingComposer().addPass(bloom);
       }
