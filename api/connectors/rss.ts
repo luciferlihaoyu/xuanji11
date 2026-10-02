@@ -18,6 +18,9 @@
  * 就能绕过门禁直取内网（复核者已用真实 socket 探针证实可利用）。因此这里用
  * **redirect:'manual' + 自己逐跳跟随**：每跳的 Location 先解析成绝对 URL、再过协议白名单与
  * egress 校验，才允许发出下一跳；跳数受 MAX_REDIRECTS 约束。
+ * 另：实际出网走 safeFetch（2026-10-01）——它把「解析 DNS → 判定 → 连接」钉成一次动作，
+ * 只连判定通过的地址，堵死"两次解析之间 DNS 被换"（DNS-rebinding TOCTOU）这一深层竞态；
+ * 逐跳 assertEgressAllowed 保留为纵深防御（缓存命中复核、策略中途收紧的场景仍由它兜住）。
  * 缓存命中时同样按快照里的**每一跳**复核（策略可能在 TTL 内收紧）；复核不过**不报错**，
  * 而是丢弃该缓存、重新走完整的逐跳抓取与校验 —— 旧跳链作废（CDN 轮换/签名 URL 变更/临时解析失败）
  * 不该把可达的源判死整个 TTL，而重新抓取本身就是再一次完整校验，绝不构成放行（N-2）。
@@ -29,6 +32,7 @@
 
 import { registerConnector, type CloudConnector, type CloudFile } from './base';
 import { assertEgressAllowed } from '../lib/egress';
+import { safeFetch, type SafeFetchResponse } from '../lib/safe-fetch';
 import { parseFeed, type FeedEntry, type ParsedFeed } from './feed-parse';
 
 /** 整条「抓取链」的总超时（含所有重定向跳）：一次 signal 贯穿全链，不逐跳续期 */
@@ -304,7 +308,7 @@ function isRedirectStatus(status: number): boolean {
 
 /** 决定不消费响应体时（跟随下一跳 / 各种提前报错）主动丢弃，避免连接挂在池里不释放。
  *  取消失败不影响结论（body 可能已被消费或本就为 null）。 */
-function discardBody(res: Response): void {
+function discardBody(res: SafeFetchResponse): void {
   try {
     void res.body?.cancel().catch(() => {});
   } catch {
@@ -320,7 +324,7 @@ function discardBody(res: Response): void {
 async function fetchWithPerHopEgressGuard(
   startUrl: string,
   signal: AbortSignal,
-): Promise<{ res: Response; hops: string[] }> {
+): Promise<{ res: SafeFetchResponse; hops: string[] }> {
   let current = startUrl;
   /** 实际发出过请求的地址链（含被拦下的那一跳之前的一切），供缓存命中时复核策略 */
   const hops: string[] = [];
@@ -337,9 +341,12 @@ async function fetchWithPerHopEgressGuard(
     }
     hops.push(current);
 
-    let res: Response;
+    let res: SafeFetchResponse;
     try {
-      res = await fetch(current, {
+      // 出网走 safeFetch：校验与连接钉成一次动作（解析一次→判定→只连判定通过的那个地址），
+      // 上面的 assertEgressAllowed 保留为纵深防御；即便两次校验之间 DNS 被换（DNS-rebinding），
+      // 实际连接也只允许去判定通过的地址，TOCTOU 从结构上不可能。
+      res = await safeFetch(current, {
         method: 'GET',
         headers: { 'User-Agent': USER_AGENT, Accept: ACCEPT_HEADER },
         // 关键：绝不交给 fetch 静默跟随 —— 3xx 交回我们自己校验下一跳
@@ -408,7 +415,7 @@ async function fetchWithPerHopEgressGuard(
 }
 
 /** content-length 预检：源站自己声明超限就不必读体（省带宽，也防"声明超限却先发完整头"的拖延） */
-function checkDeclaredLength(res: Response): void {
+function checkDeclaredLength(res: SafeFetchResponse): void {
   const raw = res.headers.get('content-length');
   if (raw === null) return;
   const declared = Number(raw.trim());
@@ -421,7 +428,7 @@ function checkDeclaredLength(res: Response): void {
 }
 
 /** 按字节护栏读取响应体：边读边累计字节数，超限立即中断并取消 reader（绝不把 12MB 全抽完） */
-async function readBodyWithByteCap(res: Response): Promise<string> {
+async function readBodyWithByteCap(res: SafeFetchResponse): Promise<string> {
   checkDeclaredLength(res);
 
   const stream = res.body;
@@ -502,7 +509,7 @@ export function parseRetryAfterSeconds(
   return Math.max(0, Math.ceil((at - now) / 1000));
 }
 
-function rateLimitMessage(res: Response): string {
+function rateLimitMessage(res: SafeFetchResponse): string {
   const base = 'RSS 源站限流 (HTTP 429)：请求过于频繁';
   const raw = res.headers.get('retry-after');
   const secs = parseRetryAfterSeconds(raw);

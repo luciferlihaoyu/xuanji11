@@ -1,6 +1,7 @@
 /**
  * SSRF egress guard：所有以「用户/租户可控 URL」发起的服务端 fetch 必须前置
- * assertEgressAllowed（或直接使用 safeFetch）。
+ * assertEgressAllowed；需要把「校验」与「连接」绑成一次动作时，使用 ./safe-fetch 的
+ * safeFetch（解析一次 → 判定 → 连接只允许去判定通过的那个地址，杜绝 DNS-rebinding TOCTOU）。
  *
  * 默认拒绝解析到私网/环回/链路本地/metadata 的地址；自托管内网部署（如 NAS 上的
  * AList、内网 LLM 网关）可通过环境变量 EGRESS_ALLOW_PRIVATE_NET=true 显式放行。
@@ -26,6 +27,11 @@ let activeResolveHost: ResolveHost = defaultResolveHost;
 /** 测试注入用：替换 DNS 解析器。 */
 export function setResolveHostForTests(resolver: ResolveHost): void {
   activeResolveHost = resolver;
+}
+
+/** 供 safeFetch 复用同一解析注入点（实现与测试共享一套 DNS 假源）。 */
+export function resolveHostForEgress(host: string): Promise<string[]> {
+  return activeResolveHost(host);
 }
 
 function ipv4ToInt(ip: string): number | null {
@@ -60,7 +66,12 @@ export function isBlockedAddress(address: string): boolean {
     if (ip === "::1" || ip === "::") return true;
     const compact = expandIpv6(ip);
     if (!compact) return false;
-    if (compact.startsWith("fe80")) return true; // link-local fe80::/10
+    // 链路本地 fe80::/10 = fe80–febf：按前 16 bit 的数值范围判（旧实现只匹配字符串前缀 "fe80"，feb0:: 一类会漏）
+    const firstGroup = compact.slice(0, 4);
+    if (firstGroup >= "fe80" && firstGroup <= "febf") return true;
+    if (compact.startsWith("ff")) return false; // 组播 ff00::/8 本轮不拦（保持既有范围），避免误伤
+    if (compact.startsWith("0064ff9b000000000000")) return true; // NAT64 64:ff9b::/96（可译回任意 IPv4，含内网）
+    if (compact.startsWith("2002")) return true; // 6to4 2002::/16（封装地址同样可指向内网）
     if (/^f[cd]/.test(compact)) return true; // ULA fc00::/7
     return false;
   }
@@ -74,7 +85,11 @@ export function isBlockedAddress(address: string): boolean {
     inCidr4(ip, "192.168.0.0", 16) ||
     inCidr4(ip, "169.254.0.0", 16) ||
     inCidr4(ip, "0.0.0.0", 8) ||
-    inCidr4(ip, "100.64.0.0", 10)
+    inCidr4(ip, "100.64.0.0", 10) ||
+    inCidr4(ip, "192.0.0.0", 24) || // IETF 协议分配段
+    inCidr4(ip, "198.18.0.0", 15) || // 基准测试保留段
+    inCidr4(ip, "224.0.0.0", 4) || // 组播
+    inCidr4(ip, "240.0.0.0", 4) // 保留段（含广播 255.255.255.255）
   );
 }
 
@@ -86,7 +101,7 @@ function expandIpv6(ip: string): string | null {
   const tail = halves[1] !== undefined ? (halves[1] ? halves[1].split(":").filter(Boolean) : []) : [];
   const fill = 8 - head.length - tail.length;
   if (fill < 0) return null;
-  const groups = [...head, ...Array(fill).fill("0"), ...tail];
+  const groups = [...head, ...Array(fill).fill("0"), ...tail].map((g) => g.padStart(4, "0"));
   if (groups.length !== 8) return null;
   return groups.join("");
 }

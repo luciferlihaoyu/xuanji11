@@ -24,6 +24,7 @@ import { setEgressPolicyForTests, setResolveHostForTests } from "../lib/egress";
 setEgressPolicyForTests(async () => true);
 
 import { parseFeed } from "./feed-parse";
+import { setSafeFetchTransportForTests } from "../lib/safe-fetch";
 import {
   connectorRss,
   clearFeedCacheForTests,
@@ -98,6 +99,11 @@ let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 beforeEach(() => {
   fetchMock = vi.fn<typeof fetch>();
   vi.stubGlobal("fetch", fetchMock);
+  // rss.ts 的出网已切到 safeFetch（钉连接）；这里把 safeFetch 的测试运输口接到同一个
+  // fetchMock 上 —— 断言面（调用参数/次数/应答）与旧范式完全一致，82 个契约原样保留。
+  setSafeFetchTransportForTests(
+    async (url, init) => fetchMock(url as unknown as string, init as unknown as RequestInit),
+  );
   clearFeedCacheForTests();
   setEgressPolicyForTests(async () => true);
 });
