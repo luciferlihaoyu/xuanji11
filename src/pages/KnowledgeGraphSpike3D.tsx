@@ -80,7 +80,7 @@ function trigramTexture(lines: boolean[], name: string, dir: string, gold: strin
   const key = lines.map(Number).join('') + name + gold;
   const hit = trigramCache.get(key);
   if (hit) return hit;
-  const S = 256;
+  const S = 512;
   const cv = document.createElement('canvas');
   cv.width = cv.height = S;
   const x = cv.getContext('2d')!;
@@ -126,7 +126,7 @@ function trigramTexture(lines: boolean[], name: string, dir: string, gold: strin
 
 /** 太极图纹理（天池）：经典阴阳鱼矢量构造 */
 function taijiTexture(gold: string, isDark: boolean): THREE.CanvasTexture {
-  const S = 256;
+  const S = 512;
   const cv = document.createElement('canvas');
   cv.width = cv.height = S;
   const x = cv.getContext('2d')!;
@@ -151,7 +151,7 @@ function taijiTexture(gold: string, isDark: boolean): THREE.CanvasTexture {
 
 /** 刻度环纹理：24 长刻度 + 96 短刻度 + 内外缘细线（仪器感） */
 function tickRingTexture(gold: string): THREE.CanvasTexture {
-  const S = 512;
+  const S = 1024;
   const cv = document.createElement('canvas');
   cv.width = cv.height = S;
   const x = cv.getContext('2d')!;
@@ -258,6 +258,7 @@ export default function KnowledgeGraphSpike3D() {
         .linkColor(() => (isDark ? 'rgba(130,170,230,0.28)' : 'rgba(55,82,128,0.5)'))
         .linkWidth(isDark ? 0.6 : 0.9)
         .linkOpacity(0.35)
+        .linkCurvature(0.12)
         // 递质粒子流：只给核心边（双端度数都 ≥ P85），活体脑核的"放电"
         .linkDirectionalParticles((l) => {
           const s = l.source as unknown as SpikeNode, t = l.target as unknown as SpikeNode;
@@ -385,11 +386,13 @@ export default function KnowledgeGraphSpike3D() {
       if (isDark) {
         const bloom = new UnrealBloomPass(
           new THREE.Vector2(containerRef.current.clientWidth, containerRef.current.clientHeight),
-          0.38, 0.3, 0.5,
+          0.42, 0.3, 0.75,
         );
         graph.postProcessingComposer().addPass(bloom);
       }
 
+      // HiDPI 锐度：渲染分辨率跟随设备像素比（封顶 2 防性能税）
+      graph.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       const ctl = graph.controls() as { autoRotate: boolean; autoRotateSpeed: number };
       ctl.autoRotate = true;
       ctl.autoRotateSpeed = 0.6;
@@ -401,7 +404,7 @@ export default function KnowledgeGraphSpike3D() {
         const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
         const cz = (Math.min(...zs) + Math.max(...zs)) / 2;
         const dim = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), Math.max(...zs) - Math.min(...zs), 1);
-        graph.cameraPosition({ x: cx, y: cy, z: cz + dim * 1.45 }, { x: cx, y: cy, z: cz } as never, 1200);
+        graph.cameraPosition({ x: cx, y: cy + dim * 0.42, z: cz + dim * 1.3 }, { x: cx, y: cy, z: cz } as never, 1200);
       }, 1200);
     } catch (e) {
       if (!disposed) setError(e instanceof Error ? e.message : String(e));
