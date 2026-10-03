@@ -47,6 +47,25 @@ function glowTexture(color: string, isDark: boolean): THREE.CanvasTexture {
   return tex;
 }
 
+/** 文字标签纹理（Obsidian 式常显）：描边白字/墨字，512x128 高清，超长截断 */
+function labelTexture(name: string, isDark: boolean): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 512; cv.height = 128;
+  const x = cv.getContext('2d')!;
+  const text = name.length > 14 ? name.slice(0, 13) + '…' : name;
+  x.font = `600 56px "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif`;
+  x.textAlign = 'center';
+  x.textBaseline = 'middle';
+  x.lineWidth = 8;
+  x.strokeStyle = isDark ? 'rgba(4,6,11,0.85)' : 'rgba(238,242,248,0.9)';
+  x.strokeText(text, 256, 64);
+  x.fillStyle = isDark ? '#dbe4f0' : '#334155';
+  x.fillText(text, 256, 64);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.minFilter = THREE.LinearFilter;
+  return tex;
+}
+
 /** 分层径向力（构造性充盈）：每节点目标半径 rᵢ = R·∛(rank/N)，恒力拉向自己那层（不乘 alpha）。 */
 interface ForceNode { x?: number; y?: number; z?: number; vx?: number; vy?: number; vz?: number }
 function makeLayeredForce(R: number, onTick?: () => void) {
@@ -74,7 +93,7 @@ function makeLayeredForce(R: number, onTick?: () => void) {
 interface SpikeNode {
   id: number; name: string; cat: string; deg: number;
   x?: number; y?: number; z?: number;
-  __sp?: THREE.Sprite; __baseSize?: number;
+  __sp?: THREE.Sprite; __baseSize?: number; __label?: THREE.Sprite;
 }
 
 export default function KnowledgeGraphSpike3D() {
@@ -96,6 +115,9 @@ export default function KnowledgeGraphSpike3D() {
     const deg = new Map<number, number>();
     links.forEach(l => { deg.set(l.source, (deg.get(l.source) || 0) + 1); deg.set(l.target, (deg.get(l.target) || 0) + 1); });
     nodes.forEach(n => { n.deg = deg.get(n.id) || 0; });
+    // 高热度节点（前 15%）标签常显，其余拉近才显
+    const degs = nodes.map(n => n.deg).sort((a, b) => a - b);
+    const p85 = degs[Math.floor(degs.length * 0.85)] ?? 0;
 
     let disposed = false;
     try {
@@ -114,7 +136,17 @@ export default function KnowledgeGraphSpike3D() {
           sprite.scale.set(base, base, 1);
           nd.__sp = sprite;
           nd.__baseSize = base;
-          return sprite;
+          // 常显文字标签（节点下方）
+          const label = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: labelTexture(nd.name, isDark), transparent: true, depthWrite: false, opacity: 0.95,
+          }));
+          label.scale.set(11, 2.75, 1);
+          label.position.set(0, -(base / 2 + 1.9), 0);
+          label.visible = nd.deg >= p85; // 高热度常显，其余由距离门控
+          nd.__label = label;
+          const group = new THREE.Group();
+          group.add(sprite, label);
+          return group;
         })
         .nodeLabel((nd) => `${nd.name} ｜ ${LABELS[nd.cat] || nd.cat}`)
         .warmupTicks(90)
@@ -136,9 +168,13 @@ export default function KnowledgeGraphSpike3D() {
       const scale = Math.cbrt(N / 100);
       const sphereR = 50 * scale;
       const charge = graph.d3Force('charge') as unknown as { strength: (v: number) => void } | null;
-      charge?.strength(-8 * scale * scale);
-      const linkF = graph.d3Force('link') as unknown as { distance: (v: number) => void } | null;
-      linkF?.distance(10 * scale);
+      charge?.strength(-12 * scale * scale);
+      const linkF = graph.d3Force('link') as unknown as {
+        distance: (v: number) => void;
+        strength: (v: number) => void;
+      } | null;
+      linkF?.distance(15 * scale);
+      linkF?.strength(0.1); // 弱引力：簇松一点，别打成死结
       graph.d3Force('x', null as never);
       graph.d3Force('y', null as never);
       graph.d3Force('z', null as never);
@@ -148,6 +184,19 @@ export default function KnowledgeGraphSpike3D() {
 
       // 灌数据：warmupTicks 在 graphData 调用时同步跑 —— 必须在所有力学配置之后
       graph.graphData({ nodes, links });
+
+      // Obsidian 式标签门控：拉近才显（高热度节点常显）
+      const labelDist = sphereR * 1.1;
+      graph.onEngineTick(() => {
+        const cam = graph.cameraPosition();
+        for (const nd of nodes) {
+          const lb = nd.__label;
+          if (!lb) continue;
+          if (nd.deg >= p85) { lb.visible = true; continue; }
+          const d = Math.hypot((nd.x ?? 0) - cam.x, (nd.y ?? 0) - cam.y, (nd.z ?? 0) - cam.z);
+          lb.visible = d < labelDist;
+        }
+      });
 
       // HiDPI 锐度
       graph.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
