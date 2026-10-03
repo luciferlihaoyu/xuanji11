@@ -1,17 +1,16 @@
 /**
- * 3D 星云预览页（实验路由 /spike3d）——纯净星云版。
+ * 3D 图谱预览页（实验路由 /spike3d）——Obsidian 洁净版。
  *
- * 设计定调（用户 2026-10-02）：去掉一切八卦元素，回归星云本体。
- * 保留的画质沉淀：
- * - 分层径向力 rᵢ=R·∛(rank/N) 构造性体积填球（斥力+边界只能得空心壳）；
- * - 规模自适应（scale=∛(N/100)），节点增多球体均匀长大、密度恒定；
- * - Bloom 阈值 0.75（白热核发光、彩色节点不糊）+ setPixelRatio(min(dpr,2)) HiDPI 锐度；
- * - 活体感：核心边递质粒子流 + 节点黄金角错相脉冲呼吸 + FogExp2 深度雾 + 分级节点；
- * - 相机 20° 俯角取景（按图云包围盒手动计算，getGraphBbox 此版本返回默认值不可靠）。
+ * 设计定调（用户 2026-10-03）：学 Obsidian 原生图谱的干净——
+ * 节点清晰（硬边实心小圆、近乎均一尺寸）、连线极细（发丝级直线）、无辉光无雾无装饰。
+ * 参考：用户提供的 Obsidian 图谱截图（/115/碧霄/知识脑图）。
+ *
+ * 砍掉（'模糊杂乱'的来源）：发光晕纹理、Bloom、加色混合、脉冲呼吸、粒子流、
+ * 连线弧度、星野、线框球、深度雾、分级尺寸。
+ * 保留：分层径向力体积填球、∛N 规模自适应、HiDPI 像素比、20° 俯角取景。
  */
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import ForceGraph3D from '3d-force-graph';
 import { trpc } from '@/providers/trpc';
 import { useAppStore } from '@/store/useAppStore';
@@ -26,7 +25,7 @@ const LABELS: Record<string, string> = {
   entity: '实体', note: '笔记', tag: '标签',
 };
 
-/** 发光纹理按主题分流：深色白热小核+紧晕；浅色实心色核（白核在白底隐形=清晰度全丢） */
+/** 硬边实心圆盘纹理（Obsidian 式）：纯色填充 + 一圈深色描边，边缘干净无渐变 */
 const texCache = new Map<string, THREE.CanvasTexture>();
 function glowTexture(color: string, isDark: boolean): THREE.CanvasTexture {
   const key = color + (isDark ? '|d' : '|l');
@@ -36,21 +35,13 @@ function glowTexture(color: string, isDark: boolean): THREE.CanvasTexture {
   const cv = document.createElement('canvas');
   cv.width = cv.height = S;
   const x = cv.getContext('2d')!;
-  const g = x.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
-  if (isDark) {
-    g.addColorStop(0, '#ffffff');
-    g.addColorStop(0.06, color);
-    g.addColorStop(0.16, color + '55');
-    g.addColorStop(1, color + '00');
-  } else {
-    g.addColorStop(0, color);
-    g.addColorStop(0.30, color);
-    g.addColorStop(0.46, color + 'aa');
-    g.addColorStop(0.72, color + '22');
-    g.addColorStop(1, color + '00');
-  }
-  x.fillStyle = g;
-  x.fillRect(0, 0, S, S);
+  const cx = S / 2, R = S * 0.4;
+  x.beginPath(); x.arc(cx, cx, R, 0, Math.PI * 2);
+  x.fillStyle = color;
+  x.fill();
+  x.lineWidth = S * 0.035;
+  x.strokeStyle = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(15,23,42,0.5)';
+  x.stroke();
   const tex = new THREE.CanvasTexture(cv);
   texCache.set(key, tex);
   return tex;
@@ -83,7 +74,7 @@ function makeLayeredForce(R: number, onTick?: () => void) {
 interface SpikeNode {
   id: number; name: string; cat: string; deg: number;
   x?: number; y?: number; z?: number;
-  __sp?: THREE.Sprite; __baseSize?: number; __phase?: number;
+  __sp?: THREE.Sprite; __baseSize?: number;
 }
 
 export default function KnowledgeGraphSpike3D() {
@@ -106,11 +97,6 @@ export default function KnowledgeGraphSpike3D() {
     links.forEach(l => { deg.set(l.source, (deg.get(l.source) || 0) + 1); deg.set(l.target, (deg.get(l.target) || 0) + 1); });
     nodes.forEach(n => { n.deg = deg.get(n.id) || 0; });
 
-    // 分级节点阈值（supernode 前 15% / ultranode 前 2%）
-    const degs = nodes.map(n => n.deg).sort((a, b) => a - b);
-    const p85 = degs[Math.floor(degs.length * 0.85)] ?? 0;
-    const p98 = degs[Math.floor(degs.length * 0.98)] ?? 0;
-
     let disposed = false;
     try {
       const graph = ForceGraph3D<SpikeNode, { source: number; target: number }>()(containerRef.current);
@@ -119,33 +105,23 @@ export default function KnowledgeGraphSpike3D() {
       graph
         .backgroundColor('rgba(0,0,0,0)')
         .nodeThreeObject((nd) => {
-          const tier = nd.deg >= p98 ? 2.1 : nd.deg >= p85 ? 1.45 : 1;
-          const base = (5.5 + Math.min(11, Math.log(1 + nd.deg) * 2.4)) * tier;
+          // Obsidian 式：尺寸近均一，度数只做轻微区分
+          const base = 3.2 + Math.min(2.2, Math.log(1 + nd.deg) * 0.9);
           const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
             map: glowTexture(COLORS[nd.cat] || COLORS.tag, isDark),
             transparent: true, depthWrite: false,
-            ...(isDark ? { blending: THREE.AdditiveBlending } : {}),
           }));
           sprite.scale.set(base, base, 1);
           nd.__sp = sprite;
           nd.__baseSize = base;
-          nd.__phase = (nd.id * 2.399) % (Math.PI * 2); // 黄金角错相
           return sprite;
         })
         .nodeLabel((nd) => `${nd.name} ｜ ${LABELS[nd.cat] || nd.cat}`)
         .warmupTicks(90)
-        .linkColor(() => (isDark ? 'rgba(130,170,230,0.28)' : 'rgba(55,82,128,0.5)'))
-        .linkWidth(isDark ? 0.6 : 0.9)
-        .linkOpacity(0.35)
-        .linkCurvature(0.12)
-        // 递质粒子流：只给核心边（双端度数都 ≥ P85）
-        .linkDirectionalParticles((l) => {
-          const s = l.source as unknown as SpikeNode, t = l.target as unknown as SpikeNode;
-          return (s.deg ?? 0) >= p85 && (t.deg ?? 0) >= p85 ? 2 : 0;
-        })
-        .linkDirectionalParticleWidth(1.7)
-        .linkDirectionalParticleSpeed(0.0045)
-        .linkDirectionalParticleColor(() => (isDark ? '#d4a853' : '#9c7a2e'))
+        // Obsidian 式：发丝级直线，克制的中性色
+        .linkColor(() => (isDark ? 'rgba(148,163,184,0.4)' : 'rgba(100,116,139,0.5)'))
+        .linkWidth(0.25)
+        .linkOpacity(0.5)
         .onNodeClick((nd) => {
           const dist = 60;
           const ratio = 1 + dist / Math.hypot(nd.x || 0, nd.y || 0, nd.z || 0);
@@ -167,53 +143,11 @@ export default function KnowledgeGraphSpike3D() {
       graph.d3Force('y', null as never);
       graph.d3Force('z', null as never);
 
-      // 分层径向力（tick 驱动节点脉冲呼吸）
-      let t = 0;
-      graph.d3Force('layered', makeLayeredForce(sphereR, () => {
-        t += 0.016;
-        for (const nd of nodes) {
-          const sp = nd.__sp;
-          if (!sp || nd.__baseSize == null || nd.__phase == null) continue;
-          const s = nd.__baseSize * (1 + 0.08 * Math.sin(t * 2.1 + nd.__phase));
-          sp.scale.set(s, s, 1);
-        }
-      }) as never);
+      // 分层径向力（体积填球）
+      graph.d3Force('layered', makeLayeredForce(sphereR) as never);
 
       // 灌数据：warmupTicks 在 graphData 调用时同步跑 —— 必须在所有力学配置之后
       graph.graphData({ nodes, links });
-
-      // 目标球线框（极淡，暗示边界）
-      const wire = new THREE.LineSegments(
-        new THREE.WireframeGeometry(new THREE.SphereGeometry(sphereR, 18, 12)),
-        new THREE.LineBasicMaterial({ color: isDark ? 0x3a5a8a : 0x8aa8d0, transparent: true, opacity: isDark ? 0.06 : 0.14 }),
-      );
-      graph.scene().add(wire);
-
-      // 深度雾 + 星野
-      graph.scene().fog = new THREE.FogExp2(isDark ? 0x09090b : 0xeef2f8, 0.0006);
-      const starGeo = new THREE.BufferGeometry();
-      const starPos = new Float32Array(1200 * 3);
-      for (let i = 0; i < 1200; i++) {
-        const r = 900 + Math.random() * 1600;
-        const th = Math.random() * Math.PI * 2;
-        const ph = Math.acos(2 * Math.random() - 1);
-        starPos[i * 3] = r * Math.sin(ph) * Math.cos(th);
-        starPos[i * 3 + 1] = r * Math.sin(ph) * Math.sin(th);
-        starPos[i * 3 + 2] = r * Math.cos(ph);
-      }
-      starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
-      graph.scene().add(new THREE.Points(starGeo, new THREE.PointsMaterial({
-        color: isDark ? 0x8fb4e8 : 0x7d9ac8, size: 2.2, transparent: true, opacity: isDark ? 0.55 : 0.4,
-      })));
-
-      // Bloom（仅深色；阈值 0.75 让白热核发光、彩点不糊）
-      if (isDark) {
-        const bloom = new UnrealBloomPass(
-          new THREE.Vector2(containerRef.current.clientWidth, containerRef.current.clientHeight),
-          0.42, 0.3, 0.75,
-        );
-        graph.postProcessingComposer().addPass(bloom);
-      }
 
       // HiDPI 锐度
       graph.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -255,7 +189,7 @@ export default function KnowledgeGraphSpike3D() {
           璇玑 · 星云图（3D 预览）
         </b>
         {graphQuery.data
-          ? `${(graphQuery.data as { nodes: unknown[] }).nodes.length} 节点 · 递质放电 · 脉冲呼吸`
+          ? `${(graphQuery.data as { nodes: unknown[] }).nodes.length} 节点`
           : '载入中…'}
       </div>
       <div style={{ position: 'absolute', right: 18, top: 16, zIndex: 10, color: sub, fontSize: 12, lineHeight: '22px', background: isDark ? 'rgba(12,14,18,.55)' : 'rgba(255,255,255,.6)', border: `1px solid ${isDark ? 'rgba(120,160,220,.14)' : 'rgba(90,120,160,.2)'}`, borderRadius: 10, padding: '10px 14px', backdropFilter: 'blur(6px)' }}>
