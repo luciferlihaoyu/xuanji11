@@ -15,10 +15,16 @@ import ForceGraph3D from '3d-force-graph';
 import { trpc } from '@/providers/trpc';
 import { useAppStore } from '@/store/useAppStore';
 
-/** 与 2D 图谱同口径的霓虹六色 */
-const COLORS: Record<string, string> = {
-  concept: '#4cc9f0', document: '#52e5a7', topic: '#ffc94d',
-  entity: '#ff6b9d', note: '#a78bfa', tag: '#22d3ee',
+/** 六色等距色相环（60° 间隔，彼此最远）：深空高明度 / 昼白深一度保对比 */
+const PALETTE = {
+  dark: {
+    concept: '#5090f8', document: '#45c860', topic: '#f0d020',
+    entity: '#f25050', note: '#d070e8', tag: '#30c8c8',
+  } as Record<string, string>,
+  light: {
+    concept: '#2f6fd0', document: '#2a9e45', topic: '#c9a800',
+    entity: '#cf3a3a', note: '#a84fc0', tag: '#189a9a',
+  } as Record<string, string>,
 };
 const LABELS: Record<string, string> = {
   concept: '概念', document: '文档', topic: '主题',
@@ -119,6 +125,7 @@ export default function KnowledgeGraphSpike3D() {
     const degs = nodes.map(n => n.deg).sort((a, b) => a - b);
     const p85 = degs[Math.floor(degs.length * 0.85)] ?? 0;
 
+    const COLORS = isDark ? PALETTE.dark : PALETTE.light;
     let disposed = false;
     try {
       const graph = ForceGraph3D<SpikeNode, { source: number; target: number }>()(containerRef.current);
@@ -242,9 +249,9 @@ export default function KnowledgeGraphSpike3D() {
           : '载入中…'}
       </div>
       <div style={{ position: 'absolute', right: 18, top: 16, zIndex: 10, color: sub, fontSize: 12, lineHeight: '22px', background: isDark ? 'rgba(12,14,18,.55)' : 'rgba(255,255,255,.6)', border: `1px solid ${isDark ? 'rgba(120,160,220,.14)' : 'rgba(90,120,160,.2)'}`, borderRadius: 10, padding: '10px 14px', backdropFilter: 'blur(6px)' }}>
-        {Object.keys(COLORS).map(c => (
+        {Object.keys(isDark ? PALETTE.dark : PALETTE.light).map(c => (
           <div key={c}>
-            <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', marginRight: 7, background: COLORS[c], boxShadow: `0 0 8px ${COLORS[c]}` }} />
+            <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', marginRight: 7, background: (isDark ? PALETTE.dark : PALETTE.light)[c] }} />
             {LABELS[c]}
           </div>
         ))}
