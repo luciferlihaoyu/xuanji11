@@ -1,21 +1,24 @@
 /**
- * 3D 图谱预览页（实验路由 /spike3d）——Obsidian 洁净版。
+ * 3D 图谱工作台（实验路由 /spike3d）——Jarvis 全套装配版。
  *
- * 设计定调（用户 2026-10-03）：学 Obsidian 原生图谱的干净——
- * 节点清晰（硬边实心小圆、近乎均一尺寸）、连线极细（发丝级直线）、无辉光无雾无装饰。
- * 参考：用户提供的 Obsidian 图谱截图（/115/碧霄/知识脑图）。
+ * 设计定调（用户 2026-10-04 全选）：以 Obsidian 洁净版为画布，
+ * 搬 Jarvis UI 的整套工作台：星爆高亮 + 富信息卡 + HUD 数据角 + Minimap +
+ * 搜索过滤 + 侧栏笔记面板 + 设置预设 + 青色皮肤（扫描线/定制滚动条）。
  *
- * 砍掉（'模糊杂乱'的来源）：发光晕纹理、Bloom、加色混合、脉冲呼吸、粒子流、
- * 连线弧度、星野、线框球、深度雾、分级尺寸。
- * 保留：分层径向力体积填球、∛N 规模自适应、HiDPI 像素比、20° 俯角取景。
+ * 布局力学不变：分层径向力 rᵢ=R·∛(rank/N) 体积填球 + ∛N 规模自适应。
+ * 高亮实现学 Jarvis：底图不动，命中邻居的连线切青色（加色叠加的等价物），
+ * 非邻居节点/连线压暗 —— 干净不糊。
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import ForceGraph3D from '3d-force-graph';
 import { trpc } from '@/providers/trpc';
 import { useAppStore } from '@/store/useAppStore';
+import { loadSettings, saveSettings, ACCENT_DARK, ACCENT_LIGHT, type SpikeSettings } from './spike3d/presets';
+import { Hud, TooltipCard, Minimap, SearchBar, type MiniNode, type CatDef } from './spike3d/widgets';
+import { NodeSidebar, SettingsPanel } from './spike3d/panels';
 
-/** 六色等距色相环（60° 间隔，彼此最远）：深空高明度 / 昼白深一度保对比 */
+/** 六色等距色相环（60° 间隔）：深空高明度 / 昼白深一度 */
 const PALETTE = {
   dark: {
     concept: '#5090f8', document: '#45c860', topic: '#f0d020',
@@ -31,7 +34,7 @@ const LABELS: Record<string, string> = {
   entity: '实体', note: '笔记', tag: '标签',
 };
 
-/** 硬边实心圆盘纹理（Obsidian 式）：纯色填充 + 一圈深色描边，边缘干净无渐变 */
+/** 硬边实心圆盘纹理（Obsidian 式锐边） */
 const texCache = new Map<string, THREE.CanvasTexture>();
 function glowTexture(color: string, isDark: boolean): THREE.CanvasTexture {
   const key = color + (isDark ? '|d' : '|l');
@@ -53,7 +56,7 @@ function glowTexture(color: string, isDark: boolean): THREE.CanvasTexture {
   return tex;
 }
 
-/** 文字标签纹理（Obsidian 式常显）：描边白字/墨字，512x128 高清，超长截断 */
+/** 文字标签纹理（描边字，512x128） */
 function labelTexture(name: string, isDark: boolean): THREE.CanvasTexture {
   const cv = document.createElement('canvas');
   cv.width = 512; cv.height = 128;
@@ -72,9 +75,9 @@ function labelTexture(name: string, isDark: boolean): THREE.CanvasTexture {
   return tex;
 }
 
-/** 分层径向力（构造性充盈）：每节点目标半径 rᵢ = R·∛(rank/N)，恒力拉向自己那层（不乘 alpha）。 */
+/** 分层径向力（体积填球）+ 银河旋涡（差速切向剪切，强度读 ref 可热调） */
 interface ForceNode { x?: number; y?: number; z?: number; vx?: number; vy?: number; vz?: number }
-function makeLayeredForce(R: number, onTick?: () => void) {
+function makeLayeredForce(R: number) {
   let targets: Map<ForceNode, number> = new Map();
   const force = () => {
     for (const [n, r] of targets) {
@@ -85,7 +88,6 @@ function makeLayeredForce(R: number, onTick?: () => void) {
       n.vy = (n.vy ?? 0) - (n.y ?? 0) * k;
       n.vz = (n.vz ?? 0) - (n.z ?? 0) * k;
     }
-    onTick?.();
   };
   (force as { initialize?: (nodes: ForceNode[]) => void }).initialize = (nodes) => {
     const sorted = [...nodes].sort((a, b) =>
@@ -95,73 +97,175 @@ function makeLayeredForce(R: number, onTick?: () => void) {
   };
   return force;
 }
-
-interface SpikeNode {
-  id: number; name: string; cat: string; deg: number;
-  x?: number; y?: number; z?: number;
-  __sp?: THREE.Sprite; __baseSize?: number; __label?: THREE.Sprite;
+function makeSwirlForce(strengthRef: { current: number }) {
+  const force = () => {
+    const s = strengthRef.current;
+    if (s <= 0) return;
+    for (const [n] of swirlNodesRef) {
+      const rx = n.x ?? 0, rz = n.z ?? 0;
+      const r = Math.hypot(rx, rz);
+      if (r < 1) continue;
+      const k = s * 0.02;
+      n.vx = (n.vx ?? 0) + (-rz / r) * k;
+      n.vz = (n.vz ?? 0) + (rx / r) * k;
+    }
+  };
+  let swirlNodesRef: Map<ForceNode, true> = new Map();
+  (force as { initialize?: (nodes: ForceNode[]) => void }).initialize = (nodes) => {
+    swirlNodesRef = new Map(nodes.map(n => [n, true]));
+  };
+  return force;
 }
+
+export interface SpikeNode extends MiniNode {
+  __sp?: THREE.Sprite; __label?: THREE.Sprite;
+  __origBase?: number; __catOn?: boolean;
+}
+export interface SpikeLink { source: number | SpikeNode; target: number | SpikeNode }
+type Graph3D = ReturnType<typeof ForceGraph3D<SpikeNode, SpikeLink>>;
 
 export default function KnowledgeGraphSpike3D() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const graphRef = useRef<ReturnType<typeof ForceGraph3D<SpikeNode, { source: number; target: number }>> | null>(null);
+  const graphRef = useRef<Graph3D | null>(null);
   const [error, setError] = useState<string | null>(null);
   const theme = useAppStore(s => s.theme);
   const isDark = theme === 'dark';
   const graphQuery = trpc.knowledge.getGraph.useQuery();
 
+  const [settings, setSettings] = useState<SpikeSettings>(loadSettings);
+  const [nodes, setNodes] = useState<SpikeNode[]>([]);
+  const [linkCount, setLinkCount] = useState(0);
+  const [graphReady, setGraphReady] = useState(0);
+  const [simStable, setSimStable] = useState(false);
+  const [hoverNode, setHoverNode] = useState<SpikeNode | null>(null);
+  const [selectedNode, setSelectedNode] = useState<SpikeNode | null>(null);
+  const [mouse, setMouse] = useState({ x: 0, y: 0 });
+  const [catFilter, setCatFilter] = useState<Set<string>>(() => new Set(Object.keys(LABELS)));
+  const [camPos, setCamPos] = useState<{ x: number; y: number; z: number } | null>(null);
+
+  // 热调引用（不触发重建）
+  const paramsRef = useRef({ scale: 1, sphereR: 93 });
+  const swirlRef = useRef(0);
+  const labelCutRef = useRef(0);
+  const hlRef = useRef<{ ids: Set<number>; active: boolean }>({ ids: new Set(), active: false });
+  const neighborsRef = useRef<Map<number, Set<number>>>(new Map());
+  const degSortedRef = useRef<number[]>([]);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const accentRef = useRef(ACCENT_DARK);
+
+  const COLORS = isDark ? PALETTE.dark : PALETTE.light;
+  const accent = isDark ? ACCENT_DARK : ACCENT_LIGHT;
+  accentRef.current = accent;
+
+  /* ── 视觉状态统一应用（类别过滤 + 星爆高亮叠加）── */
+  const applyVisualStates = useCallback(() => {
+    const g = graphRef.current;
+    if (!g) return;
+    const { ids, active } = hlRef.current;
+    const gd = g.graphData() as { nodes: SpikeNode[] } | null;
+    if (!gd?.nodes) return;
+    for (const n of gd.nodes) {
+      const catOn = n.__catOn !== false;
+      let op = catOn ? 1 : 0.06;
+      if (active && catOn) op = ids.has(n.id) ? 1 : 0.12;
+      if (n.__sp) (n.__sp.material as THREE.SpriteMaterial).opacity = op;
+      if (n.__label) (n.__label.material as THREE.SpriteMaterial).opacity = op * 0.95;
+    }
+    // 连线重刷（linkColor/linkWidth 闭包读 hlRef + __catOn）
+    g.linkColor(g.linkColor());
+    g.linkWidth(g.linkWidth());
+  }, []);
+
+  /* ── 图初始化（数据/主题变化时重建）── */
   useEffect(() => {
     if (!containerRef.current || !graphQuery.data) return;
     const raw = graphQuery.data as { nodes: { id: number; title: string; type: string }[]; edges: { sourceId: number; targetId: number }[] };
-    const nodes: SpikeNode[] = raw.nodes.map(n => ({ id: n.id, name: n.title, cat: n.type || 'concept', deg: 0 }));
-    const idSet = new Set(nodes.map(n => n.id));
-    const links = raw.edges
+    const ns: SpikeNode[] = raw.nodes.map(n => ({ id: n.id, name: n.title, cat: n.type || 'concept', deg: 0, __catOn: true }));
+    const idSet = new Set(ns.map(n => n.id));
+    const ls: SpikeLink[] = raw.edges
       .filter(e => idSet.has(e.sourceId) && idSet.has(e.targetId))
       .map(e => ({ source: e.sourceId, target: e.targetId }));
     const deg = new Map<number, number>();
-    links.forEach(l => { deg.set(l.source, (deg.get(l.source) || 0) + 1); deg.set(l.target, (deg.get(l.target) || 0) + 1); });
-    nodes.forEach(n => { n.deg = deg.get(n.id) || 0; });
-    // 高热度节点（前 15%）标签常显，其余拉近才显
-    const degs = nodes.map(n => n.deg).sort((a, b) => a - b);
-    const p85 = degs[Math.floor(degs.length * 0.85)] ?? 0;
+    const nb = new Map<number, Set<number>>();
+    ls.forEach(l => {
+      const s = l.source as number, t = l.target as number;
+      deg.set(s, (deg.get(s) || 0) + 1);
+      deg.set(t, (deg.get(t) || 0) + 1);
+      if (!nb.has(s)) nb.set(s, new Set());
+      if (!nb.has(t)) nb.set(t, new Set());
+      nb.get(s)!.add(t); nb.get(t)!.add(s);
+    });
+    ns.forEach(n => { n.deg = deg.get(n.id) || 0; });
+    neighborsRef.current = nb;
+    degSortedRef.current = ns.map(n => n.deg).sort((a, b) => a - b);
 
-    const COLORS = isDark ? PALETTE.dark : PALETTE.light;
+    const N = ns.length;
+    const scale = Math.cbrt(N / 100);
+    const sphereR = 50 * scale;
+    paramsRef.current = { scale, sphereR };
+    setSimStable(false);
+
     let disposed = false;
     try {
-      const graph = ForceGraph3D<SpikeNode, { source: number; target: number }>()(containerRef.current);
+      const graph = ForceGraph3D<SpikeNode, SpikeLink>()(containerRef.current);
       graphRef.current = graph;
       (window as unknown as { __spikeGraph?: unknown }).__spikeGraph = graph;
       graph
         .backgroundColor('rgba(0,0,0,0)')
         .nodeThreeObject((nd) => {
-          // Obsidian 式：尺寸近均一，度数只做轻微区分
-          const base = 3.2 + Math.min(2.2, Math.log(1 + nd.deg) * 0.9);
+          const orig = 3.2 + Math.min(2.2, Math.log(1 + nd.deg) * 0.9);
+          nd.__origBase = orig;
+          const base = orig * settingsRef.current.nodeSize;
           const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
             map: glowTexture(COLORS[nd.cat] || COLORS.tag, isDark),
             transparent: true, depthWrite: false,
           }));
           sprite.scale.set(base, base, 1);
           nd.__sp = sprite;
-          nd.__baseSize = base;
-          // 常显文字标签（节点下方）
           const label = new THREE.Sprite(new THREE.SpriteMaterial({
             map: labelTexture(nd.name, isDark), transparent: true, depthWrite: false, opacity: 0.95,
           }));
           label.scale.set(11, 2.75, 1);
           label.position.set(0, -(base / 2 + 1.9), 0);
-          label.visible = nd.deg >= p85; // 高热度常显，其余由距离门控
+          label.visible = false;
           nd.__label = label;
           const group = new THREE.Group();
           group.add(sprite, label);
           return group;
         })
-        .nodeLabel((nd) => `${nd.name} ｜ ${LABELS[nd.cat] || nd.cat}`)
         .warmupTicks(90)
-        // Obsidian 式：发丝级直线，克制的中性色
-        .linkColor(() => (isDark ? 'rgba(148,163,184,0.4)' : 'rgba(100,116,139,0.5)'))
-        .linkWidth(0.25)
+        .linkColor((l) => {
+          const s = l.source as SpikeNode, t = l.target as SpikeNode;
+          const { ids, active } = hlRef.current;
+          const ac = accentRef.current;
+          if (active) {
+            const hit = ids.has(s.id) && ids.has(t.id);
+            return hit ? ac : (isDark ? 'rgba(148,163,184,0.05)' : 'rgba(100,116,139,0.06)');
+          }
+          if (s.__catOn === false || t.__catOn === false) return isDark ? 'rgba(148,163,184,0.04)' : 'rgba(100,116,139,0.05)';
+          return isDark ? 'rgba(148,163,184,0.4)' : 'rgba(100,116,139,0.5)';
+        })
+        .linkWidth((l) => {
+          const s = l.source as SpikeNode, t = l.target as SpikeNode;
+          const { ids, active } = hlRef.current;
+          if (active && ids.has(s.id) && ids.has(t.id)) return 0.9;
+          return 0.25;
+        })
         .linkOpacity(0.5)
+        .linkCurvature(settingsRef.current.curvature)
+        .onNodeHover((nd) => {
+          setHoverNode(nd ?? null);
+          if (nd) {
+            const ids = new Set<number>([nd.id, ...(neighborsRef.current.get(nd.id) ?? [])]);
+            hlRef.current = { ids, active: true };
+          } else {
+            hlRef.current = { ids: new Set(), active: false };
+          }
+          applyVisualStates();
+        })
         .onNodeClick((nd) => {
+          setSelectedNode(nd);
           const dist = 60;
           const ratio = 1 + dist / Math.hypot(nd.x || 0, nd.y || 0, nd.z || 0);
           graph.cameraPosition(
@@ -170,49 +274,47 @@ export default function KnowledgeGraphSpike3D() {
           );
         });
 
-      // ---- 布局力学：规模自适应 + 分层径向填球 ----
-      const N = nodes.length;
-      const scale = Math.cbrt(N / 100);
-      const sphereR = 50 * scale;
+      // 布局力学
       const charge = graph.d3Force('charge') as unknown as { strength: (v: number) => void } | null;
-      charge?.strength(-12 * scale * scale);
+      charge?.strength(-settingsRef.current.charge * scale * scale);
       const linkF = graph.d3Force('link') as unknown as {
-        distance: (v: number) => void;
-        strength: (v: number) => void;
+        distance: (v: number) => void; strength: (v: number) => void;
       } | null;
-      linkF?.distance(15 * scale);
-      linkF?.strength(0.1); // 弱引力：簇松一点，别打成死结
+      linkF?.distance(settingsRef.current.linkDist * scale);
+      linkF?.strength(0.1);
       graph.d3Force('x', null as never);
       graph.d3Force('y', null as never);
       graph.d3Force('z', null as never);
-
-      // 分层径向力（体积填球）
       graph.d3Force('layered', makeLayeredForce(sphereR) as never);
+      graph.d3Force('swirl', makeSwirlForce(swirlRef) as never);
+      swirlRef.current = settingsRef.current.swirl;
 
-      // 灌数据：warmupTicks 在 graphData 调用时同步跑 —— 必须在所有力学配置之后
-      graph.graphData({ nodes, links });
+      // 标签常显分位
+      const pct = settingsRef.current.labelPct;
+      labelCutRef.current = degSortedRef.current[Math.floor(degSortedRef.current.length * (1 - pct / 100))] ?? 0;
 
-      // Obsidian 式标签门控：拉近才显（高热度节点常显）
+      graph.graphData({ nodes: ns, links: ls });
+
+      // 标签距离门控（Obsidian 拉近出字）
       const labelDist = sphereR * 1.1;
       graph.onEngineTick(() => {
         const cam = graph.cameraPosition();
-        for (const nd of nodes) {
+        for (const nd of ns) {
           const lb = nd.__label;
           if (!lb) continue;
-          if (nd.deg >= p85) { lb.visible = true; continue; }
+          if (nd.deg >= labelCutRef.current) { lb.visible = nd.__catOn !== false; continue; }
           const d = Math.hypot((nd.x ?? 0) - cam.x, (nd.y ?? 0) - cam.y, (nd.z ?? 0) - cam.z);
-          lb.visible = d < labelDist;
+          lb.visible = nd.__catOn !== false && d < labelDist;
         }
       });
 
-      // HiDPI 锐度
       graph.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       const ctl = graph.controls() as { autoRotate: boolean; autoRotateSpeed: number };
       ctl.autoRotate = true;
-      ctl.autoRotateSpeed = 0.6;
-      // 布局沉降后取景：相机抬高 20° 俯角
+      ctl.autoRotateSpeed = settingsRef.current.autoRotate;
       setTimeout(() => {
-        const gd = graph.graphData() as { nodes: SpikeNode[]; links: unknown[] };
+        if (disposed) return;
+        const gd = graph.graphData() as { nodes: SpikeNode[] };
         const xs = gd.nodes.map(n => n.x ?? 0), ys = gd.nodes.map(n => n.y ?? 0), zs = gd.nodes.map(n => n.z ?? 0);
         const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
         const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
@@ -220,6 +322,11 @@ export default function KnowledgeGraphSpike3D() {
         const dim = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), Math.max(...zs) - Math.min(...zs), 1);
         graph.cameraPosition({ x: cx, y: cy + dim * 0.42, z: cz + dim * 1.3 }, { x: cx, y: cy, z: cz } as never, 1200);
       }, 1200);
+      setTimeout(() => { if (!disposed) setSimStable(true); }, 2600);
+
+      setNodes(ns);
+      setLinkCount(ls.length);
+      setGraphReady(r => r + 1);
     } catch (e) {
       if (!disposed) setError(e instanceof Error ? e.message : String(e));
     }
@@ -229,41 +336,140 @@ export default function KnowledgeGraphSpike3D() {
       (graphRef.current as unknown as { _destructor?: () => void })?._destructor?.();
       graphRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphQuery.data, isDark]);
 
-  const fg = isDark ? '#e6edf7' : '#26303e';
-  const sub = isDark ? '#9fb4d8' : '#5a6a80';
-  const faint = isDark ? '#6c7f9f' : '#8a98ad';
+  /* ── 设置热应用（不重建图）── */
+  useEffect(() => {
+    const g = graphRef.current;
+    if (!g || graphReady === 0) return;
+    saveSettings(settings);
+    const { scale } = paramsRef.current;
+    const charge = g.d3Force('charge') as unknown as { strength: (v: number) => void } | null;
+    charge?.strength(-settings.charge * scale * scale);
+    const linkF = g.d3Force('link') as unknown as { distance: (v: number) => void } | null;
+    linkF?.distance(settings.linkDist * scale);
+    g.linkCurvature(settings.curvature);
+    const ctl = g.controls() as { autoRotateSpeed: number };
+    ctl.autoRotateSpeed = settings.autoRotate;
+    swirlRef.current = settings.swirl;
+    labelCutRef.current = degSortedRef.current[Math.floor(degSortedRef.current.length * (1 - settings.labelPct / 100))] ?? 0;
+    const gd = g.graphData() as { nodes: SpikeNode[] } | null;
+    for (const n of gd?.nodes ?? []) {
+      if (n.__origBase == null || !n.__sp) continue;
+      const b = n.__origBase * settings.nodeSize;
+      n.__sp.scale.set(b, b, 1);
+      n.__label?.position.set(0, -(b / 2 + 1.9), 0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings, graphReady]);
+
+  /* ── 类别过滤应用 ── */
+  useEffect(() => {
+    for (const n of nodes) n.__catOn = catFilter.has(n.cat);
+    applyVisualStates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catFilter, nodes]);
+
+  /* ── Minimap 相机位置轮询 ── */
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const g = graphRef.current;
+      if (g) {
+        const c = g.cameraPosition();
+        setCamPos({ x: c.x, y: c.y, z: c.z });
+      }
+    }, 500);
+    return () => clearInterval(iv);
+  }, []);
+
+  const focusNode = useCallback((n: MiniNode) => {
+    const g = graphRef.current;
+    if (!g) return;
+    setSelectedNode(n as SpikeNode);
+    const dist = 60;
+    const ratio = 1 + dist / Math.hypot(n.x || 0, n.y || 0, n.z || 0);
+    g.cameraPosition(
+      { x: (n.x || 0) * ratio, y: (n.y || 0) * ratio, z: (n.z || 0) * ratio },
+      n as never, 1200,
+    );
+  }, []);
+
+  const toggleCat = useCallback((k: string) => {
+    setCatFilter(prev => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+  }, []);
+
+  const cats: CatDef[] = Object.keys(LABELS).map(k => ({ key: k, label: LABELS[k], color: COLORS[k] }));
+  const visibleCount = nodes.filter(n => catFilter.has(n.cat)).length;
+  const neighborsOfSelected = selectedNode
+    ? [...(neighborsRef.current.get(selectedNode.id) ?? [])]
+        .map(id => nodes.find(n => n.id === id))
+        .filter((n): n is SpikeNode => n != null)
+        .sort((a, b) => b.deg - a.deg)
+    : [];
 
   return (
-    <div style={{ position: 'fixed', inset: 0, top: 48, background: isDark ? '#09090b' : '#eef2f8', transition: 'background 0.4s' }}>
-      {/* key=theme：切主题时整棵 DOM 重挂载（旧 WebGL 上下文随旧 canvas 销毁） */}
-      <div key={theme} ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
-      {/* HUD */}
-      <div style={{ position: 'absolute', left: 18, top: 16, zIndex: 10, color: sub, fontSize: 12, letterSpacing: 0.4, pointerEvents: 'none' }}>
-        <b style={{ color: fg, fontSize: 15, display: 'block', marginBottom: 4, letterSpacing: 1.5 }}>
-          璇玑 · 星云图（3D 预览）
-        </b>
-        {graphQuery.data
-          ? `${(graphQuery.data as { nodes: unknown[] }).nodes.length} 节点`
-          : '载入中…'}
-      </div>
-      <div style={{ position: 'absolute', right: 18, top: 16, zIndex: 10, color: sub, fontSize: 12, lineHeight: '22px', background: isDark ? 'rgba(12,14,18,.55)' : 'rgba(255,255,255,.6)', border: `1px solid ${isDark ? 'rgba(120,160,220,.14)' : 'rgba(90,120,160,.2)'}`, borderRadius: 10, padding: '10px 14px', backdropFilter: 'blur(6px)' }}>
-        {Object.keys(isDark ? PALETTE.dark : PALETTE.light).map(c => (
-          <div key={c}>
-            <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', marginRight: 7, background: (isDark ? PALETTE.dark : PALETTE.light)[c] }} />
-            {LABELS[c]}
+    <div
+      style={{ position: 'fixed', inset: 0, top: 48, background: isDark ? '#000000' : '#eef2f8', transition: 'background 0.4s' }}
+      onMouseMove={(e) => setMouse({ x: e.clientX, y: e.clientY })}
+    >
+      <style>{`
+        .spike3d-scroll::-webkit-scrollbar { width: 5px; }
+        .spike3d-scroll::-webkit-scrollbar-track { background: ${isDark ? '#101426' : '#e8edf4'}; border-radius: 5px; }
+        .spike3d-scroll::-webkit-scrollbar-thumb { background: ${isDark ? '#45475a' : '#b6c2d2'}; border-radius: 5px; }
+        .spike3d-scroll::-webkit-scrollbar-thumb:hover { background: ${accent}; box-shadow: 0 0 6px ${accent}88; }
+        .spike3d-root input[type="range"] { appearance: none; -webkit-appearance: none; height: 4px; border-radius: 2px; background: ${isDark ? '#1a3a4a' : '#c8d4e0'}; outline: none; }
+        .spike3d-root input[type="range"]::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: ${accent}; cursor: pointer; border: 2px solid ${isDark ? '#000' : '#fff'}; }
+        .spike3d-root input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: ${accent}; cursor: pointer; border: 2px solid ${isDark ? '#000' : '#fff'}; }
+      `}</style>
+      <div className="spike3d-root" style={{ position: 'absolute', inset: 0 }}>
+        <div key={theme} ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
+
+        {/* CRT 扫描线（深色 + 开关） */}
+        {isDark && settings.scanlines && (
+          <div style={{
+            position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 40,
+            background: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,212,255,0.015) 2px, rgba(0,212,255,0.015) 4px)',
+          }} />
+        )}
+
+        <Hud
+          nodeCount={nodes.length} linkCount={linkCount} visibleCount={visibleCount}
+          simStable={simStable} breadcrumb={(hoverNode ?? selectedNode)?.name ?? null} isDark={isDark}
+        />
+        <SearchBar
+          nodes={nodes} cats={cats} catFilter={catFilter}
+          onToggleCat={toggleCat} onPick={focusNode} isDark={isDark}
+        />
+        <SettingsPanel settings={settings} onChange={setSettings} isDark={isDark} />
+        <Minimap
+          nodes={nodes} camPos={camPos} isDark={isDark}
+          onNavigate={(x, z) => {
+            const g = graphRef.current;
+            if (g) g.cameraPosition({ x, y: (camPos?.y ?? 100) * 0.6, z: z + 60 }, { x, y: 0, z } as never, 900);
+          }}
+        />
+        <NodeSidebar
+          node={selectedNode} neighbors={neighborsOfSelected}
+          onClose={() => setSelectedNode(null)} onNavigate={focusNode} isDark={isDark}
+        />
+        <TooltipCard
+          data={hoverNode ? {
+            name: hoverNode.name, catLabel: LABELS[hoverNode.cat] || hoverNode.cat,
+            deg: hoverNode.deg, color: COLORS[hoverNode.cat] || COLORS.tag,
+          } : null}
+          x={mouse.x} y={mouse.y} isDark={isDark}
+        />
+        {error && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ff6b9d', fontSize: 13, zIndex: 50 }}>
+            渲染失败：{error}
           </div>
-        ))}
+        )}
       </div>
-      <div style={{ position: 'absolute', left: 18, bottom: 16, zIndex: 10, color: faint, fontSize: 11 }}>
-        拖动旋转 · 滚轮缩放 · 悬停看名称 · 点击聚焦 ｜ 跟随「昼白/深空」主题切换
-      </div>
-      {error && (
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ff6b9d', fontSize: 13, zIndex: 20 }}>
-          渲染失败：{error}
-        </div>
-      )}
     </div>
   );
 }
