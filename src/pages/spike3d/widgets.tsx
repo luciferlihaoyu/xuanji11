@@ -11,9 +11,9 @@ export interface MiniNode {
 }
 
 /* ── HUD 数据角 ─────────────────────────────────────────────── */
-export function Hud({ nodeCount, linkCount, visibleCount, simStable, breadcrumb, isDark }: {
+export function Hud({ nodeCount, linkCount, visibleCount, simStable, breadcrumb, isDark, lowSpec }: {
   nodeCount: number; linkCount: number; visibleCount: number;
-  simStable: boolean; breadcrumb: string | null; isDark: boolean;
+  simStable: boolean; breadcrumb: string | null; isDark: boolean; lowSpec?: boolean;
 }) {
   const [fps, setFps] = useState(0);
   const timesRef = useRef<number[]>([]);
@@ -46,6 +46,11 @@ export function Hud({ nodeCount, linkCount, visibleCount, simStable, breadcrumb,
       <div style={{ marginTop: 4, color: simStable ? accent : '#ff6b35' }}>
         {simStable ? '■ SIM STABLE' : '◌ SIMULATING'}
       </div>
+      {lowSpec && (
+        <div style={{ marginTop: 2, color: '#f59e0b', fontSize: 10, letterSpacing: '0.06em' }}>
+          ▲ LOW-POWER MODE
+        </div>
+      )}
       {breadcrumb && (
         <div style={{ marginTop: 4, color: accent, fontSize: 10, letterSpacing: '0.06em', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {breadcrumb}

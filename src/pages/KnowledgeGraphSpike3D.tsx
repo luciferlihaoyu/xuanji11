@@ -117,6 +117,19 @@ function makeSwirlForce(strengthRef: { current: number }) {
   return force;
 }
 
+/** 检测 WebGL 软渲染（SwiftShader/llvmpipe/Software）——无 GPU 设备自动进低功耗模式 */
+function detectSoftwareGL(): boolean {
+  try {
+    const cv = document.createElement('canvas');
+    const gl = cv.getContext('webgl') || cv.getContext('experimental-webgl');
+    if (!gl) return true;
+    const ext = (gl as WebGLRenderingContext).getExtension('WEBGL_debug_renderer_info');
+    if (!ext) return false;
+    const renderer = String((gl as WebGLRenderingContext).getParameter(ext.UNMASKED_RENDERER_WEBGL));
+    return /swiftshader|llvmpipe|software|angle \(google/i.test(renderer);
+  } catch { return false; }
+}
+
 export interface SpikeNode extends MiniNode {
   __sp?: THREE.Sprite; __label?: THREE.Sprite;
   __origBase?: number; __catOn?: boolean;
@@ -142,6 +155,7 @@ export default function KnowledgeGraphSpike3D() {
   const [mouse, setMouse] = useState({ x: 0, y: 0 });
   const [catFilter, setCatFilter] = useState<Set<string>>(() => new Set(Object.keys(LABELS)));
   const [camPos, setCamPos] = useState<{ x: number; y: number; z: number } | null>(null);
+  const [lowSpec] = useState(detectSoftwareGL);
 
   // 热调引用（不触发重建）
   const paramsRef = useRef({ scale: 1, sphereR: 93 });
@@ -234,7 +248,8 @@ export default function KnowledgeGraphSpike3D() {
           group.add(sprite, label);
           return group;
         })
-        .warmupTicks(45)
+        .warmupTicks(lowSpec ? 0 : 45)
+        .cooldownTicks(lowSpec ? 300 : Infinity)
         .linkColor((l) => {
           const s = l.source as SpikeNode, t = l.target as SpikeNode;
           const { ids, active } = hlRef.current;
@@ -253,7 +268,7 @@ export default function KnowledgeGraphSpike3D() {
           return 0.25;
         })
         .linkOpacity(0.5)
-        .linkCurvature(settingsRef.current.curvature)
+        .linkCurvature(lowSpec ? 0 : settingsRef.current.curvature)
         .onNodeHover((nd) => {
           setHoverNode(nd ?? null);
           if (nd) {
@@ -321,9 +336,10 @@ export default function KnowledgeGraphSpike3D() {
         scheduleIdle(fillBatch);
       }
 
-      // 标签距离门控（Obsidian 拉近出字）
+      // 标签距离门控（Obsidian 拉近出字）：
+      // 布局期挂 onEngineTick；引擎停转后由相机 change 事件接管（低功耗模式关键）
       const labelDist = sphereR * 1.1;
-      graph.onEngineTick(() => {
+      const gateLabels = () => {
         const cam = graph.cameraPosition();
         for (const nd of ns) {
           const lb = nd.__label;
@@ -332,11 +348,14 @@ export default function KnowledgeGraphSpike3D() {
           const d = Math.hypot((nd.x ?? 0) - cam.x, (nd.y ?? 0) - cam.y, (nd.z ?? 0) - cam.z);
           lb.visible = nd.__catOn !== false && d < labelDist;
         }
-      });
+      };
+      graph.onEngineTick(gateLabels);
+      (graph.controls() as unknown as { addEventListener: (t: string, cb: () => void) => void })
+        .addEventListener('change', gateLabels);
 
-      graph.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      graph.renderer().setPixelRatio(lowSpec ? 1 : Math.min(window.devicePixelRatio || 1, 2));
       const ctl = graph.controls() as { autoRotate: boolean; autoRotateSpeed: number };
-      ctl.autoRotate = true;
+      ctl.autoRotate = !lowSpec;
       ctl.autoRotateSpeed = settingsRef.current.autoRotate;
       setTimeout(() => {
         if (disposed) return;
@@ -349,6 +368,9 @@ export default function KnowledgeGraphSpike3D() {
         graph.cameraPosition({ x: cx, y: cy + dim * 0.42, z: cz + dim * 1.3 }, { x: cx, y: cy, z: cz } as never, 1200);
       }, 1200);
       setTimeout(() => { if (!disposed) setSimStable(true); }, 2600);
+      (graph as unknown as { onEngineStop: (cb: () => void) => void }).onEngineStop(() => {
+        if (!disposed) setSimStable(true);
+      });
 
       setNodes(ns);
       setLinkCount(ls.length);
@@ -486,6 +508,7 @@ export default function KnowledgeGraphSpike3D() {
         <Hud
           nodeCount={nodes.length} linkCount={linkCount} visibleCount={visibleCount}
           simStable={simStable} breadcrumb={(hoverNode ?? selectedNode)?.name ?? null} isDark={isDark}
+          lowSpec={lowSpec}
         />
         <SearchBar
           nodes={nodes} cats={cats} catFilter={catFilter}
