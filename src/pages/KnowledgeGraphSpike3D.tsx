@@ -59,17 +59,17 @@ function glowTexture(color: string, isDark: boolean): THREE.CanvasTexture {
 /** 文字标签纹理（描边字，512x128） */
 function labelTexture(name: string, isDark: boolean): THREE.CanvasTexture {
   const cv = document.createElement('canvas');
-  cv.width = 512; cv.height = 128;
+  cv.width = 384; cv.height = 96;
   const x = cv.getContext('2d')!;
   const text = name.length > 14 ? name.slice(0, 13) + '…' : name;
-  x.font = `600 56px "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif`;
+  x.font = `600 42px "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif`;
   x.textAlign = 'center';
   x.textBaseline = 'middle';
-  x.lineWidth = 8;
+  x.lineWidth = 6;
   x.strokeStyle = isDark ? 'rgba(4,6,11,0.85)' : 'rgba(238,242,248,0.9)';
-  x.strokeText(text, 256, 64);
+  x.strokeText(text, 192, 48);
   x.fillStyle = isDark ? '#dbe4f0' : '#334155';
-  x.fillText(text, 256, 64);
+  x.fillText(text, 192, 48);
   const tex = new THREE.CanvasTexture(cv);
   tex.minFilter = THREE.LinearFilter;
   return tex;
@@ -224,7 +224,7 @@ export default function KnowledgeGraphSpike3D() {
           sprite.scale.set(base, base, 1);
           nd.__sp = sprite;
           const label = new THREE.Sprite(new THREE.SpriteMaterial({
-            map: labelTexture(nd.name, isDark), transparent: true, depthWrite: false, opacity: 0.95,
+            transparent: true, depthWrite: false, opacity: 0.95,
           }));
           label.scale.set(11, 2.75, 1);
           label.position.set(0, -(base / 2 + 1.9), 0);
@@ -234,7 +234,7 @@ export default function KnowledgeGraphSpike3D() {
           group.add(sprite, label);
           return group;
         })
-        .warmupTicks(90)
+        .warmupTicks(45)
         .linkColor((l) => {
           const s = l.source as SpikeNode, t = l.target as SpikeNode;
           const { ids, active } = hlRef.current;
@@ -294,6 +294,32 @@ export default function KnowledgeGraphSpike3D() {
       labelCutRef.current = degSortedRef.current[Math.floor(degSortedRef.current.length * (1 - pct / 100))] ?? 0;
 
       graph.graphData({ nodes: ns, links: ls });
+
+      // 标签纹理 idle 分批填充：先出图，文字后台渐进出现
+      {
+        let li = 0;
+        const fillBatch = () => {
+          if (disposed) return;
+          const end = Math.min(li + 60, ns.length);
+          for (; li < end; li++) {
+            const lb = ns[li].__label;
+            if (lb) (lb.material as THREE.SpriteMaterial).map = labelTexture(ns[li].name, isDark);
+          }
+          (lb_needsUpdate(ns, li - 1));
+          if (li < ns.length) scheduleIdle(fillBatch);
+        };
+        const lb_needsUpdate = (arr: SpikeNode[], upto: number) => {
+          for (let i = Math.max(0, upto - 59); i <= upto && i < arr.length; i++) {
+            const lb = arr[i].__label;
+            if (lb) (lb.material as THREE.SpriteMaterial).needsUpdate = true;
+          }
+        };
+        const scheduleIdle = (fn: () => void) => {
+          const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+          if (ric) ric(fn, { timeout: 120 }); else setTimeout(fn, 16);
+        };
+        scheduleIdle(fillBatch);
+      }
 
       // 标签距离门控（Obsidian 拉近出字）
       const labelDist = sphereR * 1.1;
@@ -428,6 +454,26 @@ export default function KnowledgeGraphSpike3D() {
       `}</style>
       <div className="spike3d-root" style={{ position: 'absolute', inset: 0 }}>
         <div key={theme} ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
+
+        {/* 加载遮罩：图初始化期间先给反馈（标签纹理已 idle 懒加载，遮罩一闪而过） */}
+        {graphReady === 0 && !error && (
+          <div style={{
+            position: 'absolute', inset: 0, zIndex: 35, display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center', gap: 14,
+            background: isDark ? '#000000' : '#eef2f8',
+            fontFamily: '"Courier New", ui-monospace, monospace',
+          }}>
+            <div style={{
+              width: 42, height: 42, borderRadius: '50%',
+              border: `2px solid ${isDark ? 'rgba(0,212,255,0.15)' : 'rgba(14,138,168,0.2)'}`,
+              borderTopColor: accent, animation: 'spike3d-spin 0.9s linear infinite',
+            }} />
+            <div style={{ fontSize: 12, letterSpacing: '0.12em', color: accent }}>
+              LOADING GRAPH…
+            </div>
+            <style>{`@keyframes spike3d-spin { to { transform: rotate(360deg); } }`}</style>
+          </div>
+        )}
 
         {/* CRT 扫描线（深色 + 开关） */}
         {isDark && settings.scanlines && (
