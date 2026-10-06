@@ -12,6 +12,7 @@ import PageLoader from '@/components/PageLoader';
 // CommandPalette, ErrorBoundary) stay eager for instant shell render.
 const KnowledgeGraph = lazy(() => import('@/pages/KnowledgeGraph'));
 const KnowledgeGraphSpike3D = lazy(() => import('@/pages/KnowledgeGraphSpike3D'));
+const KnowledgeGraphJelly = lazy(() => import('@/pages/KnowledgeGraphJelly'));
 const KnowledgeBase = lazy(() => import('@/pages/KnowledgeBase'));
 const WorkflowBuilder = lazy(() => import('@/pages/WorkflowBuilder'));
 const BackupPage = lazy(() => import('@/pages/BackupPage'));
@@ -50,6 +51,7 @@ function App() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<KnowledgeGraph />} />
           <Route path="/spike3d" element={<KnowledgeGraphSpike3D />} />
+          <Route path="/jelly" element={<KnowledgeGraphJelly />} />
           <Route path="/kb" element={<KnowledgeBase />} />
           <Route path="/kb/:path" element={<KnowledgeBase />} />
           <Route path="/workflows" element={<WorkflowBuilder />} />
