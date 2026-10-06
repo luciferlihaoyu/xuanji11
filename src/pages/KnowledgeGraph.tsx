@@ -6,6 +6,19 @@ import NodeDetailPanel from '@/components/NodeDetailPanel';
 import BottomInfoBar from '@/components/BottomInfoBar';
 import BgImageUpload from '@/components/BgImageUpload';
 import KnowledgeGraphCanvas, { type KnowledgeGraphCanvasHandle } from '@/components/KnowledgeGraphCanvas';
+import { lazy, Suspense } from 'react';
+const GraphSphere3D = lazy(() => import('@/pages/GraphSphere3D'));
+const GraphWorkbench3D = lazy(() => import('@/pages/GraphWorkbench3D'));
+
+type KgViewMode = '2d' | 'sphere' | 'workbench';
+const KG_VIEW_KEY = 'kg-view-mode';
+function loadViewMode(): KgViewMode {
+  try {
+    const v = localStorage.getItem(KG_VIEW_KEY);
+    if (v === '2d' || v === 'sphere' || v === 'workbench') return v;
+  } catch { /* ignore */ }
+  return 'sphere';
+}
 import { Plus, Link2, X, ExternalLink, Edit3, Trash2 } from 'lucide-react';
 
 /**
@@ -96,6 +109,12 @@ export default function KnowledgeGraph() {
   const [viewMode, setViewMode] = useState<'nodes' | 'edges'>('nodes');
   const [isLoading, setIsLoading] = useState(true);
   const [entranceDone, setEntranceDone] = useState(false);
+  // 图谱类型切换：3D 球体（默认，用户定稿）/ 3D 工作台 / 2D 经典（完整编辑功能）
+  const [kgView, setKgView] = useState<KgViewMode>(loadViewMode);
+  const switchKgView = (m: KgViewMode) => {
+    setKgView(m);
+    try { localStorage.setItem(KG_VIEW_KEY, m); } catch { /* ignore */ }
+  };
 
   // Right-click context menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
@@ -422,8 +441,21 @@ export default function KnowledgeGraph() {
         </div>
       )}
 
+      {/* 3D 视图（球体 / 工作台） */}
+      {kgView !== '2d' && (
+        <div className="absolute inset-0">
+          <Suspense fallback={
+            <div className="absolute inset-0 flex items-center justify-center" style={{ color: '#9fb4d8', fontSize: 13 }}>
+              正在加载 3D 引擎…
+            </div>
+          }>
+            {kgView === 'sphere' ? <GraphSphere3D /> : <GraphWorkbench3D />}
+          </Suspense>
+        </div>
+      )}
+
       {/* Obsidian 风格 Canvas（点击图区空白处即收起侧边栏） */}
-      {!isGraphLoading && (
+      {kgView === '2d' && !isGraphLoading && (
         <div
           className="absolute inset-0"
           onPointerDown={() => {
@@ -449,7 +481,8 @@ export default function KnowledgeGraph() {
         </div>
       )}
 
-      {/* 缩放按钮（移动端友好） */}
+      {/* 缩放按钮（移动端友好）——仅 2D 模式 */}
+      {kgView === '2d' && (
       <div className="absolute right-3 bottom-16 z-10 flex flex-col gap-1.5">
         <button
           onClick={() => canvasRef.current?.zoomBy(1.3)}
@@ -463,6 +496,24 @@ export default function KnowledgeGraph() {
           style={{ backgroundColor: 'rgba(255,255,255,0.85)', borderColor: 'rgba(30,40,60,0.15)', color: '#5a6472' }}
           title="缩小"
         >−</button>
+      </div>
+      )}
+
+      {/* 图谱类型切换器 */}
+      <div className="absolute top-4 left-4 z-20 flex gap-1 rounded-full border px-1 py-1"
+        style={{ backgroundColor: 'rgba(10,13,20,.72)', backdropFilter: 'blur(12px)', borderColor: 'rgba(120,160,220,0.18)' }}>
+        {([['sphere', '3D 球体'], ['workbench', '3D 工作台'], ['2d', '2D 经典']] as [KgViewMode, string][]).map(([m, label]) => (
+          <button
+            key={m}
+            onClick={() => switchKgView(m)}
+            className="px-3 py-1 rounded-full text-xs transition-all"
+            style={kgView === m
+              ? { backgroundColor: 'var(--accent-cyan, #22d3ee)', color: '#06121a', fontWeight: 700 }
+              : { color: '#9fb4d8' }}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* Top badge */}
