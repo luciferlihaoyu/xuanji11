@@ -432,4 +432,30 @@ export const datasourceRouter = createRouter({
         return { success: false, message: "同步失败" };
       }
     }),
+
+  // 内容流（2026-10-01）：数据源页「内容」按钮的后端。按源聚合（跨同步批次）、时间倒序、
+  // 只收 completed —— 用户直接读入库内容，不必去知识库全库搜索。
+  getContentStream: authedQuery
+    .input(z.object({ dataSourceId: z.number().int() }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      return db
+        .select({
+          id: ingestionItems.id,
+          jobId: ingestionItems.jobId,
+          name: ingestionItems.name,
+          sourceUrl: ingestionItems.sourceUrl,
+          documentId: ingestionItems.documentId,
+          createdAt: ingestionItems.createdAt,
+        })
+        .from(ingestionItems)
+        .where(and(
+          // SQLite 的 ->> 取出 JSON 值后与 TEXT 比较恒不等（历史去重 bug 同源），
+          // 必须 CAST AS TEXT 逐字比对 —— 与 sync 去重口径一致，测试钉死
+          sql`CAST(${ingestionItems.metadata}->>'$.dataSourceId' AS TEXT) = ${String(input.dataSourceId)}`,
+          eq(ingestionItems.status, "completed"),
+        ))
+        .orderBy(desc(ingestionItems.createdAt))
+        .limit(200);
+    }),
 });

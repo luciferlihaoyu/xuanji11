@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Cloud, HardDrive, Link2, FolderOpen, RefreshCw, Plus, X, Check, Trash2, Pencil, Upload } from 'lucide-react';
+import { Cloud, HardDrive, Link2, FolderOpen, RefreshCw, Plus, X, Check, Trash2, Pencil, Upload, Newspaper, ExternalLink } from 'lucide-react';
 import { useDataSources } from '@/hooks/useDataSources';
+import { trpc } from '@/providers/trpc';
 
 // 平台配置（显示用）
 const PLATFORM_CONFIG: Record<string, { icon: typeof Cloud; color: string; label: string; hint?: string }> = {
@@ -155,6 +156,7 @@ export default function DataSources() {
   const [testingIds, setTestingIds] = useState<Set<number>>(new Set());
 
   // 批量导入弹层状态
+  const [streamFor, setStreamFor] = useState<{ id: number; name: string } | null>(null);
   const [showBatch, setShowBatch] = useState(false);
   const [batchText, setBatchText] = useState('');
   const [batchRunning, setBatchRunning] = useState(false);
@@ -365,6 +367,9 @@ export default function DataSources() {
                     </div>
                   </div>
                   <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={() => setStreamFor({ id: source.id, name: source.name })} className="p-1.5 rounded hover:bg-white/5" style={{ color: '#FBBF24' }} title="内容（入库文章流）">
+                      <Newspaper className="w-4 h-4" />
+                    </button>
                     <button onClick={() => handleTest(source.id)} disabled={isTesting} className="p-1.5 rounded hover:bg-white/5" style={{ color: '#34D399' }} title="测试连接">
                       {isTesting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                     </button>
@@ -671,6 +676,89 @@ export default function DataSources() {
           </div>
         </div>
       )}
+
+      {/* 内容流抽屉：这个数据源入库了哪些文章，直接读，不必去知识库搜 */}
+      {streamFor && (
+        <ContentStreamDrawer dataSourceId={streamFor.id} name={streamFor.name} onClose={() => setStreamFor(null)} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * 内容流抽屉（2026-10-01）：按源聚合的入库文章列表（跨同步批次、时间倒序）。
+ * 点标题展开正文（kb.getDocument 内联预览，截断 4000 字）；有原文给外链。
+ * 数据来自 datasource.getContentStream —— metadata.dataSourceId 按 CAST TEXT 口径比对。
+ */
+function ContentStreamDrawer({ dataSourceId, name, onClose }: { dataSourceId: number; name: string; onClose: () => void }) {
+  const streamQuery = trpc.datasource.getContentStream.useQuery({ dataSourceId });
+  const [openItemId, setOpenItemId] = useState<number | null>(null);
+  const items = streamQuery.data ?? [];
+  const activeDocId = items.find((it) => it.id === openItemId)?.documentId ?? 0;
+  const docQuery = trpc.kb.getDocument.useQuery({ id: activeDocId }, { enabled: activeDocId > 0 });
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }} onClick={onClose}>
+      <div
+        className="animate-scale-in w-full max-w-xl h-full overflow-y-auto border-l p-4 sm:p-6"
+        style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>内容 · {name}</h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              {streamQuery.isLoading ? '加载中…' : `共 ${items.length} 条（按入库时间倒序，只含同步成功条目）`}
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-white/5">
+            <X className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
+          </button>
+        </div>
+
+        {!streamQuery.isLoading && items.length === 0 && (
+          <div className="py-16 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
+            这个数据源还没有同步过内容 —— 回列表点一次「同步」再来看。
+          </div>
+        )}
+
+        <div className="space-y-2">
+          {items.map((it) => {
+            const expanded = openItemId === it.id;
+            return (
+              <div key={it.id} className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)' }}>
+                <button
+                  onClick={() => setOpenItemId(expanded ? null : it.id)}
+                  className="w-full text-left text-sm font-medium hover:opacity-80"
+                  style={{ color: 'var(--text-primary)' }}
+                >
+                  {expanded ? '▾ ' : '▸ '}{it.name}
+                </button>
+                <div className="flex items-center gap-3 mt-1.5 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                  <span>{new Date(it.createdAt).toLocaleString()}</span>
+                  {it.sourceUrl && (
+                    <a href={it.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline" style={{ color: 'var(--accent-cyan)' }}>
+                      <ExternalLink className="w-3 h-3" />原文
+                    </a>
+                  )}
+                  {it.documentId ? <span>文档 #{it.documentId}</span> : null}
+                </div>
+                {expanded && (
+                  <div className="mt-2 pt-2 border-t text-xs leading-relaxed whitespace-pre-wrap" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
+                    {it.documentId
+                      ? docQuery.isLoading
+                        ? '加载正文…'
+                        : docQuery.data
+                          ? `${String(docQuery.data.content ?? '').slice(0, 4000)}${String(docQuery.data.content ?? '').length > 4000 ? '\n\n…（正文超长已截断，完整内容在知识库）' : ''}`
+                          : '正文加载失败或文档已被删除。'
+                      : '该条目没有关联文档（同步时未入库正文）。'}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }

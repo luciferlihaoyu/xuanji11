@@ -1307,3 +1307,106 @@ describe("sync cross-run dedup on real sqlite (t14 M-2/M-3)", () => {
     });
   });
 });
+
+// ═══ 内容流（2026-10-01）：数据源页「内容」按钮的后端 —— 按源聚合、跨批次、时间倒序 ═══
+// 口径：metadata.dataSourceId 用 CAST AS TEXT 逐字比对（SQLite ->> 的 JSON 值与 TEXT 恒不等，
+// 正是去重 bug 的根因——这里从第一天就按正确口径写，测试钉死）。
+describe("datasourceRouter · getContentStream（按源聚合的文章流）", () => {
+  const DDL = `
+    CREATE TABLE data_sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL, type TEXT NOT NULL, config TEXT,
+      status TEXT NOT NULL DEFAULT 'disconnected',
+      lastSyncAt INTEGER, lastError TEXT, createdBy INTEGER,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE ingestion_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      jobId INTEGER NOT NULL, externalId TEXT, name TEXT NOT NULL, mimeType TEXT, size INTEGER,
+      status TEXT NOT NULL DEFAULT 'pending', error TEXT,
+      sourceUrl TEXT, storagePath TEXT, documentId INTEGER, metadata TEXT,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+    );
+  `;
+
+  type SeedItem = {
+    jobId?: number;
+    name?: string;
+    status?: string;
+    sourceUrl?: string | null;
+    documentId?: number | null;
+    metadata?: Record<string, unknown> | null;
+    createdAt?: number;
+  };
+
+  function streamHarness(dsId: number, items: readonly SeedItem[]) {
+    const raw = new Database(":memory:");
+    raw.exec(DDL);
+    raw
+      .prepare(
+        `INSERT INTO data_sources (id, name, type, config, status, createdAt, updatedAt)
+         VALUES (?, '流测试源', 'rss', '{}', 'connected', 0, 0)`,
+      )
+      .run(dsId);
+    const ins = raw.prepare(
+      `INSERT INTO ingestion_items (jobId, externalId, name, mimeType, size, status, error,
+                                    sourceUrl, storagePath, documentId, metadata, createdAt, updatedAt)
+       VALUES (@jobId, NULL, @name, NULL, NULL, @status, NULL, @sourceUrl, NULL, @documentId, @metadata, @createdAt, @createdAt)`,
+    );
+    items.forEach((it, i) =>
+      ins.run({
+        jobId: it.jobId ?? 1,
+        name: it.name ?? `条目${i}`,
+        status: it.status ?? "completed",
+        sourceUrl: it.sourceUrl ?? null,
+        documentId: it.documentId ?? null,
+        metadata: JSON.stringify(it.metadata ?? { dataSourceId: dsId, platform: "rss" }),
+        createdAt: it.createdAt ?? 1000 + i,
+      }),
+    );
+    vi.mocked(getDb).mockReturnValue(drizzle(raw, { schema: fullSchema }) as never);
+    return datasourceRouter.createCaller(fakeContext());
+  }
+
+  it("只返回该数据源的条目：metadata.dataSourceId 按 CAST TEXT 逐字比对（源1 与 源2 不串）", async () => {
+    const caller = streamHarness(1, [
+      { name: "甲源文章A", metadata: { dataSourceId: 1, platform: "rss" } },
+      { name: "乙源文章B", metadata: { dataSourceId: 2, platform: "rss" } },
+      { name: "甲源文章C", metadata: { dataSourceId: 1, platform: "rss" } },
+    ]);
+    const stream = await caller.getContentStream({ dataSourceId: 1 });
+    expect(stream.map((r) => r.name)).toEqual(["甲源文章C", "甲源文章A"]);
+  });
+
+  it("跨同步批次聚合（不同 jobId 的多轮同步都进来）且按时间倒序", async () => {
+    const caller = streamHarness(7, [
+      { jobId: 1, name: "第一轮旧文", createdAt: 1000 },
+      { jobId: 2, name: "第二轮新文", createdAt: 2000 },
+      { jobId: 3, name: "第三轮最新", createdAt: 3000 },
+    ]);
+    const stream = await caller.getContentStream({ dataSourceId: 7 });
+    expect(stream.map((r) => r.name)).toEqual(["第三轮最新", "第二轮新文", "第一轮旧文"]);
+  });
+
+  it("只收 completed：解析失败的条目不进阅读流", async () => {
+    const caller = streamHarness(3, [
+      { name: "好文章", status: "completed" },
+      { name: "坏文章", status: "failed" },
+    ]);
+    const stream = await caller.getContentStream({ dataSourceId: 3 });
+    expect(stream.map((r) => r.name)).toEqual(["好文章"]);
+  });
+
+  it("返回阅读所需最小字段：标题/原文链接/文档指针/入库时间（timestamp_ms → Date）", async () => {
+    const caller = streamHarness(9, [
+      { name: "带文档的文章", sourceUrl: "https://example.test/a", documentId: 42 },
+    ]);
+    const [row] = await caller.getContentStream({ dataSourceId: 9 });
+    expect(row).toMatchObject({
+      name: "带文档的文章",
+      sourceUrl: "https://example.test/a",
+      documentId: 42,
+    });
+    expect(row!.createdAt).toBeInstanceOf(Date);
+  });
+});
