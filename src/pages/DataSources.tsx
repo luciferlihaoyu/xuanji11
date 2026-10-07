@@ -270,6 +270,9 @@ export default function DataSources() {
   };
 
   const handleTest = async (id: number) => {
+    // 防连点（2026-10-01）：按钮虽已 disabled，但状态更新是异步的，同一帧内连点仍可能进来两次；
+    // 同一源并发两轮同步会在「确保归档文件夹存在」那一刻竞态（可能建出重名子夹）。
+    if (testingIds.has(id)) return;
     setTestingIds((prev) => new Set(prev).add(id));
     try {
       await testConnection({ id });
@@ -285,6 +288,7 @@ export default function DataSources() {
   };
 
   const handleSync = async (id: number) => {
+    if (syncingIds.has(id)) return; // 同上：同一源不许并发同步
     setSyncingIds((prev) => new Set(prev).add(id));
     try {
       await sync({ id });
