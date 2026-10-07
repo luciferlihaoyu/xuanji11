@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Cloud, HardDrive, Link2, FolderOpen, RefreshCw, Plus, X, Check, Trash2, Pencil, Upload, Newspaper, ExternalLink } from 'lucide-react';
 import { useDataSources } from '@/hooks/useDataSources';
 import { trpc } from '@/providers/trpc';
+import { runSequential, toggleAllIds, toggleId } from '@/lib/batch';
 
 // 平台配置（显示用）
 const PLATFORM_CONFIG: Record<string, { icon: typeof Cloud; color: string; label: string; hint?: string }> = {
@@ -146,6 +147,7 @@ export default function DataSources() {
     delete: deleteDs,
     testConnection,
     sync,
+    organizeExisting,
   } = useDataSources();
 
   const [showModal, setShowModal] = useState(false);
@@ -157,6 +159,12 @@ export default function DataSources() {
 
   // 批量导入弹层状态
   const [streamFor, setStreamFor] = useState<{ id: number; name: string } | null>(null);
+  // 批量勾选与批量操作（2026-10-01 用户诉求：勾选某几个源 → 一键连接/一键同步）
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [opsRunning, setOpsRunning] = useState(false);
+  const [batchNote, setBatchNote] = useState('');
+  const [organizeNote, setOrganizeNote] = useState('');
+  const [organizing, setOrganizing] = useState(false);
   const [showBatch, setShowBatch] = useState(false);
   const [batchText, setBatchText] = useState('');
   const [batchRunning, setBatchRunning] = useState(false);
@@ -291,6 +299,80 @@ export default function DataSources() {
     }
   };
 
+  /** 批量测试连接：串行（不并发打爆上游），单条失败不拦其余，逐条进度。 */
+  const handleBatchTest = async () => {
+    const ids = dataSources.filter((s) => selected.has(s.id)).map((s) => s.id);
+    if (ids.length === 0 || opsRunning) return;
+    setOpsRunning(true);
+    setBatchNote(`测试连接中 0/${ids.length}`);
+    try {
+      const { done, failed } = await runSequential(
+        ids,
+        async (id) => {
+          setTestingIds((prev) => new Set(prev).add(id));
+          try {
+            await testConnection({ id });
+          } finally {
+            setTestingIds((prev) => {
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
+          }
+        },
+        (n, total) => setBatchNote(`测试连接中 ${n}/${total}`),
+      );
+      setBatchNote(failed.length > 0 ? `测试完成：成功 ${done}，失败 ${failed.length}` : `测试完成：${done} 个全部有响应`);
+      setSelected(new Set());
+    } finally {
+      setOpsRunning(false);
+    }
+  };
+
+  /** 批量同步：同样串行 + 失败隔离 + 逐条进度。 */
+  const handleBatchSync = async () => {
+    const ids = dataSources.filter((s) => selected.has(s.id)).map((s) => s.id);
+    if (ids.length === 0 || opsRunning) return;
+    setOpsRunning(true);
+    setBatchNote(`同步中 0/${ids.length}`);
+    try {
+      const { done, failed } = await runSequential(
+        ids,
+        async (id) => {
+          setSyncingIds((prev) => new Set(prev).add(id));
+          try {
+            await sync({ id });
+          } finally {
+            setSyncingIds((prev) => {
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
+          }
+        },
+        (n, total) => setBatchNote(`同步中 ${n}/${total}`),
+      );
+      setBatchNote(failed.length > 0 ? `同步完成：成功 ${done}，失败 ${failed.length}` : `同步完成：${done} 个源已同步`);
+      setSelected(new Set());
+    } finally {
+      setOpsRunning(false);
+    }
+  };
+
+  /** 历史内容归位：把归档上线前悬空的旧文档挪进各自的源文件夹（只动悬空的，幂等）。 */
+  const handleOrganize = async () => {
+    setOrganizing(true);
+    setOrganizeNote('整理中…');
+    try {
+      const r = await organizeExisting();
+      setOrganizeNote(`✓ 已归位 ${r.moved} 份文档（涉及 ${r.folders} 个源文件夹）`);
+    } catch (err) {
+      setOrganizeNote(`整理失败：${(err instanceof Error ? err.message : String(err)).slice(0, 120)}`);
+    } finally {
+      setOrganizing(false);
+    }
+  };
+
   const connectedCount = dataSources.filter((s) => s.status === 'connected').length;
 
   if (isLoading) {
@@ -329,6 +411,41 @@ export default function DataSources() {
         </div>
       </div>
 
+      {/* 批量操作条（2026-10-01）：勾选若干源 → 一键测试连接 / 一键同步 */}
+      {dataSources.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 mb-4 text-xs">
+          <label className="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={dataSources.length > 0 && dataSources.every((s) => selected.has(s.id))}
+              onChange={() => setSelected(toggleAllIds(selected, dataSources.map((s) => s.id)))}
+            />
+            <span style={{ color: 'var(--text-secondary)' }}>全选</span>
+          </label>
+          {selected.size > 0 && (
+            <>
+              <span style={{ color: 'var(--text-muted)' }}>已选 {selected.size} 个</span>
+              <button onClick={handleBatchTest} disabled={opsRunning} className="btn-ghost py-1.5 px-3">
+                批量测试连接
+              </button>
+              <button onClick={handleBatchSync} disabled={opsRunning} className="btn-ghost py-1.5 px-3">
+                批量同步
+              </button>
+              <button onClick={() => setSelected(new Set())} disabled={opsRunning} className="btn-ghost py-1.5 px-3">
+                取消选择
+              </button>
+            </>
+          )}
+          {batchNote && <span style={{ color: 'var(--accent-cyan)' }}>{batchNote}</span>}
+          <span className="ml-auto flex items-center gap-2">
+            <button onClick={handleOrganize} disabled={organizing} className="btn-ghost py-1.5 px-3" title="把归档功能上线前入库的旧文档挪进各自的源文件夹（只动尚未归档的）">
+              {organizing ? '整理中…' : '整理历史内容'}
+            </button>
+            {organizeNote && <span style={{ color: 'var(--text-muted)' }}>{organizeNote}</span>}
+          </span>
+        </div>
+      )}
+
       {/* Source Cards */}
       {dataSources.length === 0 ? (
         <div className="text-center py-16 rounded-xl border border-dashed" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -351,6 +468,12 @@ export default function DataSources() {
               <div key={source.id} className="card-base group">
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(source.id)}
+                      onChange={() => setSelected(toggleId(selected, source.id))}
+                      title="勾选后可批量测试连接 / 批量同步"
+                    />
                     <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${config.color}20` }}>
                       <Icon className="w-5 h-5" style={{ color: config.color }} />
                     </div>

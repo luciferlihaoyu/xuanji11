@@ -19,6 +19,9 @@ export function useDataSources() {
   const syncMutation = trpc.datasource.sync.useMutation({
     onSuccess: () => utils.datasource.list.invalidate(),
   });
+  const organizeMutation = trpc.datasource.organizeExisting.useMutation({
+    onSuccess: () => utils.datasource.list.invalidate(),
+  });
 
   return {
     dataSources: listQuery.data ?? [],
@@ -28,6 +31,8 @@ export function useDataSources() {
     delete: deleteMutation.mutateAsync,
     testConnection: testConnectionMutation.mutateAsync,
     sync: syncMutation.mutateAsync,
+    organizeExisting: organizeMutation.mutateAsync,
+    isOrganizing: organizeMutation.isPending,
     isTesting: testConnectionMutation.isPending,
     isSyncing: syncMutation.isPending,
   };

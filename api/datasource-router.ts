@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { eq, desc, and, sql } from "drizzle-orm";
+import { eq, desc, and, sql, isNull, isNotNull, inArray } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { dataSources, ingestionJobs, ingestionItems } from "@db/schema";
+import { dataSources, ingestionJobs, ingestionItems, kbFolders, kbDocuments } from "@db/schema";
 import { clean } from "./lib/clean";
 import { env } from "./lib/env";
 import { getConnector, type CloudConnector } from "./connectors";
@@ -48,6 +48,55 @@ function resolvePlatform(type: DataSourceType, config: Record<string, unknown>):
 type ConnectorResolution =
   | { ok: true; platform: string; connector: CloudConnector }
   | { ok: false; reason: string };
+
+/** 数据源内容在知识库里的归档根夹（所有源夹都挂在它下面）。 */
+export const DATASOURCE_FOLDER_ROOT = "数据源";
+
+/**
+ * 确保「数据源/<源名>」文件夹存在，返回子夹 id（2026-10-01 用户诉求）。
+ * 幂等：按 (parentId, name) 复用已有夹 —— 每轮同步调用都不会重复建夹。
+ * ⚠️ 诚实边界：rename 数据源不会重命名已建好的夹（旧夹保留），本轮不做同步改名。
+ */
+async function ensureDatasourceFolder(
+  db: ReturnType<typeof getDb>,
+  name: string,
+  createdBy: number | null,
+): Promise<number> {
+  const [root] = await db
+    .select()
+    .from(kbFolders)
+    .where(and(isNull(kbFolders.parentId), eq(kbFolders.name, DATASOURCE_FOLDER_ROOT)))
+    .limit(1);
+  const rootId = root
+    ? root.id
+    : Number(
+        (
+          await db.insert(kbFolders).values({
+            name: DATASOURCE_FOLDER_ROOT,
+            parentId: null,
+            icon: "database",
+            sortOrder: 0,
+            createdBy,
+          })
+        ).lastInsertRowid,
+      );
+
+  const [existing] = await db
+    .select()
+    .from(kbFolders)
+    .where(and(eq(kbFolders.parentId, rootId), eq(kbFolders.name, name)))
+    .limit(1);
+  if (existing) return existing.id;
+
+  const created = await db.insert(kbFolders).values({
+    name,
+    parentId: rootId,
+    icon: "folder",
+    sortOrder: 0,
+    createdBy,
+  });
+  return Number(created.lastInsertRowid);
+}
 
 function resolveConnectorFor(type: DataSourceType, config: Record<string, unknown>): ConnectorResolution {
   const platform = resolvePlatform(type, config);
@@ -263,6 +312,16 @@ export const datasourceRouter = createRouter({
           createdBy: ctx.user?.id ?? null,
         })).lastInsertRowid;
 
+        // 归档文件夹懒创建（2026-10-01）：只有真的要落库时才建「数据源/<源名>」，
+        // 空源/全跳过的源不留空夹；同一轮内复用（memo）。
+        let archiveFolderId: number | null = null;
+        const archiveFolder = async (): Promise<number> => {
+          if (archiveFolderId === null) {
+            archiveFolderId = await ensureDatasourceFolder(db, ds.name, ctx.user?.id ?? null);
+          }
+          return archiveFolderId;
+        };
+
         // 计数桶互斥（见 syncSummaryMessage 口径说明）：processed 只代表"真的入库成功了"，
         // 跳过与非 file 条目各归各的桶，绝不再顺手 processed++。
         let processed = 0;
@@ -353,6 +412,7 @@ export const datasourceRouter = createRouter({
                 // ingestionItems.storagePath 是悬空路径、当前无消费方——以此标记区分"内联直发"与真实落盘文件。
                 metadata: { dataSourceId: ds.id, platform, remoteModifiedAt: newModifiedAt, inlineContent: true },
                 createdBy: ctx.user?.id ?? null,
+                folderId: await archiveFolder(),
               });
             } else {
               const downloadUrl = file.downloadUrl ?? (await connector.getDownloadUrl(config, file.id));
@@ -370,6 +430,7 @@ export const datasourceRouter = createRouter({
                 downloadUrl: downloadUrl ?? undefined,
                 metadata: { dataSourceId: ds.id, platform, remoteModifiedAt: newModifiedAt },
                 createdBy: ctx.user?.id ?? null,
+                folderId: await archiveFolder(),
               });
             }
             processed++;
@@ -435,6 +496,44 @@ export const datasourceRouter = createRouter({
 
   // 内容流（2026-10-01）：数据源页「内容」按钮的后端。按源聚合（跨同步批次）、时间倒序、
   // 只收 completed —— 用户直接读入库内容，不必去知识库全库搜索。
+  /**
+   * 历史内容归位（2026-10-01）：把按源归档上线**之前**入库、如今仍悬空（folderId IS NULL）
+   * 的文档，挪进各自的「数据源/<源名>」文件夹。幂等、可反复点。
+   * 取舍：**只动悬空文档** —— 用户手动归档过的位置一律不碰。
+   */
+  organizeExisting: adminQuery.mutation(async ({ ctx }) => {
+    const db = getDb();
+    const sources = await db
+      .select({ id: dataSources.id, name: dataSources.name })
+      .from(dataSources);
+
+    let moved = 0;
+    let folders = 0;
+    for (const src of sources) {
+      const rows = await db
+        .select({ documentId: ingestionItems.documentId })
+        .from(ingestionItems)
+        .where(and(
+          isNotNull(ingestionItems.documentId),
+          // 与 sync 去重、内容流同口径：CAST AS TEXT 逐字比对 dataSourceId
+          sql`CAST(${ingestionItems.metadata}->>'$.dataSourceId' AS TEXT) = ${String(src.id)}`,
+        ));
+      const docIds = rows
+        .map((r) => r.documentId)
+        .filter((v): v is number => typeof v === "number" && v > 0);
+      if (docIds.length === 0) continue;
+
+      const folderId = await ensureDatasourceFolder(db, src.name, ctx.user?.id ?? null);
+      folders += 1;
+      const updated = await db
+        .update(kbDocuments)
+        .set({ folderId })
+        .where(and(inArray(kbDocuments.id, docIds), isNull(kbDocuments.folderId)));
+      moved += Number(updated.changes ?? 0);
+    }
+    return { moved, folders };
+  }),
+
   getContentStream: authedQuery
     .input(z.object({ dataSourceId: z.number().int() }))
     .query(async ({ input }) => {

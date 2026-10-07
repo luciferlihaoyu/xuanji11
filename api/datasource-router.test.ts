@@ -128,6 +128,10 @@ function createFakeDb(
                 orderBy: vi.fn(() => ({
                   limit: vi.fn(() => Promise.resolve(existingQueue[existingLookup++] ?? [])),
                 })),
+                // kb_folders 的归档查询走的是 `.where(...).limit(1)`（无 orderBy）——
+                // 这一档返回"空夹"，即"还没有建过夹"（本文件的 fake-db 用例不关心夹的落库，
+                // 建夹行为由文件末尾的真库 harness 专门钉住）。
+                limit: vi.fn(() => Promise.resolve([])),
               },
         ),
         orderBy: vi.fn(() => Promise.resolve(table === dataSources ? readRows() : [])),
@@ -1015,6 +1019,13 @@ describe("sync cross-run dedup on real sqlite (t14 M-2/M-3)", () => {
       sourceUrl TEXT, storagePath TEXT, documentId INTEGER, metadata TEXT,
       createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
     );
+    -- 归档文件夹（2026-10-01 按源归档）：sync 会 ensure「数据源/<源名>」
+    CREATE TABLE kb_folders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL, parentId INTEGER,
+      icon TEXT DEFAULT 'folder', sortOrder INTEGER DEFAULT 0, createdBy INTEGER,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+    );
   `;
 
   type SeedDs = { id: number; name: string; type: string; config: Record<string, unknown>; status: string };
@@ -1408,5 +1419,307 @@ describe("datasourceRouter · getContentStream（按源聚合的文章流）", (
       documentId: 42,
     });
     expect(row!.createdAt).toBeInstanceOf(Date);
+  });
+});
+
+// ═══ 按源归档（2026-10-01）：同步进知识库的文档落进「数据源/<源名>」文件夹 ═══
+// 用户诉求：「根据对应的数据源新建一个文件夹…所有的数据源文件夹都在一个总的数据源文件夹里」。
+describe("datasourceRouter · sync 按源归档到知识库文件夹", () => {
+  const DDL = `
+    CREATE TABLE data_sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL, type TEXT NOT NULL, config TEXT,
+      status TEXT NOT NULL DEFAULT 'disconnected',
+      lastSyncAt INTEGER, lastError TEXT, createdBy INTEGER,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE ingestion_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sourceType TEXT NOT NULL, sourceId TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      totalItems INTEGER DEFAULT 0, processedItems INTEGER DEFAULT 0, failedItems INTEGER DEFAULT 0,
+      error TEXT, retryCount INTEGER DEFAULT 0, metadata TEXT, createdBy INTEGER,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE ingestion_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      jobId INTEGER NOT NULL, externalId TEXT, name TEXT NOT NULL, mimeType TEXT, size INTEGER,
+      status TEXT NOT NULL DEFAULT 'pending', error TEXT,
+      sourceUrl TEXT, storagePath TEXT, documentId INTEGER, metadata TEXT,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE kb_folders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL, parentId INTEGER,
+      icon TEXT DEFAULT 'folder', sortOrder INTEGER DEFAULT 0, createdBy INTEGER,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+    );
+  `;
+
+  type SeedFolderDs = { id: number; name: string };
+
+  function folderHarness(sources: readonly SeedFolderDs[], files: () => CloudFile[]) {
+    const raw = new Database(":memory:");
+    raw.exec(DDL);
+    const insertDs = raw.prepare(
+      `INSERT INTO data_sources (id, name, type, config, status, createdAt, updatedAt)
+       VALUES (@id, @name, 'rss', '{"platform":"rss"}', 'disconnected', 0, 0)`,
+    );
+    for (const s of sources) insertDs.run({ id: s.id, name: s.name });
+
+    let clock = 1000;
+    // 记录每轮 ingestFile 拿到的 folderId（"文档归档到哪个夹"的观测点）
+    const folderIds: Array<number | null | undefined> = [];
+    vi.mocked(ingestFile).mockImplementation(async (opts) => {
+      folderIds.push(opts.folderId);
+      const itemId = folderIds.length;
+      raw
+        .prepare(
+          `INSERT INTO ingestion_items (jobId, externalId, name, mimeType, size, status, error,
+                                        sourceUrl, storagePath, documentId, metadata, createdAt, updatedAt)
+           VALUES (1, @externalId, @name, 'text/markdown', 10, 'completed', NULL,
+                   @sourceUrl, NULL, NULL, @metadata, @ts, @ts)`,
+        )
+        .run({
+          externalId: opts.externalId ?? null,
+          name: opts.fileName,
+          sourceUrl: opts.sourceUrl ?? null,
+          metadata: JSON.stringify({ ...(opts.metadata ?? {}), uploadedFileId: null }),
+          ts: (clock += 1),
+        });
+      return { itemId };
+    });
+
+    vi.mocked(getDb).mockReturnValue(drizzle(raw, { schema: fullSchema }) as never);
+    vi.mocked(getConnector).mockReturnValue(
+      cloudConnector({
+        name: "rss",
+        listFiles: vi.fn().mockImplementation(async () => files()),
+        getContent: vi.fn().mockResolvedValue({ fileName: "e.md", mimeType: "text/markdown", content: "# body" }),
+      }),
+    );
+
+    return {
+      caller: datasourceRouter.createCaller(fakeContext()),
+      raw,
+      folderIds,
+      folders: () =>
+        raw.prepare("SELECT id, name, parentId FROM kb_folders ORDER BY id").all() as Array<{
+          id: number;
+          name: string;
+          parentId: number | null;
+        }>,
+    };
+  }
+
+  /** 每轮调用给出"更新一点"的条目时间，使第二轮真的会重新入库（幂等性才被测到）。 */
+  function changingFiles(): () => CloudFile[] {
+    let round = 0;
+    return () => {
+      round += 1;
+      return [
+        {
+          id: "entry-1",
+          name: "Entry One",
+          type: "file",
+          mimeType: "text/markdown",
+          size: 10,
+          downloadUrl: "https://feed.example.test/1",
+          modifiedAt: new Date(Date.UTC(2026, 0, round)),
+        },
+      ];
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fs.rmSync(env.uploadDir, { recursive: true, force: true });
+  });
+
+  it("首次同步：建「数据源」总夹 + 以源名命名的子夹，并把子夹 id 交给 ingestFile", async () => {
+    const h = folderHarness([{ id: 1, name: "量子位" }], changingFiles());
+
+    await h.caller.sync({ id: 1 });
+
+    const folders = h.folders();
+    const root = folders.find((f) => f.name === "数据源");
+    const child = folders.find((f) => f.name === "量子位");
+    expect(root).toBeDefined();
+    expect(root!.parentId).toBeNull();
+    expect(child).toBeDefined();
+    expect(child!.parentId).toBe(root!.id);
+    expect(h.folderIds).toEqual([child!.id]);
+  });
+
+  it("幂等：第二轮同步不重复建夹，且仍指向同一个子夹", async () => {
+    const h = folderHarness([{ id: 1, name: "量子位" }], changingFiles());
+
+    await h.caller.sync({ id: 1 });
+    await h.caller.sync({ id: 1 });
+
+    expect(h.folders()).toHaveLength(2); // 「数据源」+「量子位」，不重复
+    const childId = h.folders().find((f) => f.name === "量子位")!.id;
+    expect(h.folderIds).toEqual([childId, childId]);
+  });
+
+  it("多个源共用一个总夹，各有自己的子夹", async () => {
+    const h = folderHarness(
+      [
+        { id: 1, name: "量子位" },
+        { id: 2, name: "Solidot" },
+      ],
+      changingFiles(),
+    );
+
+    await h.caller.sync({ id: 1 });
+    const firstChildId = h.folderIds[0];
+    await h.caller.sync({ id: 2 });
+
+    const folders = h.folders();
+    const roots = folders.filter((f) => f.name === "数据源");
+    const children = folders.filter((f) => f.parentId === roots[0]!.id);
+    expect(roots).toHaveLength(1); // 总夹只有一个
+    expect(children.map((c) => c.name).sort()).toEqual(["Solidot", "量子位"]);
+    expect(h.folderIds[1]).not.toBe(firstChildId); // 两个源各进各的夹
+  });
+
+  it("空源不留空夹：没有内容入库就不建文件夹（懒创建）", async () => {
+    const h = folderHarness([{ id: 1, name: "空源" }], () => []);
+
+    await h.caller.sync({ id: 1 });
+
+    expect(h.folders()).toEqual([]);
+  });
+});
+
+// ═══ 历史内容归位（2026-10-01）：一键把早先悬空的文档挪进「数据源/<源名>」 ═══
+// 取舍：**只归位尚未归档的文档**（folderId IS NULL），用户手动放好的位置不动。
+describe("datasourceRouter · organizeExisting 历史内容归位", () => {
+  const DDL = `
+    CREATE TABLE data_sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL, type TEXT NOT NULL, config TEXT,
+      status TEXT NOT NULL DEFAULT 'disconnected',
+      lastSyncAt INTEGER, lastError TEXT, createdBy INTEGER,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE ingestion_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      jobId INTEGER NOT NULL, externalId TEXT, name TEXT NOT NULL, mimeType TEXT, size INTEGER,
+      status TEXT NOT NULL DEFAULT 'pending', error TEXT,
+      sourceUrl TEXT, storagePath TEXT, documentId INTEGER, metadata TEXT,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE kb_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      folderId INTEGER, title TEXT NOT NULL, content TEXT,
+      format TEXT NOT NULL DEFAULT 'markdown', tags TEXT, metadata TEXT, createdBy INTEGER,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE kb_folders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL, parentId INTEGER,
+      icon TEXT DEFAULT 'folder', sortOrder INTEGER DEFAULT 0, createdBy INTEGER,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+    );
+  `;
+
+  type HistoricalItem = { dataSourceId: number; documentId: number };
+
+  function organizeHarness(dsName: string, items: readonly HistoricalItem[], manualFolderId?: number) {
+    const raw = new Database(":memory:");
+    raw.exec(DDL);
+    raw
+      .prepare(
+        `INSERT INTO data_sources (id, name, type, config, status, createdAt, updatedAt)
+         VALUES (1, ?, 'rss', '{"platform":"rss"}', 'connected', 0, 0)`,
+      )
+      .run(dsName);
+
+    let clock = 1000;
+    const insItem = raw.prepare(
+      `INSERT INTO ingestion_items (jobId, externalId, name, mimeType, size, status, error,
+                                    sourceUrl, storagePath, documentId, metadata, createdAt, updatedAt)
+       VALUES (1, @externalId, @name, 'text/markdown', 10, 'completed', NULL,
+               'https://feed.example.test/@n', NULL, @documentId, @metadata, @ts, @ts)`,
+    );
+    const insDoc = raw.prepare(
+      `INSERT INTO kb_documents (id, folderId, title, content, format, tags, metadata, createdBy, createdAt, updatedAt)
+       VALUES (@id, @folderId, @title, '正文', 'markdown', '[]', '{}', NULL, 0, 0)`,
+    );
+    for (const it of items) {
+      insItem.run({
+        externalId: `hist-${it.documentId}`,
+        name: `历史条目 ${it.documentId}`,
+        documentId: it.documentId,
+        metadata: JSON.stringify({ dataSourceId: it.dataSourceId, platform: "rss" }),
+        ts: (clock += 1),
+      });
+      insDoc.run({ id: it.documentId, folderId: manualFolderId ?? null, title: `历史文档 ${it.documentId}` });
+    }
+
+    vi.mocked(getDb).mockReturnValue(drizzle(raw, { schema: fullSchema }) as never);
+    return {
+      caller: datasourceRouter.createCaller(fakeContext()),
+      raw,
+      docFolder: (id: number) =>
+        (raw.prepare("SELECT folderId FROM kb_documents WHERE id = ?").get(id) as { folderId: number | null }).folderId,
+      folders: () => raw.prepare("SELECT id, name, parentId FROM kb_folders ORDER BY id").all() as Array<{
+        id: number;
+        name: string;
+        parentId: number | null;
+      }>,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("把历史悬空文档归位到「数据源/<源名>」，已手动归档的文档不动", async () => {
+    // 文档 11 悬空（folderId = null）→ 应归位；文档 12 已手动放进夹 99 → 不许动
+    const h = organizeHarness("量子位", [{ dataSourceId: 1, documentId: 11 }], undefined);
+    h.raw
+      .prepare(
+        `INSERT INTO ingestion_items (jobId, externalId, name, mimeType, size, status, error,
+                                      sourceUrl, storagePath, documentId, metadata, createdAt, updatedAt)
+         VALUES (1, 'hist-12', '历史条目 12', 'text/markdown', 10, 'completed', NULL,
+                 'https://feed.example.test/12', NULL, 12, '{"dataSourceId":1,"platform":"rss"}', 2000, 2000)`,
+      )
+      .run();
+    h.raw
+      .prepare(
+        `INSERT INTO kb_documents (id, folderId, title, content, format, tags, metadata, createdBy, createdAt, updatedAt)
+         VALUES (12, 99, '历史文档 12', '正文', 'markdown', '[]', '{}', NULL, 0, 0)`,
+      )
+      .run();
+
+    const result = await h.caller.organizeExisting();
+
+    const root = h.folders().find((f) => f.name === "数据源")!;
+    const child = h.folders().find((f) => f.name === "量子位")!;
+    expect(child.parentId).toBe(root.id);
+    expect(h.docFolder(11)).toBe(child.id); // 悬空的归位了
+    expect(h.docFolder(12)).toBe(99); // 手动归档的不动
+    expect(result).toMatchObject({ moved: 1 });
+  });
+
+  it("可重复点击：第二轮不再建夹、也不再挪动（幂等）", async () => {
+    const h = organizeHarness("量子位", [{ dataSourceId: 1, documentId: 11 }]);
+
+    await h.caller.organizeExisting();
+    const second = await h.caller.organizeExisting();
+
+    expect(h.folders()).toHaveLength(2);
+    expect(second).toMatchObject({ moved: 0 });
+  });
+
+  it("没有任何历史内容时：不建夹、不报错", async () => {
+    const h = organizeHarness("空源", []);
+
+    const result = await h.caller.organizeExisting();
+
+    expect(h.folders()).toEqual([]);
+    expect(result).toMatchObject({ moved: 0 });
   });
 });

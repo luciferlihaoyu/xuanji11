@@ -33,6 +33,9 @@ export interface IngestFileOptions {
   downloadUrl?: string;
   metadata?: Record<string, unknown>;
   createdBy?: number | null;
+  /** 归档文件夹：调用方指定则文档落进该知识库文件夹（数据源同步按源归档用）。
+   *  不传 = null（悬空文档，既有调用方行为不变）。 */
+  folderId?: number | null;
 }
 
 const SUPPORTED_TEXT_MIMES = new Set([
@@ -217,7 +220,9 @@ export async function ingestFile(options: IngestFileOptions): Promise<{ itemId: 
   await db.update(ingestionItems).set({ status: "parsing" }).where(eq(ingestionItems.id, itemId));
 
   const docValues: InsertKbDocument = {
-    folderId: null,
+    // 归档文件夹由调用方决定（2026-10-01）：数据源同步会传"数据源/源名"子夹，
+    // 其余调用方不传 → null（悬空），行为与此前一致。
+    folderId: options.folderId ?? null,
     title: path.basename(fileName, ext),
     content: text,
     format: mimeTypeToFormat(mimeType),
