@@ -1,10 +1,57 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthInfo } from "./auth";
-import { hasScope, scopesFromPermissions } from "./auth";
+import { hasScope, scopesFromPermissions, sessionAuth } from "./auth";
+import type { User } from "@db/schema";
 
 vi.mock("../queries/connection", () => ({
   getDb: vi.fn(),
 }));
+
+function makeUser(role: "user" | "admin"): User {
+  return {
+    id: 1,
+    unionId: "u-test",
+    name: "tester",
+    email: null,
+    avatar: null,
+    role,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    lastSignInAt: new Date(),
+  };
+}
+
+describe("sessionAuth（t4：按 role 裁剪 scope）", () => {
+  it("admin 会话持有全部管理 scope", () => {
+    const auth = sessionAuth(makeUser("admin"));
+
+    expect(auth.type).toBe("session");
+    expect(auth.scopes).toContain("knowledge:write");
+    expect(auth.scopes).toContain("knowledge:delete");
+    expect(auth.scopes).toContain("system:manage");
+    expect(auth.scopes).toContain("workflows:execute");
+  });
+
+  it("非 admin 会话（本地 viewer / OAuth 普通用户）只拿只读 scope", () => {
+    const auth = sessionAuth(makeUser("user"));
+
+    expect(auth.type).toBe("session");
+    expect(auth.scopes).toContain("knowledge:read");
+    expect(auth.scopes).toContain("documents:read");
+    expect(auth.scopes).toContain("workflows:read");
+    expect(auth.scopes).toContain("agents:read");
+    expect(auth.scopes).toContain("backups:read");
+    expect(auth.scopes).toContain("zvec:read");
+    // 任何写/删/管理 scope 都不得出现
+    expect(auth.scopes).not.toContain("knowledge:write");
+    expect(auth.scopes).not.toContain("documents:delete");
+    expect(auth.scopes).not.toContain("workflows:execute");
+    expect(auth.scopes).not.toContain("backups:write");
+    expect(auth.scopes).not.toContain("system:manage");
+    expect(auth.scopes).not.toContain("zvec:write");
+    expect(hasScope(auth, "knowledge:write")).toBe(false);
+  });
+});
 
 describe("API key scope helpers", () => {
   it("maps agent permissions to enforced scopes", () => {

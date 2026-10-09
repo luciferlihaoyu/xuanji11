@@ -105,6 +105,10 @@ app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 // Kimi OAuth callback（可选）
 if (env.appId && env.appSecret) {
   const { createOAuthCallbackHandler } = await import("./kimi/auth");
+  // TODO(t4/H4)：本仓库当前**没有 OAuth 发起端点**（全库无构造 authorize URL 之处），
+  // 故 callback 的 state 校验暂为防御性 no-op。若将来补发起侧，必须调用
+  // api/lib/oauth-state.ts 的 issueOAuthState() 生成 state 并随 authorize 请求下发，
+  // 否则 callback 侧的 consumeOAuthState() 会拒绝一切回调（state 无签发方）。
   app.get(Paths.oauthCallback, createOAuthCallbackHandler());
 }
 
@@ -147,6 +151,8 @@ app.use("/api/*", csrfMiddleware);
 app.use("/api/*", authMiddleware);
 
 // MCP endpoint for AI agent access
+// 默认凭证为 Bearer API Key；cookie 会话路径仅在 MCP_ALLOW_SESSION=1 时启用
+//（原因与代价见 .env.example 的「MCP 服务」段：本路径是 CSRF 全豁免路径）。
 app.post("/api/mcp", async (c) => {
   const body = await c.req.json();
   const result = await mcp.handleMcpRequest(body, c.req.raw.headers);

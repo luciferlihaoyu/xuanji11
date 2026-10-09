@@ -51,6 +51,13 @@ import { createPool } from "mysql2/promise";
 
 const mockedCreatePool = vi.mocked(createPool);
 const tmpRoot = path.join(os.tmpdir(), `xuanji-backup-router-test-${process.pid}`);
+const srcDir = path.join(tmpRoot, "src");
+
+/** 供 create 用例使用的真实源目录（sourcePath 不再允许 "bundle" 等保留别名） */
+function ensureSrcDir() {
+  fs.mkdirSync(path.join(srcDir, "sub"), { recursive: true });
+  fs.writeFileSync(path.join(srcDir, "sub", "one.txt"), "one");
+}
 
 function fakeUser(): User {
   return {
@@ -215,6 +222,7 @@ function fakeDbPool() {
 describe("backup router target registry", () => {
   beforeEach(() => {
     fs.mkdirSync(tmpRoot, { recursive: true });
+    ensureSrcDir();
     vi.mocked(authenticateApiKey).mockResolvedValue({ user: fakeUser(), auth: adminContext().auth });
     vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
     vi.mocked(getDb).mockReturnValue(createFakeDb() as never);
@@ -237,11 +245,22 @@ describe("backup router target registry", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
+  it("rejects reserved alias sourcePath values (legacy bundle dead link)", async () => {
+    for (const reserved of ["bundle", "database", "knowledge"]) {
+      await expect(
+        caller().create({ target: "local", sourcePath: reserved, config: {} })
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
+    await expect(
+      caller().create({ target: "local", sourcePath: "bundle", config: {} })
+    ).rejects.toThrow(/reserved aliases/);
+  });
+
   it("rejects creating an alist target when BACKUP_ENCRYPTION_KEY is empty", async () => {
     await expect(
       caller().create({
         target: "alist",
-        sourcePath: "bundle",
+        sourcePath: srcDir,
         config: { url: "https://alist.example.com/dav", username: "user", password: "pw" },
       })
     ).rejects.toThrow(/BACKUP_ENCRYPTION_KEY/);
@@ -251,13 +270,13 @@ describe("backup router target registry", () => {
     env.backupEncryptionKey = "test-encryption-key";
     const repo = fakeRepo();
     registerBackupRepository("alist", repo);
-    const jobRow = sampleBackupJob({ target: "alist", config: { url: "https://alist.example.com/dav", username: "user", password: "pw" } });
+    const jobRow = sampleBackupJob({ target: "alist", sourcePath: srcDir, config: { url: "https://alist.example.com/dav", username: "user", password: "pw" } });
     const fakeDb = createFakeDb({ backupJobRows: [jobRow], insertId: 1 });
     vi.mocked(getDb).mockReturnValue(fakeDb as never);
 
     const result = (await caller().create({
       target: "alist",
-      sourcePath: "bundle",
+      sourcePath: srcDir,
       config: { url: "https://alist.example.com/dav", username: "user", password: "pw" },
     })) as Record<string, unknown>;
 
@@ -320,7 +339,7 @@ describe("定时计划的 nextRunAt 维护", () => {
 
     await caller().create({
       target: "alist",
-      sourcePath: "bundle",
+      sourcePath: srcDir,
       config: { url: "https://alist.example.com/dav", username: "user", password: "pw" },
       cron: "0 2 * * *",
       enabled: true,
@@ -341,7 +360,7 @@ describe("定时计划的 nextRunAt 维护", () => {
 
     await caller().create({
       target: "alist",
-      sourcePath: "bundle",
+      sourcePath: srcDir,
       config: { url: "https://alist.example.com/dav", username: "user", password: "pw" },
       cron: "0 2 * * *",
       enabled: false,
@@ -590,6 +609,7 @@ describe("executeRestore uses the backup job's original target repository", () =
 describe("版本化快照目录（runDir）", () => {
   beforeEach(() => {
     fs.mkdirSync(tmpRoot, { recursive: true });
+    ensureSrcDir();
     vi.mocked(authenticateApiKey).mockResolvedValue({ user: fakeUser(), auth: adminContext().auth });
     vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
     env.backupEncryptionKey = "test-encryption-key";
@@ -604,13 +624,13 @@ describe("版本化快照目录（runDir）", () => {
   it("支持快照目录的仓库：同一次运行共用一个 runDir，并把 remoteDir 记入 manifest", async () => {
     const repo = fakeRepo({ supportsRunDirs: true });
     registerBackupRepository("alist", repo);
-    const jobRow = sampleBackupJob({ target: "alist" });
+    const jobRow = sampleBackupJob({ target: "alist", sourcePath: srcDir });
     const fakeDb = createFakeDb({ backupJobRows: [jobRow], insertId: 1 });
     vi.mocked(getDb).mockReturnValue(fakeDb as never);
 
     await caller().create({
       target: "alist",
-      sourcePath: "bundle",
+      sourcePath: srcDir,
       config: { url: "https://alist.example.com/dav", username: "user", password: "pw" },
     });
 
@@ -632,13 +652,13 @@ describe("版本化快照目录（runDir）", () => {
   it("不支持快照目录的仓库：不注入 runDir（旧行为不变）", async () => {
     const repo = fakeRepo();
     registerBackupRepository("alist", repo);
-    const jobRow = sampleBackupJob({ target: "alist" });
+    const jobRow = sampleBackupJob({ target: "alist", sourcePath: srcDir });
     const fakeDb = createFakeDb({ backupJobRows: [jobRow], insertId: 1 });
     vi.mocked(getDb).mockReturnValue(fakeDb as never);
 
     await caller().create({
       target: "alist",
-      sourcePath: "bundle",
+      sourcePath: srcDir,
       config: { url: "https://alist.example.com/dav", username: "user", password: "pw" },
     });
 

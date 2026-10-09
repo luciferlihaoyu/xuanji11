@@ -6,7 +6,7 @@ import { getDb } from "./queries/connection";
 import { systemSettings } from "@db/schema";
 import { clean } from "./lib/clean";
 import { logAudit } from "./lib/audit";
-import { maskSettingRows, maskSettingValue } from "./lib/setting-mask";
+import { maskSettingRows, maskSettingValue, MASK, isSecretKey, redactAuditInput } from "./lib/setting-mask";
 import * as vectorService from "./lib/vector-service";
 
 const vectorModelProviderSchema = z.enum(["openai", "minimax", "local", "custom"]);
@@ -37,6 +37,39 @@ const vectorModelTemplateTestInputSchema = z.object({
   model: z.string().min(1).max(255),
   dimension: z.number().int().min(1).max(8192).optional(),
 });
+
+/** t2（M1，setting 写侧）：单键 upsert 的共享实现（set 与 setMany 的循环体共用）。
+ *  MASK 语义：现有行存在且提交值恰为掩码、键命中敏感规则时，视为"前端未改动该秘密"
+ *  （读侧 getByKey/list 给出的就是掩码），保留库中原值，不把 "***masked***" 当真实值写进库。 */
+async function upsertSetting(
+  db: ReturnType<typeof getDb>,
+  item: { key: string; value: string; category: string },
+  userId: number | null,
+): Promise<{ unchanged: boolean }> {
+  const existing = await db.select().from(systemSettings)
+    .where(eq(systemSettings.key, item.key));
+
+  if (existing.length > 0) {
+    if (item.value === MASK && isSecretKey(item.key)) {
+      return { unchanged: true }; // 掩码占位：保留原值，不写库
+    }
+    await db.update(systemSettings)
+      .set(clean({
+        value: item.value,
+        category: item.category,
+        updatedBy: userId,
+      }))
+      .where(eq(systemSettings.key, item.key));
+  } else {
+    await db.insert(systemSettings).values({
+      key: item.key,
+      value: item.value,
+      category: item.category,
+      updatedBy: userId,
+    });
+  }
+  return { unchanged: false };
+}
 
 export const settingRouter = createRouter({
   // 整表/分类读取仅限管理员，且秘密值统一脱敏后返回。
@@ -81,27 +114,15 @@ export const settingRouter = createRouter({
     )
     .mutation(async ({ input, ctx }) => {
       const db = getDb();
-      const existing = await db.select().from(systemSettings)
-        .where(eq(systemSettings.key, input.key));
-
-      if (existing.length > 0) {
-        await db.update(systemSettings)
-          .set(clean({
-            value: input.value,
-            category: input.category,
-            updatedBy: ctx.user?.id ?? null,
-          }))
-          .where(eq(systemSettings.key, input.key));
-      } else {
-        await db.insert(systemSettings).values({
-          key: input.key,
-          value: input.value,
-          category: input.category,
-          updatedBy: ctx.user?.id ?? null,
-        });
-      }
-      await logAudit(ctx, "system_setting", "update", null, input as Record<string, unknown>);
-      return { success: true };
+      const { unchanged } = await upsertSetting(db, input, ctx.user?.id ?? null);
+      // t2（审计第二落点，setting:103）：审计不再回显 value——
+      // 敏感键的新值经 redact 变掩码（非敏感配置值保留，变更历史可追溯）；
+      // 掩码占位路径只落 { key, unchanged }，零值回显。
+      await logAudit(ctx, "system_setting", "update", null,
+        unchanged
+          ? { key: input.key, unchanged: true }
+          : redactAuditInput({ key: input.key, value: input.value, category: input.category }));
+      return unchanged ? { success: true, unchanged: true } : { success: true };
     }),
 
   setMany: adminQuery
@@ -114,28 +135,18 @@ export const settingRouter = createRouter({
     )
     .mutation(async ({ input, ctx }) => {
       const db = getDb();
+      // t2：循环体与 set 共用 upsertSetting——同一套"遇 MASK 保留原值"语义批量生效。
+      const results: Array<{ key: string; unchanged: boolean }> = [];
       for (const item of input) {
-        const existing = await db.select().from(systemSettings)
-          .where(eq(systemSettings.key, item.key));
-
-        if (existing.length > 0) {
-          await db.update(systemSettings)
-            .set(clean({
-              value: item.value,
-              category: item.category,
-              updatedBy: ctx.user?.id ?? null,
-            }))
-            .where(eq(systemSettings.key, item.key));
-        } else {
-          await db.insert(systemSettings).values({
-            key: item.key,
-            value: item.value,
-            category: item.category,
-            updatedBy: ctx.user?.id ?? null,
-          });
-        }
+        const { unchanged } = await upsertSetting(db, item, ctx.user?.id ?? null);
+        results.push({ key: item.key, unchanged });
       }
-      await logAudit(ctx, "system_setting", "update", null, { items: input } as Record<string, unknown>);
+      // t2（审计第二落点，setting:138）：整批 redact——items 里的敏感 value 一律掩码
+      //（{key,value} 对偶规则逐项生效），非敏感值保留；占位键名列在 unchangedKeys 里。
+      await logAudit(ctx, "system_setting", "update", null, redactAuditInput({
+        items: input,
+        unchangedKeys: results.filter((r) => r.unchanged).map((r) => r.key),
+      }));
       return { success: true };
     }),
 

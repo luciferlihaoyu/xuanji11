@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { User, VectorCollection } from "@db/schema";
 import type { AuthInfo } from "./lib/auth";
 import { authenticateApiKey } from "./lib/auth";
@@ -247,6 +247,74 @@ describe("MCP edge cases", () => {
     const responses = await Promise.all(requests);
     expect(responses.every((r) => "result" in r)).toBe(true);
     expect(vectorService.listCollections).toHaveBeenCalledTimes(5);
+  });
+});
+
+describe("MCP authentication (M7: cookie session CSRF 封堵)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    delete process.env.MCP_ALLOW_SESSION;
+  });
+
+  afterEach(() => {
+    delete process.env.MCP_ALLOW_SESSION;
+  });
+
+  it("无 Authorization 头且无凭据 → 认证失败 -32001", async () => {
+    const { handleMcpRequest } = await import("./mcp-server");
+    vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
+
+    const res = await handleMcpRequest(
+      { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      new Headers(),
+    );
+
+    expect("error" in res && res.error.code).toBe(-32001);
+  });
+
+  it("带 Bearer 有效 key → 返回 identity，请求正常", async () => {
+    const { handleMcpRequest } = await import("./mcp-server");
+    vi.mocked(authenticateApiKey).mockResolvedValue({ user: fakeUser(), auth: readOnlyAuth() });
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
+
+    const res = await handleMcpRequest(
+      { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      new Headers({ Authorization: "Bearer test-key" }),
+    );
+
+    expect("result" in res).toBe(true);
+    expect(vi.mocked(authenticateApiKey)).toHaveBeenCalledTimes(1);
+  });
+
+  it("带 cookie 而无 Bearer（默认）→ 拒绝，cookie 会话路径不被触达", async () => {
+    const { handleMcpRequest } = await import("./mcp-server");
+    // 即使存在有效 cookie 会话（mock 返回 admin user），默认也不得走 cookie 认证
+    vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(fakeUser());
+
+    const res = await handleMcpRequest(
+      { jsonrpc: "2.0", id: 3, method: "tools/list" },
+      new Headers({ cookie: "xuanji_session=valid-session-token" }),
+    );
+
+    expect("error" in res && res.error.code).toBe(-32001);
+    expect(vi.mocked(authenticateLocalRequest)).not.toHaveBeenCalled();
+  });
+
+  it("逃生口：MCP_ALLOW_SESSION=1 时 cookie 会话恢复可用", async () => {
+    process.env.MCP_ALLOW_SESSION = "1";
+    const { handleMcpRequest } = await import("./mcp-server");
+    vi.mocked(authenticateApiKey).mockResolvedValue(undefined);
+    vi.mocked(authenticateLocalRequest).mockResolvedValue(fakeUser());
+
+    const res = await handleMcpRequest(
+      { jsonrpc: "2.0", id: 4, method: "tools/list" },
+      new Headers({ cookie: "xuanji_session=valid-session-token" }),
+    );
+
+    expect("result" in res).toBe(true);
+    expect(vi.mocked(authenticateLocalRequest)).toHaveBeenCalledTimes(1);
   });
 });
 

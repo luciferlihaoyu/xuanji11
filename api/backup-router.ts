@@ -72,6 +72,8 @@ export const backupRouter = createRouter({
         target: z.enum(BACKUP_TARGETS),
         sourcePath: z.string().min(1).max(500).refine((p) => !hasPathTraversal(p), {
           message: "sourcePath contains path traversal",
+        }).refine((p) => p !== "bundle" && p !== "database" && p !== "knowledge", {
+          message: "sourcePath must be a directory path; reserved aliases not allowed",
         }),
         config: z.record(z.string(), z.unknown()).optional(),
         cron: z.string().max(100).optional(),

@@ -113,17 +113,26 @@ function createFakeDb(
   // 必须按表分开捕获，否则无法断言"数据源状态"与"作业状态"各自的判定。
   const dsUpdates: Record<string, unknown>[] = [];
   const jobUpdates: Record<string, unknown>[] = [];
+  // t2：捕获 insert(...).values(v) 的 v，供断言 create 落库形态（掩码占位不进库）。
+  const inserts: Record<string, unknown>[] = [];
   let existingLookup = 0;
 
   return {
     updates,
     dsUpdates,
     jobUpdates,
+    inserts,
     select: vi.fn(() => ({
       from: vi.fn((table: unknown) => ({
         where: vi.fn(() =>
           table === dataSources
-            ? Promise.resolve(readRows())
+            ? // thenable：直接 await 得到行数组（sync/testConnection 的既有链），
+              // 链式 .orderBy(...) 也可用（t2 的 listByType：.where().orderBy()）。
+              {
+                orderBy: vi.fn(() => Promise.resolve(readRows())),
+                then: (onFulfilled: (rows: DataSourceRow[]) => unknown) =>
+                  Promise.resolve(readRows()).then(onFulfilled),
+              }
             : {
                 orderBy: vi.fn(() => ({
                   limit: vi.fn(() => Promise.resolve(existingQueue[existingLookup++] ?? [])),
@@ -139,8 +148,11 @@ function createFakeDb(
     })),
     insert: vi.fn(() => ({
       // better-sqlite3 的真实返回形态是 { lastInsertRowid, changes }（非数组），
-      // 与 router 里 Number(result.lastInsertRowid) 对齐。
-      values: vi.fn(() => Promise.resolve({ lastInsertRowid: 1 })),
+      // 与 router 里 Number(result.lastInsertRowid) 对齐。t2：顺带捕获 values 参数。
+      values: vi.fn((vals: Record<string, unknown>) => {
+        inserts.push(vals);
+        return Promise.resolve({ lastInsertRowid: 1 });
+      }),
     })),
     update: vi.fn((table: unknown) => ({
       set: vi.fn((data: Record<string, unknown>) => {
@@ -979,6 +991,150 @@ describe("datasourceRouter sync honesty", () => {
 
       // Then: no notice is attached.
       expect(result).toEqual({ success: true });
+    });
+  });
+
+  // ═══ t2（H1/M1/审计第二落点）：凭据掩码闭环 ═══
+  // H1：list/listByType/getById 此前整行返回，config 里的 apiKey/refreshToken 明文出参。
+  // M1：写侧无 MASK 过滤，前端把掩码回显原样提交时，"***masked***" 会当真凭据落库。
+  // 审计第二落点：create/update 的 logAudit 原样落整个 input，明文凭据进审计详情。
+  describe("credential masking (t2)", () => {
+    const SECRET_ROW = seedRow({
+      id: 1,
+      config: { platform: "115", url: "https://x", apiKey: "real-secret", refreshToken: "r-tok" },
+    });
+
+    describe("read paths mask credentials (H1)", () => {
+      it("list 返回行的敏感字段被掩码，非敏感字段保留，并标注 secretFields", async () => {
+        const { caller } = callerWith([SECRET_ROW]);
+
+        const rows = await caller.list();
+
+        const config = rows[0]!.config as Record<string, unknown>;
+        expect(config.apiKey).toBe("***masked***");
+        expect(config.refreshToken).toBe("***masked***");
+        expect(config.url).toBe("https://x");
+        expect(config.platform).toBe("115");
+        expect(rows[0]!.secretFields).toEqual(["apiKey", "refreshToken"]);
+      });
+
+      it("listByType 同样掩码", async () => {
+        const { caller } = callerWith([SECRET_ROW]);
+
+        const rows = await caller.listByType({ type: "cloud_drive" });
+
+        expect((rows[0]!.config as Record<string, unknown>).apiKey).toBe("***masked***");
+      });
+
+      it("getById 掩码返回；不存在的 id 仍为 null", async () => {
+        const { caller } = callerWith([SECRET_ROW]);
+
+        const row = await caller.getById({ id: 1 });
+        expect((row!.config as Record<string, unknown>).apiKey).toBe("***masked***");
+        // fake db 的 where 桩不按条件过滤——"查无此行"用空库口径验证 null 分支。
+        const { caller: emptyCaller } = callerWith([]);
+        expect(await emptyCaller.getById({ id: 999 })).toBeNull();
+      });
+
+      it("无敏感字段时 secretFields 为空数组", async () => {
+        const { caller } = callerWith([seedRow({ id: 2, config: { url: "https://y" } })]);
+
+        const rows = await caller.list();
+
+        expect(rows[0]!.secretFields).toEqual([]);
+      });
+    });
+
+    describe("create strips mask placeholders before writing (M1)", () => {
+      it("掩码占位不落库，明文字段照常写入", async () => {
+        const { db, caller } = callerWith([]);
+
+        await caller.create({
+          name: "新源",
+          type: "api",
+          config: { url: "https://api.example.test", apiKey: "***masked***", note: "***masked***" },
+        });
+
+        const inserted = db.inserts[0]!;
+        const config = inserted.config as Record<string, unknown>;
+        expect(config).toEqual({ url: "https://api.example.test", note: "***masked***" }); // 敏感键剥除，非敏感键的字面量保留
+        expect("apiKey" in config).toBe(false);
+      });
+
+      it("create 审计不落明文凭据：新填明文被 redact，剥除事实留痕", async () => {
+        const { caller } = callerWith([]);
+
+        await caller.create({
+          name: "新源",
+          type: "api",
+          config: { url: "https://x", apiKey: "sk-brand-new" },
+        });
+
+        const auditInput = vi.mocked(logAudit).mock.calls[0]![4] as Record<string, unknown>;
+        const auditConfig = auditInput.config as Record<string, unknown>;
+        expect(auditConfig.apiKey).toBe("***masked***");
+        expect(JSON.stringify(auditInput)).not.toContain("sk-brand-new");
+      });
+    });
+
+    describe("update merges stripped config with stored secrets (M1)", () => {
+      it("掩码占位提交 → 库中真值保留，绝不把掩码写回", async () => {
+        const { db, caller } = callerWith([SECRET_ROW]);
+
+        await caller.update({
+          id: 1,
+          config: { platform: "115", url: "https://new", apiKey: "***masked***", refreshToken: "***masked***" },
+        });
+
+        const config = lastOf(db.dsUpdates).config as Record<string, unknown>;
+        // 剥除的占位从旧值补回——编辑（哪怕只改 url）不许静默清掉已保存凭据。
+        expect(config.apiKey).toBe("real-secret");
+        expect(config.refreshToken).toBe("r-tok");
+        expect(config.url).toBe("https://new");
+      });
+
+      it("前端剔空字段形态（config 无 apiKey 键）→ 旧值同样保留", async () => {
+        const { db, caller } = callerWith([SECRET_ROW]);
+
+        await caller.update({ id: 1, config: { platform: "115", url: "https://new" } });
+
+        const config = lastOf(db.dsUpdates).config as Record<string, unknown>;
+        expect(config.apiKey).toBe("real-secret");
+        expect(config.url).toBe("https://new");
+      });
+
+      it("重填的新明文覆盖旧值（用户真的换密钥时）", async () => {
+        const { db, caller } = callerWith([SECRET_ROW]);
+
+        await caller.update({ id: 1, config: { apiKey: "sk-rotated" } });
+
+        const config = lastOf(db.dsUpdates).config as Record<string, unknown>;
+        expect(config.apiKey).toBe("sk-rotated");
+        expect(config.url).toBe("https://x"); // 未提交的字段从旧值补回
+      });
+
+      it("不提交 config → 不更新 config 列（既有行为不变）", async () => {
+        const { db, caller } = callerWith([SECRET_ROW]);
+
+        await caller.update({ id: 1, name: "改名" });
+
+        const data = lastOf(db.dsUpdates);
+        expect("config" in data).toBe(false);
+        expect(data.name).toBe("改名");
+      });
+
+      it("update 审计不落明文凭据（库中真值与新填明文都不回显）", async () => {
+        const { caller } = callerWith([SECRET_ROW]);
+
+        await caller.update({ id: 1, config: { url: "https://new", apiKey: "***masked***" } });
+
+        const auditInput = vi.mocked(logAudit).mock.calls[0]![4] as Record<string, unknown>;
+        const dumped = JSON.stringify(auditInput);
+        expect(dumped).not.toContain("real-secret"); // 合并后的真值绝不进审计
+        expect(dumped).not.toContain("***masked***"); // 掩码占位本身也不回显
+        // strip 事实留结构痕迹（可审计"这次提交带过占位"）
+        expect(auditInput.secretKeysStripped).toEqual(["apiKey"]);
+      });
     });
   });
 });

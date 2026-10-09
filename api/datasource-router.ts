@@ -11,6 +11,7 @@ import { env } from "./lib/env";
 import { getConnector, type CloudConnector } from "./connectors";
 import { ingestFile } from "./lib/ingestion";
 import { logAudit } from "./lib/audit";
+import { maskConnectorConfig, stripMaskedSecrets, redactAuditInput, isSecretKey } from "./lib/setting-mask";
 
 const DATA_SOURCE_TYPES = ["cloud_drive", "nas", "database", "api", "webhook", "rss", "notion", "obsidian"] as const;
 type DataSourceType = (typeof DATA_SOURCE_TYPES)[number];
@@ -98,6 +99,33 @@ async function ensureDatasourceFolder(
   return Number(created.lastInsertRowid);
 }
 
+/** t2（H1）：读侧出参掩码——dataSources.config 里的 apiKey/refreshToken/password 等
+ *  敏感键一律以掩码返回（list/listByType/getById 三条读路径共用），绝不再整行明文出参。
+ *  secretFields 顺带告诉前端"库里已保存哪些敏感字段"（编辑表单据此置空 +
+ *  "留空则不修改"提示），避免前端拿掩码字面量当真值回填。 */
+function maskDataSourceRow<T extends { config: unknown }>(row: T): T & { secretFields: string[] } {
+  const config = (row.config as Record<string, unknown> | null) ?? {};
+  return {
+    ...row,
+    config: maskConnectorConfig(config),
+    secretFields: Object.keys(config).filter(isSecretKey),
+  };
+}
+
+/** t2（M1）：写侧合并——被 strip 的掩码占位与前端剔空的敏感字段从库中旧值补回。
+ *  出参掩码后前端拿不到真值，"字段缺失"只能读作"未修改"，绝不能读作"删除"——
+ *  否则用户每编辑一次（哪怕只改名字），已保存的凭据就被整体替换丢掉，
+ *  数据源连接静默报废。非敏感键不受影响（新值覆盖旧值，语义不变）。 */
+async function mergeConfigWithExisting(
+  db: ReturnType<typeof getDb>,
+  id: number,
+  nextConfig: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const [existingRow] = await db.select().from(dataSources).where(eq(dataSources.id, id));
+  const oldConfig = (existingRow?.config as Record<string, unknown> | null) ?? {};
+  return { ...oldConfig, ...nextConfig };
+}
+
 function resolveConnectorFor(type: DataSourceType, config: Record<string, unknown>): ConnectorResolution {
   const platform = resolvePlatform(type, config);
   if (!platform) return { ok: false, reason: "未指定平台且该类型无可用连接器" };
@@ -142,16 +170,19 @@ function syncSummaryMessage(entryCount: number, processed: number, skipped: numb
 export const datasourceRouter = createRouter({
   list: authedQuery.query(async () => {
     const db = getDb();
-    return db.select().from(dataSources).orderBy(desc(dataSources.updatedAt));
+    const rows = await db.select().from(dataSources).orderBy(desc(dataSources.updatedAt));
+    // t2（H1）：整行 config 含明文凭据，出参必须掩码后再离开服务端。
+    return rows.map(maskDataSourceRow);
   }),
 
   listByType: authedQuery
     .input(z.object({ type: z.string() }))
     .query(async ({ input }) => {
       const db = getDb();
-      return db.select().from(dataSources)
+      const rows = await db.select().from(dataSources)
         .where(eq(dataSources.type, input.type as DataSourceType))
         .orderBy(desc(dataSources.updatedAt));
+      return rows.map(maskDataSourceRow);
     }),
 
   getById: authedQuery
@@ -159,7 +190,7 @@ export const datasourceRouter = createRouter({
     .query(async ({ input }) => {
       const db = getDb();
       const results = await db.select().from(dataSources).where(eq(dataSources.id, input.id));
-      return results[0] ?? null;
+      return results[0] ? maskDataSourceRow(results[0]) : null;
     }),
 
   create: adminQuery
@@ -173,15 +204,25 @@ export const datasourceRouter = createRouter({
     )
     .mutation(async ({ input, ctx }) => {
       const db = getDb();
+      // t2（M1）：写前剥除掩码占位——前端把读侧掩码原样回传时，不把 "***masked***" 当真凭据落库。
+      // undefined 原样透传（clean 剔除后 insert 不带 config 列，与既有行为一致）。
+      const { value: safeConfig, changedKeys } = stripMaskedSecrets(input.config);
       const result = await db.insert(dataSources).values(clean({
         name: input.name,
         type: input.type,
-        config: input.config as Record<string, unknown>,
+        config: safeConfig as Record<string, unknown>,
         status: input.status,
         createdBy: ctx.user?.id ?? null,
       }));
       const id = Number(result.lastInsertRowid);
-      await logAudit(ctx, "datasource", "create", id, input as Record<string, unknown>);
+      // t2（审计第二落点，datasource create）：审计不再落明文凭据——
+      // 剥除后的 config 经 redactAuditInput 兜底（用户新填的明文也掩码），strip 事实留结构痕迹。
+      await logAudit(ctx, "datasource", "create", id, redactAuditInput({
+        name: input.name,
+        type: input.type,
+        config: safeConfig === undefined ? undefined : { ...safeConfig },
+        secretKeysStripped: changedKeys,
+      }));
       const notice = syncIntervalNotice(input.config);
       return notice ? { id, notice } : { id };
     }),
@@ -198,9 +239,23 @@ export const datasourceRouter = createRouter({
     )
     .mutation(async ({ input, ctx }) => {
       const db = getDb();
-      const { id, ...data } = input;
+      const { id, ...rest } = input;
+      // t2（M1）：写前剥除掩码占位，再与库中旧 config 合并——
+      // 剥除/剔空的敏感字段（前端"留空则不修改"）从旧值补回，其余键新值覆盖。
+      // 未提交 config 时保持 undefined（clean 剔除后不更新该列，既有行为）。
+      const { value: safeConfig, changedKeys } = stripMaskedSecrets(rest.config);
+      const configToWrite = safeConfig === undefined
+        ? undefined
+        : await mergeConfigWithExisting(db, id, safeConfig);
+      const data = { ...rest, config: configToWrite };
       await db.update(dataSources).set(clean(data as Record<string, unknown>)).where(eq(dataSources.id, id));
-      await logAudit(ctx, "datasource", "update", id, input as Record<string, unknown>);
+      // t2（审计第二落点，datasource update）：审计不落明文凭据（含合并后的真值），
+      // 只落 strip 后的提交形态 + 掩码兜底。
+      await logAudit(ctx, "datasource", "update", id, redactAuditInput({
+        ...rest,
+        config: safeConfig === undefined ? undefined : { ...safeConfig },
+        secretKeysStripped: changedKeys,
+      }));
       const notice = syncIntervalNotice(input.config);
       return notice ? { success: true, notice } : { success: true };
     }),

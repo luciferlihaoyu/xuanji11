@@ -12,6 +12,7 @@ import { getDb } from "./queries/connection";
 import { systemSettings } from "@db/schema";
 import { eq } from "drizzle-orm";
 import { env } from "./lib/env";
+import { getTrustedClientIp } from "./lib/trusted-ip";
 import { Session } from "@contracts/constants";
 import { getSessionCookieOptions } from "./lib/cookies";
 import type { User } from "@db/schema";
@@ -262,8 +263,9 @@ export function createLocalLoginHandler() {
 }
 
 export function getClientIp(headers: Headers): string {
-  const forwardedFor = headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwardedFor || headers.get("x-real-ip") || "unknown";
+  // H2 修复：不再取 XFF 首段（客户端可任意伪造），委托 trusted-ip
+  // 从右往左取首个非内网候选；XFF 全内网/缺失回退 x-real-ip，再无则 "unknown"
+  return getTrustedClientIp(headers);
 }
 
 export function isTrustedMutationRequest(req: Request): boolean {

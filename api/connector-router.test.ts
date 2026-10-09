@@ -1,8 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { z } from "zod";
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
 import type { User } from "@db/schema";
+import * as fullSchema from "@db/schema";
 import type { AuthInfo } from "./lib/auth";
-import { authenticateApiKey } from "./lib/auth";
+import { authenticateApiKey, sessionAuth } from "./lib/auth";
 import { authenticateLocalRequest } from "./local-auth";
 import { getDb } from "./queries/connection";
 import {
@@ -72,6 +75,11 @@ vi.mock("./lib/vector-service", () => ({
   vectorEngine: { size: 0 },
 }));
 
+// t2 补测：saveConfig 会调 logAudit（审计第二落点），mock 掉以便直接断言其入参。
+vi.mock("./lib/audit", () => ({ logAudit: vi.fn(), logAction: vi.fn() }));
+
+import { logAudit } from "./lib/audit";
+import { MASK } from "./lib/setting-mask";
 import { connectorRouter } from "./connector-router";
 
 const runSearchContext = vi.mocked(searchContext);
@@ -244,5 +252,99 @@ describe("connectorRouter scoped integration procedures", () => {
     ).resolves.toBeDefined();
     await expect(caller.getMemoryDigest({ project: "p" })).resolves.toBeDefined();
     await expect(caller.startIngestion({ sourceType: "upload", source: { kind: "path", path: "/tmp/x" } })).resolves.toBeDefined();
+  });
+});
+
+/**
+ * t2 复核补测：连接器配置的掩码写侧语义（此前零覆盖）。
+ *
+ * 威胁/事故模型：getConfig 出参已掩码（maskConnectorConfig），编辑页原样回传时
+ * ① 若不剥除 —— "***masked***" 作为真实密码落库，静默毁掉连接器；
+ * ② 若只剥除不合并 —— 用户仅改 url（密码键缺席）时旧密码被清空，同样毁掉连接器。
+ * 两条都是功能性事故，用真实内存 SQLite 断言落库形态（system_settings 表按 @db/schema 手写 DDL）。
+ */
+describe("connectorRouter config masking (t2)", () => {
+  const DDL = `
+    CREATE TABLE system_settings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      key TEXT NOT NULL UNIQUE,
+      value TEXT,
+      category TEXT DEFAULT 'general',
+      updatedBy INTEGER,
+      updatedAt INTEGER NOT NULL DEFAULT 0
+    );
+  `;
+  const CONFIG_KEY = "connector_115_config";
+
+  function harness(seedValue: string | null) {
+    const raw = new Database(":memory:");
+    raw.exec(DDL);
+    if (seedValue !== null) {
+      raw.prepare(
+        `INSERT INTO system_settings (key, value, category, updatedAt) VALUES (?, ?, 'connector', 0)`,
+      ).run(CONFIG_KEY, seedValue);
+    }
+    vi.mocked(getDb).mockReturnValue(drizzle(raw, { schema: fullSchema }) as never);
+    const caller = connectorRouter.createCaller(makeContext(sessionAuth(fakeUser())));
+    return {
+      caller,
+      storedConfig: (): Record<string, unknown> | null => {
+        const row = raw
+          .prepare(`SELECT value FROM system_settings WHERE key = ?`)
+          .get(CONFIG_KEY) as { value: string | null } | undefined;
+        return row?.value ? (JSON.parse(row.value) as Record<string, unknown>) : null;
+      },
+      auditDetails: (): string =>
+        vi.mocked(logAudit)
+          .mock.calls.map((call) => JSON.stringify(call[4] ?? null))
+          .join("\n"),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("keeps the stored password when the masked placeholder is submitted", async () => {
+    const h = harness(JSON.stringify({ url: "https://pan.example.com", password: "real-password" }));
+
+    await h.caller.saveConfig({
+      platform: "115",
+      config: { url: "https://pan.example.com", password: MASK },
+    });
+
+    const cfg = h.storedConfig();
+    expect(cfg?.password).toBe("real-password"); // 掩码绝不落库
+    expect(JSON.stringify(cfg)).not.toContain(MASK);
+  });
+
+  it("merges the untouched secret back when only a non-secret field changes", async () => {
+    const h = harness(JSON.stringify({ url: "https://old.example.com", password: "real-password" }));
+
+    // 用户只改了 url；密码键因前端置空剔除而不在提交里
+    await h.caller.saveConfig({ platform: "115", config: { url: "https://new.example.com" } });
+
+    const cfg = h.storedConfig();
+    expect(cfg?.url).toBe("https://new.example.com");
+    expect(cfg?.password).toBe("real-password"); // 只剥除不合并会在此清空密码
+  });
+
+  it("overwrites the stored secret with a newly submitted plaintext", async () => {
+    const h = harness(JSON.stringify({ url: "https://pan.example.com", password: "old-password" }));
+
+    await h.caller.saveConfig({ platform: "115", config: { password: "new-password" } });
+
+    expect(h.storedConfig()?.password).toBe("new-password");
+  });
+
+  it("never writes plaintext secrets into the audit log", async () => {
+    const h = harness(JSON.stringify({ password: "old-password" }));
+
+    await h.caller.saveConfig({ platform: "115", config: { password: "brand-new-secret" } });
+
+    const audit = h.auditDetails();
+    expect(audit).not.toContain("brand-new-secret");
+    expect(audit).not.toContain("old-password");
+    expect(audit).toContain("115"); // 平台名保留，审计仍可追溯
   });
 });

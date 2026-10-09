@@ -28,7 +28,6 @@ import { deleteDocumentCascade } from "./lib/document-removal";
 import { normalizeTitle } from "./lib/title-normalize";
 import type { AuthenticatedIdentity, AuthInfo } from "./lib/auth";
 import { authenticateApiKey, hasScope, sessionAuth } from "./lib/auth";
-import { authenticateLocalRequest } from "./local-auth";
 import { getDb } from "./queries/connection";
 
 type JsonRpcId = string | number | null;
@@ -134,10 +133,23 @@ function paginatedResult<T>(rows: readonly T[], opts: { cursor?: string; limit?:
   }
 }
 
+/**
+ * MCP 端点鉴权：仅 API Key（Authorization: Bearer <agent-token>）。
+ *
+ * WHY 不再接受 cookie 会话（M7）：/api/mcp 与 /api/mcp/sse 被 csrf.ts
+ * isFullyExemptPath 豁免 CSRF 校验（MCP 协议层自带鉴权），若此处再接受
+ * cookie 会话，攻击者可在浏览器中借管理员登录态跨站伪造 MCP 写请求
+ * （cookie 会被浏览器自动携带）——即跨站 CSRF 投毒路径。
+ *
+ * 逃生口：MCP_ALLOW_SESSION=1 时显式恢复 cookie 会话路径（默认关），
+ * 仅限受控环境自担 CSRF 风险使用。
+ */
 async function authenticate(headers: Headers): Promise<AuthenticatedIdentity | undefined> {
   const apiKeyIdentity = await authenticateApiKey(headers);
   if (apiKeyIdentity) return apiKeyIdentity;
 
+  if (process.env.MCP_ALLOW_SESSION !== "1") return undefined;
+  const { authenticateLocalRequest } = await import("./local-auth");
   const user = await authenticateLocalRequest(headers);
   return user ? { user, auth: sessionAuth(user) } : undefined;
 }

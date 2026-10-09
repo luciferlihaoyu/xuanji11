@@ -48,8 +48,19 @@ const PERMISSION_SCOPES: Readonly<Record<string, readonly string[]>> = {
   designWorkflow: ["workflows:design"],
 };
 
+/**
+ * t4：只读会话 scope（本地多用户 viewer / Kimi OAuth 非 owner 用户）。
+ * 与 PERMISSION_SCOPES.read 等值，但 session 侧显式声明，与 agent 权限映射解耦。
+ */
+const READ_ONLY_SCOPES = ["knowledge:read", "documents:read", "workflows:read", "agents:read", "backups:read", "zvec:read"];
+
 export function sessionAuth(user: User): AuthInfo {
-  return { type: "session", userId: user.id, scopes: [...MANAGEMENT_SCOPES] };
+  const isAdmin = user.role === "admin";
+  return {
+    type: "session",
+    userId: user.id,
+    scopes: isAdmin ? [...MANAGEMENT_SCOPES] : [...READ_ONLY_SCOPES],
+  };
 }
 
 export function scopesFromPermissions(permissions: Record<string, unknown> | null | undefined): string[] {

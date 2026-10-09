@@ -1,19 +1,16 @@
 /**
  * 备份包组装（staging 目录）
  *
- * 在 `env.backupTempDir/staging-<jobId>` 下组装备份内容：
- * - sourcePath 为 "bundle"：database/（db-export）+ knowledge/（kb-backup）+ attachments/（uploadDir）
- * - sourcePath 为普通目录：按相对路径复制目录内容
+ * 在 `env.backupTempDir/staging-<jobId>` 下按相对路径复制 sourcePath 目录内容，
  * 最后写入 manifest.json（含文件清单与 checksum、加密标记）。
+ * 文件 checksum 以流式方式计算（createReadStream 分块喂 hash），大文件不整读入内存。
  * 上传顺序由执行层负责（manifest.json 最后上传）。
  */
 import * as path from "path";
-import { promises as fsp } from "fs";
+import { createReadStream, promises as fsp } from "fs";
 import { createHash } from "crypto";
 import { env } from "../lib/env";
 import { sanitizeRelativePath } from "../lib/backup-path";
-import { exportKnowledgeBase } from "../lib/kb-backup";
-import { exportDatabaseTables } from "./db-export";
 
 export interface BackupBundleFile {
   readonly path: string;
@@ -39,7 +36,6 @@ export interface BackupBundle {
 
 export interface BundleOptions {
   readonly stagingRoot?: string;
-  readonly uploadDir?: string;
   readonly target?: string;
   readonly encrypted?: boolean;
 }
@@ -54,11 +50,14 @@ async function walkStagingFiles(dir: string): Promise<BackupBundleFile[]> {
         await walk(fullPath);
       } else if (entry.isFile()) {
         const stat = await fsp.stat(fullPath);
-        const content = await fsp.readFile(fullPath);
+        // 流式 sha256：分块喂 hash，避免大文件整读入内存（OOM 风险）
+        const hash = createHash("sha256");
+        const stream = createReadStream(fullPath);
+        for await (const chunk of stream) hash.update(chunk);
         files.push({
           path: sanitizeRelativePath(path.relative(dir, fullPath)),
           size: stat.size,
-          checksum: createHash("sha256").update(content).digest("hex"),
+          checksum: hash.digest("hex"),
         });
       }
     }
@@ -90,18 +89,7 @@ async function copyTree(
   }
 }
 
-async function assembleContent(stagingDir: string, sourcePath: string, uploadDir: string): Promise<void> {
-  if (sourcePath === "bundle") {
-    await exportDatabaseTables(path.join(stagingDir, "database"));
-
-    const knowledgeDir = path.join(stagingDir, "knowledge");
-    await fsp.mkdir(knowledgeDir, { recursive: true });
-    const kb = await exportKnowledgeBase();
-    await fsp.writeFile(path.join(knowledgeDir, "knowledge-base.json"), JSON.stringify(kb, null, 2));
-
-    await copyTree(uploadDir, path.join(stagingDir, "attachments"));
-    return;
-  }
+async function assembleContent(stagingDir: string, sourcePath: string): Promise<void> {
   // 排除所有备份暂存根目录（含历史 staging-N），避免递归自吞
   const excludeDirs = new Set<string>([
     path.resolve(env.backupTempDir),
@@ -121,7 +109,7 @@ export async function buildBackupBundle(
   await fsp.rm(stagingDir, { recursive: true, force: true });
   await fsp.mkdir(stagingDir, { recursive: true });
 
-  await assembleContent(stagingDir, sourcePath, options.uploadDir ?? env.uploadDir);
+  await assembleContent(stagingDir, sourcePath);
 
   const files = await walkStagingFiles(stagingDir);
   const encrypted = options.encrypted ?? false;

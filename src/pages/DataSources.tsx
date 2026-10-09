@@ -38,6 +38,10 @@ const CLOUD_PLATFORMS = [
   { value: 'aliyundrive', label: '阿里云盘' },
 ];
 
+// t2：后端读侧出参统一掩码（config.apiKey === "***masked***"，与 api/lib/setting-mask 的 MASK 同字面量）。
+// 编辑表单不得把掩码当真值回填——见 handleOpenEdit / handleSave。
+const MASKED_VALUE = '***masked***';
+
 // ---------- 批量导入（t6）：纯解析逻辑，不发任何网络请求 ----------
 
 /** 单次批量导入的非空行数上限（export 仅为便于对纯解析函数做离线校验，页面内直接引用） */
@@ -184,13 +188,20 @@ export default function DataSources() {
     setEditingId(ds.id as number);
     setSaveError('');
     const config = (ds.config as Record<string, unknown>) || {};
+    // t2：敏感字段（apiKey/refreshToken）读侧返回的是掩码/secretFields 标记——表单置空，
+    // 由 placeholder 提示"已保存，留空则不修改"；留空提交时该字段被剔除，后端合并时保留库中原值。
+    const secretFields = new Set<string>((ds.secretFields as string[] | undefined) ?? []);
+    const secretOrMasked = (key: string, v: unknown): string => {
+      if (typeof v !== 'string') return '';
+      return v === MASKED_VALUE || secretFields.has(key) ? '' : v;
+    };
     setForm({
       name: (ds.name as string) || '',
       type: (ds.type as string) || 'api',
       platform: (config.platform as string) || '',
       url: (config.url as string) || '',
-      apiKey: (config.apiKey as string) || '',
-      refreshToken: (config.refreshToken as string) || '',
+      apiKey: secretOrMasked('apiKey', config.apiKey),
+      refreshToken: secretOrMasked('refreshToken', config.refreshToken),
       syncInterval: (config.syncInterval as string) || 'manual',
     });
     setShowModal(true);
@@ -206,6 +217,9 @@ export default function DataSources() {
         refreshToken: form.refreshToken,
         syncInterval: form.syncInterval,
       };
+      // t2：敏感字段留空 = 不修改——从提交体剔除，让后端 strip/合并跳过该键，保留库中原值。
+      if (!form.apiKey) delete config.apiKey;
+      if (!form.refreshToken) delete config.refreshToken;
       // rss 显式携带 platform，不依赖后端兜底；其余类型沿用平台选择器结果
       if (form.type === 'rss') config.platform = 'rss';
       else if (form.platform) config.platform = form.platform;
@@ -623,7 +637,7 @@ export default function DataSources() {
                   type="password"
                   value={form.apiKey}
                   onChange={(e) => setForm((p) => ({ ...p, apiKey: e.target.value }))}
-                  placeholder={form.platform === '115' ? '115 OAuth 授权后的 access_token' : '需要时填写'}
+                  placeholder={editingId ? '已保存，留空则不修改' : form.platform === '115' ? '115 OAuth 授权后的 access_token' : '需要时填写'}
                   className="input-base text-xs w-full"
                 />
               </div>
@@ -638,7 +652,7 @@ export default function DataSources() {
                     type="password"
                     value={form.refreshToken}
                     onChange={(e) => setForm((p) => ({ ...p, refreshToken: e.target.value }))}
-                    placeholder="阿里云盘 refresh_token"
+                    placeholder={editingId ? '已保存，留空则不修改' : '阿里云盘 refresh_token'}
                     className="input-base text-xs w-full"
                   />
                   <p className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>

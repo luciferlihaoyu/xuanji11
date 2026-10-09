@@ -9,6 +9,8 @@ import { Errors } from "@contracts/errors";
 import { signSessionToken, verifySessionToken } from "./session";
 import { users as kimiUsers } from "./platform";
 import { findUserByUnionId, upsertUser } from "../queries/users";
+import { consumeOAuthState } from "../lib/oauth-state";
+import { Paths } from "@contracts/constants";
 import type { TokenResponse } from "./types";
 
 async function exchangeAuthCode(
@@ -50,6 +52,10 @@ async function verifyAccessToken(
   if (!userId) {
     throw new Error("user_id missing from access token");
   }
+  // t4/H4：access token 必须是签发给本应用（APP_ID）的，拒绝他应用/伪造 client_id
+  if (clientId !== env.appId) {
+    throw new Error("client_id mismatch");
+  }
   return { userId, clientId };
 }
 
@@ -69,6 +75,24 @@ export async function authenticateRequest(headers: Headers) {
     throw Errors.forbidden("User not found. Please re-login.");
   }
   return user;
+}
+
+/**
+ * t4/H4：redirectUri 与 state 解耦，取固定可信来源。
+ * 优先级：env.KIMI_REDIRECT_URI（部署显式配置）> X-Forwarded-* 请求头推算 > 请求 URL 推算。
+ * 历史实现把 redirectUri base64 编码进 state（atob(state)），等于让攻击者任意指定。
+ */
+function resolveRedirectUri(c: Context): string {
+  if (env.kimiRedirectUri) return env.kimiRedirectUri;
+  const headers = c.req.raw.headers;
+  const proto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const host = headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  if (host) return `${proto || "https"}://${host}${Paths.oauthCallback}`;
+  try {
+    return new URL(c.req.url).origin + Paths.oauthCallback;
+  } catch {
+    return "";
+  }
 }
 
 export function createOAuthCallbackHandler() {
@@ -92,8 +116,13 @@ export function createOAuthCallbackHandler() {
       return c.json({ error: "code and state are required" }, 400);
     }
 
+    // t4/H4：state 必须是本服务签发且未消费过的一次性值（防 CSRF/伪造回调/重放）
+    if (!consumeOAuthState(state)) {
+      return c.json({ error: "invalid state" }, 400);
+    }
+
     try {
-      const redirectUri = atob(state);
+      const redirectUri = resolveRedirectUri(c);
       const tokenResp = await exchangeAuthCode(code, redirectUri);
       const { userId } = await verifyAccessToken(tokenResp.access_token);
       const userProfile = await kimiUsers.getProfile(tokenResp.access_token);

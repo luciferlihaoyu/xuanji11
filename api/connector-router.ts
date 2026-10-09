@@ -6,7 +6,7 @@ import { systemSettings } from "@db/schema";
 import { clean } from "./lib/clean";
 import { getConnector, listConnectors as listRegisteredConnectors } from "./connectors";
 import { logAudit } from "./lib/audit";
-import { maskConnectorConfig } from "./lib/setting-mask";
+import { maskConnectorConfig, stripMaskedSecrets, redactAuditInput } from "./lib/setting-mask";
 import {
   searchContext as runSearchContext,
   writeTaskMemory as runWriteTaskMemory,
@@ -85,8 +85,19 @@ export const connectorRouter = createRouter({
     .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const key = connectorConfigKey(input.platform);
-      const value = JSON.stringify(input.config);
+      // t2（M1）：写前剥除掩码占位——getConfig 出参已掩码，前端原样回传时不落 "***masked***"；
+      // 剥除/缺位的敏感字段从库中旧值合并补回（连接器编辑页未改动密码时，旧密码必须还在）。
+      const { value: safeConfig, changedKeys } = stripMaskedSecrets(input.config);
       const existing = await db.select().from(systemSettings).where(eq(systemSettings.key, key));
+      let merged: Record<string, unknown> = { ...safeConfig };
+      if (existing[0]?.value) {
+        try {
+          merged = { ...(JSON.parse(existing[0].value) as Record<string, unknown>), ...safeConfig };
+        } catch {
+          // 旧行是脏 JSON：无法合并，按提交值落库（与旧行为同向，不额外抛错）
+        }
+      }
+      const value = JSON.stringify(merged);
 
       if (existing.length > 0) {
         await db
@@ -101,7 +112,13 @@ export const connectorRouter = createRouter({
           updatedBy: ctx.user?.id ?? null,
         });
       }
-      await logAudit(ctx, "connector_config", "update", null, input as Record<string, unknown>);
+      // t2（审计第二落点，connector:104）：原先整个 input（含明文密码）进审计详情，
+      // 改为 redact 后的提交形态——新填明文掩码、strip 事实留痕。
+      await logAudit(ctx, "connector_config", "update", null, redactAuditInput({
+        platform: input.platform,
+        config: safeConfig,
+        secretKeysStripped: changedKeys,
+      }));
       return { success: true };
     }),
 
@@ -171,10 +188,21 @@ export const connectorRouter = createRouter({
       const existing = await db.select().from(systemSettings).where(eq(systemSettings.key, key));
 
       if (existing.length > 0) {
+        // t2（M1，原 replaceTokens 176-184）：合并新 token 前先剥掩码占位并与库中旧值合并——
+        // 掩码不覆盖真凭据；刷新 token 时未随提交的其他敏感字段（如 password）不丢。
+        const { value: safeConfig } = stripMaskedSecrets(input.config);
+        let mergedBase: Record<string, unknown> = { ...safeConfig };
+        if (existing[0]?.value) {
+          try {
+            mergedBase = { ...(JSON.parse(existing[0].value) as Record<string, unknown>), ...safeConfig };
+          } catch {
+            // 旧行是脏 JSON：无法合并，按提交值为底座
+          }
+        }
         await db
           .update(systemSettings)
           .set(clean({
-            value: JSON.stringify({ ...input.config, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken }),
+            value: JSON.stringify({ ...mergedBase, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken }),
             category: "connector",
             updatedBy: ctx.user?.id ?? null,
           }))

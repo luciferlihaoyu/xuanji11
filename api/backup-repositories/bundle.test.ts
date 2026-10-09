@@ -1,7 +1,8 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { createHash } from "crypto";
 
 vi.hoisted(() => {
   process.env.ADMIN_USERNAME = "admin";
@@ -10,57 +11,17 @@ vi.hoisted(() => {
   process.env.JWT_SECRET = "fixed-test-jwt-secret-with-32-chars";
 });
 
-vi.mock("../queries/connection", () => ({
-  getDb: vi.fn(),
-}));
-
-vi.mock("mysql2/promise", () => ({
-  createPool: vi.fn(),
-}));
-
-import { getDb } from "../queries/connection";
-import { createPool } from "mysql2/promise";
 import { buildBackupBundle, type BackupBundle } from "./bundle";
-
-const mockedCreatePool = vi.mocked(createPool);
-
-function fakeDb() {
-  return {
-    select: vi.fn(() => ({
-      from: vi.fn(() => Promise.resolve([])),
-    })),
-  };
-}
-
-function fakePoolWithTable(table: string) {
-  const conn = {
-    query: vi.fn(async (sql: string) => {
-      if (sql.startsWith("START TRANSACTION") || sql === "COMMIT" || sql === "ROLLBACK") return [[], []];
-      if (sql.includes("information_schema.tables")) return [[{ TABLE_NAME: table }], []];
-      if (sql.includes("information_schema.columns")) return [[], []];
-      if (sql.startsWith("SELECT * FROM")) return [[], []];
-      return [[], []];
-    }),
-    release: vi.fn(),
-  };
-  return {
-    getConnection: vi.fn().mockResolvedValue(conn),
-    end: vi.fn().mockResolvedValue(undefined),
-  };
-}
 
 describe("buildBackupBundle", () => {
   let root: string;
-  let uploadDir: string;
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "bundle-test-"));
-    uploadDir = path.join(root, "uploads");
-    fs.mkdirSync(path.join(uploadDir, "nested"), { recursive: true });
-    fs.writeFileSync(path.join(uploadDir, "a.pdf"), "pdf-bytes");
-    fs.writeFileSync(path.join(uploadDir, "nested", "b.png"), "png-bytes");
-    vi.mocked(getDb).mockReturnValue(fakeDb() as never);
-    mockedCreatePool.mockReturnValue(fakePoolWithTable("users") as never);
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it("copies a plain source directory into staging with checksums", async () => {
@@ -75,30 +36,47 @@ describe("buildBackupBundle", () => {
     const staging = path.join(root, "staging-7");
     expect(fs.readFileSync(path.join(staging, "one.txt"), "utf8")).toBe("111");
     expect(fs.readFileSync(path.join(staging, "sub", "two.txt"), "utf8")).toBe("2222");
-    expect(bundle.files.find((f) => f.path === "one.txt")?.checksum).toHaveLength(64);
+    // 流式 checksum 与一次性计算结果一致
+    expect(bundle.files.find((f) => f.path === "one.txt")?.checksum).toBe(
+      createHash("sha256").update("111").digest("hex")
+    );
+    expect(bundle.files.find((f) => f.path === "sub/two.txt")?.checksum).toBe(
+      createHash("sha256").update("2222").digest("hex")
+    );
   });
 
-  it("assembles database/, knowledge/ and attachments/ for the bundle source", async () => {
-    const bundle: BackupBundle = await buildBackupBundle(9, "bundle", {
-      stagingRoot: root,
-      uploadDir,
-    });
+  it("computes large-file checksums in streaming mode without loading the file into memory", async () => {
+    const source = path.join(root, "big-src");
+    fs.mkdirSync(source, { recursive: true });
+    const bigFile = path.join(source, "big.bin");
+    // 50MB：写入固定模式的块，期望 checksum 可独立复算
+    const chunk = Buffer.alloc(1024 * 1024, 7);
+    const expected = createHash("sha256");
+    const fd = fs.openSync(bigFile, "w");
+    try {
+      for (let i = 0; i < 50; i++) {
+        fs.writeSync(fd, chunk);
+        expected.update(chunk);
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
 
-    const staging = path.join(root, "staging-9");
-    expect(fs.existsSync(path.join(staging, "database", "users.ndjson"))).toBe(true);
-    expect(fs.existsSync(path.join(staging, "database", "users.schema.json"))).toBe(true);
-    expect(fs.existsSync(path.join(staging, "knowledge", "knowledge-base.json"))).toBe(true);
-    expect(fs.readFileSync(path.join(staging, "attachments", "a.pdf"), "utf8")).toBe("pdf-bytes");
-    expect(fs.readFileSync(path.join(staging, "attachments", "nested", "b.png"), "utf8")).toBe("png-bytes");
+    const before = process.memoryUsage().heapUsed;
+    const bundle = await buildBackupBundle(21, source, { stagingRoot: root });
+    const after = process.memoryUsage().heapUsed;
 
-    const expectedPaths = [
-      "attachments/a.pdf",
-      "attachments/nested/b.png",
-      "database/users.ndjson",
-      "database/users.schema.json",
-      "knowledge/knowledge-base.json",
-    ];
-    expect(bundle.files.map((f) => f.path).sort()).toEqual(expectedPaths);
+    const big = bundle.files.find((f) => f.path === "big.bin");
+    expect(big?.size).toBe(50 * 1024 * 1024);
+    expect(big?.checksum).toBe(expected.digest("hex"));
+    // 若实现退化为 readFile 整读，heap 增量至少 50MB；流式分块远小于该值
+    expect(after - before).toBeLessThan(32 * 1024 * 1024);
+  }, 60_000);
+
+  it("no longer special-cases the legacy bundle alias — it fails like any missing directory", async () => {
+    // db-export（MySQL 遗物）删除后，sourcePath 必须是真实目录；
+    // 遗留 DB 行中的 "bundle" 会以 readdir ENOENT 明确失败，而不是静默产空备份
+    await expect(buildBackupBundle(23, "bundle", { stagingRoot: root })).rejects.toThrow();
   });
 
   it("writes a manifest.json with schema metadata and the file list", async () => {

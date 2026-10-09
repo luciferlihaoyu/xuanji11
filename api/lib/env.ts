@@ -70,6 +70,8 @@ export const env = {
   kimiAuthUrl: process.env.KIMI_AUTH_URL ?? "https://auth.kimi.com",
   kimiOpenUrl: process.env.KIMI_OPEN_URL ?? "https://open.kimi.com",
   ownerUnionId: process.env.OWNER_UNION_ID ?? "",
+  // OAuth 回调地址（t4/H4）：显式配置优先，缺省从请求头/URL 推算；不再信任 state 参数
+  kimiRedirectUri: process.env.KIMI_REDIRECT_URI ?? "",
 
   // 天宫 SSO 联邦认证（可选；配置后开放 GET /sso/launch）
   // v2：EdDSA 票据从天宫 JWKS 端点拉公钥验签（模块级缓存 10 分钟）
