@@ -50,14 +50,32 @@ export function isTrustedMutationRequest(req: Request): boolean {
   }
 }
 
-/** 工作流 webhook 签名：HMAC-SHA256(secret, "wf-webhook:<id>") 前 32 位 hex。 */
-export function webhookToken(workflowId: number, secret: string): string {
-  return createHmac("sha256", secret).update(`wf-webhook:${workflowId}`).digest("hex").slice(0, 32);
+/**
+ * 工作流 webhook 签名：HMAC-SHA256(secret, "wf-webhook:<id>:<updatedAtMs>") 前 32 位 hex。
+ *
+ * t6/M2 修复：纳入 `updatedAtMs` 让"改工作流"自动使旧 token 失效（轮换成本从"必须改
+ * jwtSecret"降到"随便改个名字"）。同时把 ?token= URL 路径保留为 deprecated
+ * （boot.ts 仍兼容），但 **推荐走 `X-Webhook-Token` header**——token 不再落 URL 就
+ * 不会进代理日志 / Referer / 浏览器历史记录。
+ *
+ * 注：函数名/参数顺序是 TS 强类型契约；旧签名 `webhookToken(id, secret)` 已删除——
+ * 所有调用方必须显式传 updatedAtMs（即使 0），逼出"改工作流 → 换 token"的语义。
+ */
+export function webhookToken(workflowId: number, updatedAtMs: number, secret: string): string {
+  return createHmac("sha256", secret)
+    .update(`wf-webhook:${workflowId}:${updatedAtMs}`)
+    .digest("hex")
+    .slice(0, 32);
 }
 
-export function verifyWebhookToken(workflowId: number, token: string, secret: string): boolean {
+export function verifyWebhookToken(
+  workflowId: number,
+  token: string,
+  updatedAtMs: number,
+  secret: string,
+): boolean {
   if (typeof token !== "string" || !/^[0-9a-f]{32}$/.test(token)) return false;
-  const expected = webhookToken(workflowId, secret);
+  const expected = webhookToken(workflowId, updatedAtMs, secret);
   if (expected.length !== token.length) return false;
   // 常数时间比较防时序侧信道
   let diff = 0;

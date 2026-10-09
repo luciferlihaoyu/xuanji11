@@ -1,5 +1,6 @@
 import * as crypto from "crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as jose from "jose";
 
 type SettingRow = {
   readonly value: string;
@@ -204,5 +205,93 @@ describe("JWT secret environment policy", () => {
     // Then: a strong transient secret is generated and the operator is warned.
     expect(env.jwtSecret).toHaveLength(64);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("JWT_SECRET"));
+  });
+});
+
+/**
+ * t8/M4：jti 黑名单——登出后服务端立即撤销该 token。
+ * 关键威胁：XSS、共享设备遗留、代理日志泄露的 cookie，登出后**仍可用到 exp**。
+ * 修复后：登出端点 revoke 该 token 的 jti；verifyLocalToken 查黑名单。
+ */
+describe("session revocation (t8/M4)", () => {
+  // t8 全部走 dynamic import：避免 file top-level 静态 import 与 resetModules
+  // 之后新解析的 module instance 不一致——session-revocation 是 module-level Map
+  // 持有状态，绑定到错实例会让 revokeJti 写一份、isRevoked 查另一份，"撤销"失效。
+  // 每次 test 内部 await import 拿同一动态 cache 实例，与 local-auth 内的静态
+  // import resolve chain 命中同一对象。
+  beforeEach(async () => {
+    const revocation = await import("./lib/session-revocation");
+    revocation.__resetForTests();
+    // 隔离 file-level dbState 的污染（前面 describe 设过的 admin_password_changed_at
+    // 等会沿用，影响 verifyLocalToken 的密码变更检查）
+    dbState.settings = {};
+    dbState.persistedHash = null;
+    dbState.storedHash = null;
+  });
+
+  it("未撤销的 jti 视为正常", async () => {
+    const { isRevoked } = await import("./lib/session-revocation");
+    expect(isRevoked("jti-fresh")).toBe(false);
+    expect(isRevoked(undefined)).toBe(false);
+  });
+
+  it("revokeJti 后 isRevoked 立即返回 true", async () => {
+    const { isRevoked, revokeJti } = await import("./lib/session-revocation");
+    const expMs = Date.now() + 5 * 60_000;
+    revokeJti("jti-1", expMs);
+    expect(isRevoked("jti-1")).toBe(true);
+    // 不同 jti 互不影响
+    expect(isRevoked("jti-2")).toBe(false);
+  });
+
+  it("已过期的 jti 不再被视作撤销（顺手清掉）", async () => {
+    const { isRevoked, revokeJti } = await import("./lib/session-revocation");
+    // 注入一个已过期的撤销项
+    const pastExp = Date.now() - 1_000;
+    revokeJti("jti-stale", pastExp);
+    // 立刻查：因已过期，isRevoked 返回 false 并删条目
+    expect(isRevoked("jti-stale")).toBe(false);
+  });
+
+  it("端到端：撤销后的同 token verifyLocalToken 返回 null", async () => {
+    const { revokeJti } = await import("./lib/session-revocation");
+    const { signLocalToken, verifyLocalToken } = await import("./local-auth");
+    const { env } = await import("./lib/env");
+    const token = await signLocalToken("admin");
+
+    // 撤销前：smoke，应能验证通过
+    expect(await verifyLocalToken(token)).not.toBeNull();
+
+    // 模拟 logout：用 jose 直接拿 jti + exp（与 router 内 logout 路径同源）
+    const { payload } = await jose.jwtVerify(
+      token,
+      new TextEncoder().encode(env.jwtSecret),
+      { algorithms: ["HS256"] },
+    );
+    expect(typeof payload.jti).toBe("string");
+    expect(typeof payload.exp).toBe("number");
+    revokeJti(payload.jti as string, (payload.exp as number) * 1000);
+
+    // 撤销后：同 token 验证失败（M4 修复目标）
+    expect(await verifyLocalToken(token)).toBeNull();
+  });
+
+  it("撤销不影响其他 jti 的 token", async () => {
+    const { revokeJti } = await import("./lib/session-revocation");
+    const { signLocalToken, verifyLocalToken } = await import("./local-auth");
+    const { env } = await import("./lib/env");
+    const a = await signLocalToken("admin");
+    const b = await signLocalToken("admin");
+
+    const { payload: pa } = await jose.jwtVerify(
+      a,
+      new TextEncoder().encode(env.jwtSecret),
+      { algorithms: ["HS256"] },
+    );
+    revokeJti(pa.jti as string, (pa.exp as number) * 1000);
+
+    expect(await verifyLocalToken(a)).toBeNull();
+    // b 是另一次签发，jti 不同，应仍可验证
+    expect(await verifyLocalToken(b)).not.toBeNull();
   });
 });

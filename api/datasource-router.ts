@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, desc, and, sql, isNull, isNotNull, inArray } from "drizzle-orm";
+import { eq, desc, and, ne, sql, isNull, isNotNull, inArray } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
@@ -331,13 +331,25 @@ export const datasourceRouter = createRouter({
       }
 
       const config = (ds.config as Record<string, unknown>) || {};
+
+      // t9/L3 修复：DB 层条件更新锁——并发双击在 DB 层被拒，不双跑。
+      // 守卫加在 sync 最早：先拿锁再做连接器解析、listFiles、ingestion。
+      // sync 失败/异常路径（line 360+ 与 catch）各自把 status 写回 "error"，锁在完成后正常释放。
+      // 进程被 kill 留 status=syncing 是已有风险，本任务不动。
+      const [locked] = await db.update(dataSources)
+        .set({ status: "syncing" })
+        .where(and(
+          eq(dataSources.id, input.id),
+          ne(dataSources.status, "syncing"),
+        ))
+        .returning({ id: dataSources.id });
+      if (!locked) {
+        return { success: false, message: "该数据源正在同步中" };
+      }
+
       // 与 testConnection 共用 resolveConnectorFor（t12）——两条入口对"这个源到底能不能连"
       // 只允许有一个答案。resolvePlatform 的类型名兜底（nas → "nas"、rss → "rss"）仍在里面。
       const resolved = resolveConnectorFor(ds.type, config);
-
-      await db.update(dataSources)
-        .set({ status: "syncing" })
-        .where(eq(dataSources.id, input.id));
 
       try {
         // 解析不出可用连接器 = 本轮连"去哪儿取条目"都不知道，一条也不可能同步。

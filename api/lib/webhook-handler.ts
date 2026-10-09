@@ -1,6 +1,7 @@
 /**
  * 工作流 webhook 触发端点的纯函数：boot.ts 调用，测试覆盖。
  * HMAC token 鉴权 + 调 triggerWebhookWorkflow，返回 HTTP Response 形态。
+ * t6/M2：token 纳入 workflow.updatedAtMs——改工作流即换 token，可轮换。
  */
 import { verifyWebhookToken } from "./csrf";
 
@@ -9,6 +10,8 @@ export interface WebhookDeps {
   parseWorkflowId: (raw: string) => number | undefined;
   /** 从 env/配置中拿 jwtSecret */
   jwtSecret: string;
+  /** 工作流行 updatedAt（毫秒）—— 拼入 HMAC payload，改工作流即换 token */
+  workflowUpdatedAtMs: number;
   /** 真实触发工作流的副作用函数 */
   trigger: (id: number, payload: Record<string, unknown>) => Promise<{ runId: number } | { error: string }>;
 }
@@ -23,7 +26,7 @@ export async function handleWebhookTrigger(
 ): Promise<WebhookResponse> {
   const id = deps.parseWorkflowId(workflowIdRaw);
   if (id === undefined) return { status: 400, body: { success: false, error: "无效的工作流 ID" } };
-  if (!verifyWebhookToken(id, token, deps.jwtSecret)) {
+  if (!verifyWebhookToken(id, token, deps.workflowUpdatedAtMs, deps.jwtSecret)) {
     return { status: 403, body: { success: false, error: "Invalid webhook token" } };
   }
   const safePayload = (typeof payload === "object" && payload !== null) ? payload as Record<string, unknown> : {};

@@ -146,8 +146,17 @@ export async function triggerWebhookWorkflow(
   return { runId };
 }
 
-export function getWebhookUrl(workflowId: number, baseUrl: string): string {
-  // webhook 以 HMAC token 鉴权（boot.ts 校验 ?token=），token 由 JWT_SECRET 派生
-  const token = webhookToken(workflowId, env.jwtSecret);
+export async function getWebhookUrl(workflowId: number, baseUrl: string): Promise<string> {
+  // t6/M2：token 纳入 workflow.updatedAt——改工作流即换 token，可轮换。
+  // DB 查一次 updatedAt（毫秒），拼到 token 中。workflow 不存在时退化到 0（生成的 token
+  // 永远不会被任何 verify 命中——调方应先确认 workflow 存在）。
+  const db = getDb();
+  const rows = await db
+    .select({ updatedAt: workflows.updatedAt })
+    .from(workflows)
+    .where(eq(workflows.id, workflowId))
+    .limit(1);
+  const updatedAtMs = rows[0]?.updatedAt ? rows[0].updatedAt.getTime() : 0;
+  const token = webhookToken(workflowId, updatedAtMs, env.jwtSecret);
   return `${baseUrl.replace(/\/$/, "")}/api/workflows/${workflowId}/webhook?token=${token}`;
 }

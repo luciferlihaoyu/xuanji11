@@ -34,6 +34,7 @@ import { registerConnector, type CloudConnector, type CloudFile } from './base';
 import { assertEgressAllowed } from '../lib/egress';
 import { safeFetch, type SafeFetchResponse } from '../lib/safe-fetch';
 import { parseFeed, type FeedEntry, type ParsedFeed } from './feed-parse';
+import { TextDecoder as NodeTextDecoder } from 'node:util';
 
 /** 整条「抓取链」的总超时（含所有重定向跳）：一次 signal 贯穿全链，不逐跳续期 */
 const TIMEOUT_MS = 30_000;
@@ -427,22 +428,58 @@ function checkDeclaredLength(res: SafeFetchResponse): void {
   }
 }
 
+/**
+ * t7/M3 修复：按字节特征 + 响应头声明探测 charset。优先级 BOM > content-type > UTF-8。
+ * Node 20+ 默认 full ICU，TextDecoder 支持 gbk/gb18030；GBK 标准不规定 BOM，故 GBK 源
+ * 只能靠 content-type 声明识别。导出供单测。
+ */
+export function parseCharsetFromContentType(contentType: string | null | undefined): string | null {
+  if (!contentType) return null;
+  const m = /charset\s*=\s*"?([^";\s]+)"?/i.exec(contentType);
+  if (!m) return null;
+  const cs = m[1].toLowerCase().trim();
+  // Node TextDecoder 不接受 gb2312 标签；GBK 是其超集，统一标准化。
+  if (cs === "gb2312") return "gbk";
+  return cs;
+}
+
+/** 按字节前缀识别 BOM 标记；返回解码器标签或 null。BOM 是字节事实，胜过任何声明。 */
+export function detectBomCharset(buf: Uint8Array): string | null {
+  if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) return "utf-8";
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) return "utf-16le";
+  if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) return "utf-16be";
+  return null;
+}
+
+/** 构造 TextDecoder：fatal:false 永不抛解码错误，错误字节替换为 U+FFFD（下游解析仍可进行）。 */
+export function createDecoderForBytes(
+  firstChunk: Uint8Array,
+  declaredCharset: string | null,
+): NodeTextDecoder {
+  return new NodeTextDecoder(detectBomCharset(firstChunk) ?? declaredCharset ?? "utf-8", { fatal: false });
+}
+
 /** 按字节护栏读取响应体：边读边累计字节数，超限立即中断并取消 reader（绝不把 12MB 全抽完） */
 async function readBodyWithByteCap(res: SafeFetchResponse): Promise<string> {
   checkDeclaredLength(res);
 
+  const declaredCharset = parseCharsetFromContentType(res.headers.get("content-type"));
+
   const stream = res.body;
-  if (!stream || typeof stream.getReader !== 'function') {
-    // 无流可读（理论上只剩 body 为 null 的形态）：回退一次性取文本，仍按字节兜底
-    const text = await res.text();
-    return guardActualBytes(text, '一次性读取');
+  if (!stream || typeof stream.getReader !== "function") {
+    // 无流可读：拿原始字节后按探测 charset 解码。不能用 res.text()——它已按某 charset
+    // 解过一遍，字节信息已丢，对 GBK 源会得到整串的 "�"。
+    const buf = new Uint8Array(await res.arrayBuffer());
+    const decoder = createDecoderForBytes(buf, declaredCharset);
+    return guardActualBytes(decoder.decode(buf), "一次性读取");
   }
 
   const reader = stream.getReader();
-  const decoder = new TextDecoder('utf-8');
+  let decoder: NodeTextDecoder | undefined;
   const parts: string[] = [];
   let received = 0;
   let overflow = false;
+  let firstChunkConsumed = false;
 
   try {
     for (;;) {
@@ -455,7 +492,14 @@ async function readBodyWithByteCap(res: SafeFetchResponse): Promise<string> {
         overflow = true;
         break;
       }
-      parts.push(decoder.decode(value, { stream: true }));
+      // 第一个 chunk：按 BOM > content-type > utf-8 创建流式 decoder。
+      // BOM 探测必须以**原始字节**为输入——content-type 即使声明了相反 charset，
+      // BOM 仍胜出，因为 BOM 是字节上的事实标记。
+      if (!firstChunkConsumed) {
+        firstChunkConsumed = true;
+        decoder = createDecoderForBytes(value, declaredCharset);
+      }
+      parts.push(decoder!.decode(value, { stream: true }));
     }
   } catch (e) {
     // 流中途报错（连接被切断、body stream terminated、非法编码等）包装成可读错误，
@@ -474,12 +518,12 @@ async function readBodyWithByteCap(res: SafeFetchResponse): Promise<string> {
 
   let text: string;
   try {
-    parts.push(decoder.decode());
-    text = parts.join('');
+    if (decoder) parts.push(decoder.decode()); // 流末尾 flush
+    text = parts.join("");
   } catch (e) {
-    throw new Error(`RSS 响应体解码失败（非 UTF-8 或内容被截断）：${clipText(errMessage(e), CLIP_DETAIL)}`);
+    throw new Error(`RSS 响应体解码失败（流末尾 flush 失败）：${clipText(errMessage(e), CLIP_DETAIL)}`);
   }
-  return guardActualBytes(text, '读取完成');
+  return guardActualBytes(text, "读取完成");
 }
 
 /** 兜底：实读字节数仍超限（例如源站谎报 content-length）则拒绝 */

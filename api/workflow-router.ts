@@ -271,8 +271,8 @@ export const workflowRouter = createRouter({
   // 回调地址含 HMAC token，仅管理员可取
   webhookUrl: adminQuery
     .input(z.object({ id: z.number(), baseUrl: z.string().optional() }))
-    .query(({ input, ctx }) => {
+    .query(async ({ input, ctx }) => {
       const baseUrl = input.baseUrl ?? (ctx.req?.headers?.get("origin") || "http://localhost:3000");
-      return { url: getWebhookUrl(input.id, baseUrl) };
+      return { url: await getWebhookUrl(input.id, baseUrl) };
     }),
 });

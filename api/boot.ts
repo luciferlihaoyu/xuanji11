@@ -10,7 +10,7 @@ import { Paths } from "@contracts/constants";
 import { saveUploadedFile, deleteUploadedFile, getFileStream } from "./upload-handler";
 import { ingestFile } from "./lib/ingestion";
 import { getDb } from "./queries/connection";
-import { uploadedFiles, ingestionItems } from "@db/schema";
+import { uploadedFiles, ingestionItems, workflows } from "@db/schema";
 import { eq, desc, sql } from "drizzle-orm";
 import { triggerWebhookWorkflow, startWorkflowScheduler } from "./lib/workflow-scheduler";
 import { startBackupScheduler } from "./lib/backup-scheduler";
@@ -405,16 +405,40 @@ app.use("/api/trpc/*", async (c) => {
 
 app.post("/api/workflows/:id/webhook", async (c) => {
   try {
-    // 外部系统回调：HMAC token 鉴权（?token=），不要求会话 cookie。
+    // 外部系统回调：HMAC token 鉴权。t6/M2：
+    //   - 优先 X-Webhook-Token header（token 不落 URL 就不进代理日志/Referer/历史）
+    //   - ?token= query 仍兼容（boot.ts 老调用方过渡），但 console.warn
+    //   - token 纳入 workflow.updatedAtMs——改工作流即换 token
     // 业务逻辑走 handleWebhookTrigger（已抽离单测覆盖）。
+    const headerToken = c.req.header("x-webhook-token");
+    const queryToken = c.req.query("token") ?? "";
+    const token = headerToken ?? (queryToken ? (() => {
+      console.warn("[Webhook] query token 鉴权已弃用，请改用 X-Webhook-Token header");
+      return queryToken;
+    })() : "");
     const rawPayload = await c.req.json().catch(() => ({}));
+
+    // 查 updatedAt 以参与 HMAC（boot.ts 调一次 DB；tRPC 端点那侧也各自查，缓存留给上层）
+    const id = parsePositiveIntId(c.req.param("id") ?? "");
+    let updatedAtMs = 0;
+    if (id !== undefined) {
+      const db = getDb();
+      const rows = await db
+        .select({ updatedAt: workflows.updatedAt })
+        .from(workflows)
+        .where(eq(workflows.id, id))
+        .limit(1);
+      updatedAtMs = rows[0]?.updatedAt ? rows[0].updatedAt.getTime() : 0;
+    }
+
     const result = await handleWebhookTrigger(
       c.req.param("id") ?? "",
-      c.req.query("token") ?? "",
+      token,
       rawPayload,
       {
         parseWorkflowId: parsePositiveIntId,
         jwtSecret: env.jwtSecret,
+        workflowUpdatedAtMs: updatedAtMs,
         trigger: triggerWebhookWorkflow,
       },
     );

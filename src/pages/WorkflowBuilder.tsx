@@ -1151,8 +1151,13 @@ export default function WorkflowBuilder() {
                   </button>
                 </div>
                 {webhookEnabled && workflowId && (
-                  <div className="p-2 rounded text-[10px] break-all" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
-                    {webhookUrl || '保存后生成 URL'}
+                  <div className="space-y-1">
+                    <div className="p-2 rounded text-[10px] break-all" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+                      {webhookUrl || '保存后生成 URL'}
+                    </div>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      建议在外部系统用 <code className="px-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)' }}>X-Webhook-Token</code> header 传 token，避免 token 进入代理日志 / Referer / 浏览器历史记录。改工作流会自动换 token。
+                    </p>
                   </div>
                 )}
                 {webhookEnabled && !workflowId && (

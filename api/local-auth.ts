@@ -22,6 +22,7 @@ import {
   isLoginLocked,
   recordLoginFailure,
 } from "./login-rate-limit";
+import { isRevoked, revokeJti } from "./lib/session-revocation";
 
 const JWT_ALG = "HS256";
 const LOCAL_ADMIN_UNION_ID = "local_admin";
@@ -192,6 +193,9 @@ export async function verifyLocalToken(
       return null;
     }
 
+    // t8/M4：jti 黑名单检查。登出后立即使 token 失效——即使 cookie 已被泄露。
+    if (isRevoked(payload.jti)) return null;
+
     const passwordChangedAt = await getAdminPasswordChangedAt();
     if (passwordChangedAt && payload.iat * 1000 + 999 < passwordChangedAt.getTime()) {
       return null;
@@ -277,6 +281,24 @@ export function isTrustedMutationRequest(req: Request): boolean {
 
 export function createLocalLogoutHandler() {
   return async (c: Context) => {
+    // t8/M4：服务端撤销——把当前 token 的 jti 加入黑名单，使其后续 verify 失败。
+    // 即使 cookie 已被 XSS/共享设备拷贝，原始会话登出后立刻失效。
+    const cookies = cookie.parse(c.req.raw.headers.get("cookie") || "");
+    const token = cookies[Session.cookieName];
+    if (token) {
+      try {
+        const { payload } = await jose.jwtVerify(token, getSecret(), {
+          algorithms: [JWT_ALG],
+          clockTolerance: 60,
+        });
+        if (typeof payload.jti === "string" && typeof payload.exp === "number") {
+          revokeJti(payload.jti, payload.exp * 1000);
+        }
+      } catch {
+        // 解析失败也允许登出（清空 cookie 即可）；黑名单失败不阻塞登出 UX
+      }
+    }
+
     const cookieOpts = getSessionCookieOptions(c.req.raw.headers);
     setCookie(c, Session.cookieName, "", {
       ...cookieOpts,

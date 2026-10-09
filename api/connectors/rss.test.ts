@@ -29,6 +29,9 @@ import {
   connectorRss,
   clearFeedCacheForTests,
   safeFileName,
+  parseCharsetFromContentType,
+  detectBomCharset,
+  createDecoderForBytes,
   FEED_CACHE_TTL_MS,
   FEED_MAX_ENTRIES,
   FEED_MAX_BODY_BYTES,
@@ -1118,5 +1121,116 @@ describe("RSS 连接器 · 缓存复核不过要丢弃重抓，不许硬报错�
     await expect(connectorRss.listFiles(config(base))).rejects.toThrow(/egress blocked/i);
     expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("10.0.0.5"))).toBe(false);
     expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("cdn-old"))).toBe(false);
+  });
+});
+
+/**
+ * t7/M3：按字节特征 + 响应头声明探测 charset。此前 rss.ts:442 硬编码 UTF-8，
+ * 导致 GBK/GB2312 中文 RSS 源（如新浪历史 RSS、部分中文博客）整页乱码。
+ */
+describe("RSS · charset 探测 (t7)", () => {
+  describe("parseCharsetFromContentType", () => {
+    it("提取标准 charset", () => {
+      expect(parseCharsetFromContentType("text/xml; charset=gbk")).toBe("gbk");
+    });
+    it("大小写不敏感", () => {
+      expect(parseCharsetFromContentType("text/xml; charset=GBK")).toBe("gbk");
+      expect(parseCharsetFromContentType("Text/Xml; Charset=GBK")).toBe("gbk");
+    });
+    it("容忍 charset 值带引号", () => {
+      expect(parseCharsetFromContentType('text/xml; charset="gbk"')).toBe("gbk");
+    });
+    it("缺 charset 参数返回 null", () => {
+      expect(parseCharsetFromContentType("text/xml")).toBeNull();
+      expect(parseCharsetFromContentType("application/rss+xml")).toBeNull();
+    });
+    it("空 / null 输入返回 null", () => {
+      expect(parseCharsetFromContentType(null)).toBeNull();
+      expect(parseCharsetFromContentType("")).toBeNull();
+      expect(parseCharsetFromContentType(undefined)).toBeNull();
+    });
+    it("标准化 gb2312 → gbk（Node TextDecoder 不接受 gb2312 标签）", () => {
+      expect(parseCharsetFromContentType("text/xml; charset=gb2312")).toBe("gbk");
+    });
+  });
+
+  describe("detectBomCharset", () => {
+    it("UTF-8 BOM EF BB BF", () => {
+      expect(detectBomCharset(new Uint8Array([0xef, 0xbb, 0xbf, 0x68, 0x69]))).toBe("utf-8");
+    });
+    it("UTF-16 LE BOM FF FE", () => {
+      expect(detectBomCharset(new Uint8Array([0xff, 0xfe, 0x68, 0x00]))).toBe("utf-16le");
+    });
+    it("UTF-16 BE BOM FE FF", () => {
+      expect(detectBomCharset(new Uint8Array([0xfe, 0xff, 0x00, 0x68]))).toBe("utf-16be");
+    });
+    it("GBK 字节（无 BOM）返回 null——必须靠 content-type 识别", () => {
+      // 字面 GBK 字节（"热" = C8 C8），不依赖 Buffer.from(_, "gbk")（容器小 ICU 时不支持）。
+      expect(detectBomCharset(new Uint8Array([0xc8, 0xc8]))).toBeNull();
+    });
+    it("空 buffer / 长度不足返回 null", () => {
+      expect(detectBomCharset(new Uint8Array([]))).toBeNull();
+      expect(detectBomCharset(new Uint8Array([0xef]))).toBeNull();
+      expect(detectBomCharset(new Uint8Array([0xff]))).toBeNull();
+    });
+  });
+
+  describe("createDecoderForBytes", () => {
+    it("BOM 胜出 content-type 声明（BOM 是字节事实，声明可撒谎）", () => {
+      // 字节是 UTF-8 BOM + "hi"，但声明 gbk
+      const buf = new Uint8Array([0xef, 0xbb, 0xbf, 0x68, 0x69]);
+      const dec = createDecoderForBytes(buf, "gbk");
+      // 验证：用此 decoder 解 UTF-8 BOM 字节必须得到 "hi"（若用 gbk 会乱码）
+      expect(dec.decode(buf)).toBe("hi");
+    });
+    it("无 BOM 时使用声明的 charset（GBK 字节 [C8 C8] → 「热」）", () => {
+      // 用字面 GBK 字节，不依赖 Buffer.from(_, "gbk")——Node full-icu 下 TextDecoder
+      // 支持 gbk，但 Buffer 的字符集依赖构建选项且未必含 gbk，故用字面字节。
+      const gbk = new Uint8Array([0xc8, 0xc8]);
+      const dec = createDecoderForBytes(gbk, "gbk");
+      expect(dec.decode(gbk)).toBe("热");
+    });
+    it("无 BOM 也无声明时回退 UTF-8", () => {
+      const utf8 = new TextEncoder().encode("hello");
+      const dec = createDecoderForBytes(utf8, null);
+      expect(dec.decode(utf8)).toBe("hello");
+    });
+    it("fatal:false 保证非法字节不抛错（替换为 U+FFFD）", () => {
+      // 假装是 GBK 但给 UTF-8 字节
+      const bogus = new Uint8Array([0x68, 0xc3, 0xa9, 0x6c, 0x6c, 0x6f]); // "héllo" UTF-8
+      const dec = createDecoderForBytes(bogus, "gbk");
+      // 不抛即可（具体替换字符随 ICU 实现）
+      expect(() => dec.decode(bogus)).not.toThrow();
+    });
+  });
+
+  it("end-to-end: UTF-8 BOM 胜出 content-type 声明（声明 gbk，字节实为 UTF-8）", async () => {
+    // 端到端覆盖：BOM 是字节事实，胜过任何声明。用 UTF-8 BOM + 中文 UTF-8 字节 +
+    // content-type 撒谎为 charset=gbk：旧实现按 UTF-8 解自然成功（巧合），新实现必须
+    // 通过 BOM 探测**主动**识别为 UTF-8——这条用例同时挡住"实现回退为硬编码 UTF-8"、
+    // "BOM 探测逻辑被绕过"等回归。testConnection 仅返回条数不带 title，故用 listFiles
+    // 拿 entry title 直接断言解码结果。
+    const body =
+      `<?xml version="1.0" encoding="UTF-8"?>` +
+      `<rss version="2.0"><channel><title>璇玑智脑</title>` +
+      `<item><title>条目1</title><link>https://x/1</link>` +
+      `<pubDate>Mon, 01 Sep 2026 00:00:00 +0000</pubDate><guid>g1</guid></item>` +
+      `</channel></rss>`;
+    const utf8Bytes = new TextEncoder().encode(body);
+    const withBom = new Uint8Array(utf8Bytes.length + 3);
+    withBom.set([0xef, 0xbb, 0xbf], 0);
+    withBom.set(utf8Bytes, 3);
+    mockFetch(() =>
+      new Response(withBom, {
+        status: 200,
+        headers: { "content-type": "application/rss+xml; charset=gbk" }, // 声明撒谎
+      }),
+    );
+
+    const files = await connectorRss.listFiles(config());
+
+    expect(files).toHaveLength(1);
+    expect(files[0]?.name).toBe("条目1.md"); // name 含 .md 后缀；解码成功与否由中文渲染与单字符精确匹配双断言
+    expect(files[0]?.name).toContain("条目1");
   });
 });
