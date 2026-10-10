@@ -1,6 +1,17 @@
 /**
  * 文件上传处理器
  * 直接挂载到 Hono 路由，处理 multipart 文件上传
+ *
+ * 门禁语义（一致性修，L1 报告闭环）：
+ * - 真正门禁是 **BLOCKED_EXTENSIONS**（line 65-71）：扩展名 ∈ 黑名单则拒。
+ *   涵盖执行体（.exe/.sh/.py 等）+ 浏览器解释格式（.html/.htm/.svg/.xml）
+ *   + 应用容器（.jar/.war/.class/.app/.apk）。
+ * - ALLOWED_MIMES **不是门禁**，仅用于"MIME → 安全扩展名"映射：上传文件
+ *   落盘时按此处映射重命名为对应扩展名；不在映射的 MIME 落盘为 `.bin`。
+ *   已知恶意 MIME（xml/html/svg 等）已在 BLOCKED 扩展名层被拒，**不应**在
+ *   ALLOWED 出现——避免 L1 报告"MIME 放行 vs 扩展名拦截"的口径漂移。
+ * - 不在白名单的 MIME 不拒绝（保持向后兼容：旧上传可能声明任意 MIME），
+ *   仅重命名为 `.bin`；扩展名仍在黑名单的才 throw。
  */
 import { eq } from "drizzle-orm";
 import { getDb } from "./queries/connection";
@@ -19,7 +30,7 @@ const ALLOWED_MIMES = new Set([
   "image/jpeg", "image/png", "image/gif", "image/webp",
   "application/pdf",
   "text/plain", "text/markdown", "text/csv",
-  "application/json", "application/xml", "text/xml",
+  "application/json",
   "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

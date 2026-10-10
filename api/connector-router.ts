@@ -6,7 +6,7 @@ import { systemSettings } from "@db/schema";
 import { clean } from "./lib/clean";
 import { getConnector, listConnectors as listRegisteredConnectors } from "./connectors";
 import { logAudit } from "./lib/audit";
-import { maskConnectorConfig, stripMaskedSecrets, redactAuditInput } from "./lib/setting-mask";
+import { maskConnectorConfig, stripMaskedSecrets, redactAuditInput, deepMergeObjects } from "./lib/setting-mask";
 import {
   searchContext as runSearchContext,
   writeTaskMemory as runWriteTaskMemory,
@@ -92,7 +92,8 @@ export const connectorRouter = createRouter({
       let merged: Record<string, unknown> = { ...safeConfig };
       if (existing[0]?.value) {
         try {
-          merged = { ...(JSON.parse(existing[0].value) as Record<string, unknown>), ...safeConfig };
+          // t2（Reviewer B P1 闭环）：嵌套 config 用深合并，避免"改顶层字段毁掉嵌套凭据"
+          merged = deepMergeObjects(JSON.parse(existing[0].value) as Record<string, unknown>, safeConfig);
         } catch {
           // 旧行是脏 JSON：无法合并，按提交值落库（与旧行为同向，不额外抛错）
         }

@@ -2,7 +2,7 @@
  * 登录失败限流（双桶）。
  *
  * H2/M8 修复（PLAN-安全修复-v1 t1）：
- * - 辅助桶 `ip::username`：沿用旧口径（LOGIN_FAILURE_LIMIT 次 / LOGIN_FAILURE_WINDOW_MS）。
+ * - 辅助桶 `ip:<ip>::<user>`：沿用旧口径（LOGIN_FAILURE_LIMIT 次 / LOGIN_FAILURE_WINDOW_MS）。
  *   IP 由 local-auth 的 getClientIp 经 lib/trusted-ip 可信解析得到，XFF 首段伪造不再生效；
  * - 全局用户名桶 `username:<name>`：与 IP 无关，LOGIN_GLOBAL_USER_LIMIT 次 /
  *   LOGIN_GLOBAL_USER_WINDOW_MS——攻击者轮换 IP（或直连场景整体伪造 XFF）也无法绕过，
@@ -10,6 +10,11 @@
  * - 任一桶锁定即拒（isLoginLocked），登录成功清两桶（clearLoginFailures）；
  * - Map 容量 MAX_TRACKED 硬上限（超出驱逐最久未活跃条目，**锁定中的桶豁免**——否则
  *   洪水可把锁定中的桶挤出，见 enforceCapacity）+ 1 分钟周期清理（unref）。
+ *
+ * 桶键命名空间：`ip:` / `username:` 前缀便于日志/grep/未来排错时区分；内部分隔符
+ * `::` 信任 trusted-ip 输出为 IPv4 字符串形态——若未来支持 IPv6 部署，因 `::` 本身
+ * 是 IPv6 零段压缩符，键碰撞是已知 P3 风险（届时用 NUL/SOH 等不可打印分隔符或
+ * JSON 化 key，**不要**仅靠改前缀规避）。
  */
 
 const LOGIN_FAILURE_WINDOW_MS = 5 * 60 * 1000;
@@ -43,7 +48,9 @@ export function createLoginAttempt(username: string, clientIp: string): LoginAtt
   return {
     username,
     clientIp,
-    key: `${clientIp}::${username.trim().toLowerCase()}`,
+    // 桶键命名空间 `ip:` —— 与全局桶 `username:` 对称；trusted-ip 当前输出 IPv4
+    // 字符串形态，`::` 作为内部分隔符安全。IPv6 部署见文件头注释的 P3 风险。
+    key: `ip:${clientIp}::${username.trim().toLowerCase()}`,
   };
 }
 

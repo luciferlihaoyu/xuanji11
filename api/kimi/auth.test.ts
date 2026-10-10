@@ -217,7 +217,8 @@ describe("Kimi OAuth callback (t4)", () => {
       );
     });
 
-    it("derives from x-forwarded-* when env is unset", async () => {
+    it("derives from x-forwarded-* when env is unset and host is in TRUSTED_FORWARDED_HOSTS", async () => {
+      process.env.TRUSTED_FORWARDED_HOSTS = "proxy.example.com";
       const state = issueOAuthState();
 
       await makeApp().request(`http://localhost${CALLBACK}?code=abc&state=${state}`, {
@@ -225,6 +226,31 @@ describe("Kimi OAuth callback (t4)", () => {
       });
 
       expect(lastTokenExchangeBody()?.get("redirect_uri")).toBe(`https://proxy.example.com${CALLBACK}`);
+    });
+
+    it("ignores x-forwarded-host when not in TRUSTED_FORWARDED_HOSTS allow-list (Reviewer B 闭环)", async () => {
+      // 白名单不包含 proxy.example.com → XFF 不可信，回退到 URL origin
+      process.env.TRUSTED_FORWARDED_HOSTS = "app.example.com,www.example.com";
+      const state = issueOAuthState();
+
+      await makeApp().request(`http://localhost${CALLBACK}?code=abc&state=${state}`, {
+        headers: { "x-forwarded-proto": "https", "x-forwarded-host": "proxy.example.com" },
+      });
+
+      // 关键：未命中白名单 → fallback 到 URL origin（http://localhost），**不**用 XFF
+      expect(lastTokenExchangeBody()?.get("redirect_uri")).toBe(`http://localhost${CALLBACK}`);
+    });
+
+    it("ignores x-forwarded-host entirely when TRUSTED_FORWARDED_HOSTS is unset (defense-in-depth)", async () => {
+      // 未配置白名单 → 任何 XFF 都不信（含合法 host）—— 部署侧须显式 opt-in
+      delete process.env.TRUSTED_FORWARDED_HOSTS;
+      const state = issueOAuthState();
+
+      await makeApp().request(`http://localhost${CALLBACK}?code=abc&state=${state}`, {
+        headers: { "x-forwarded-proto": "https", "x-forwarded-host": "proxy.example.com" },
+      });
+
+      expect(lastTokenExchangeBody()?.get("redirect_uri")).toBe(`http://localhost${CALLBACK}`);
     });
 
     it("falls back to the request origin when no proxy headers exist", async () => {

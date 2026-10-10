@@ -77,16 +77,21 @@ export async function authenticateRequest(headers: Headers) {
   return user;
 }
 
+import { getTrustedForwardedHost } from "../lib/trusted-host";
+
 /**
  * t4/H4：redirectUri 与 state 解耦，取固定可信来源。
- * 优先级：env.KIMI_REDIRECT_URI（部署显式配置）> X-Forwarded-* 请求头推算 > 请求 URL 推算。
+ * 优先级：env.KIMI_REDIRECT_URI（部署显式配置）> TRUSTED_FORWARDED_HOSTS 白名单
+ * 命中 XFF > 请求 URL 推算。
  * 历史实现把 redirectUri base64 编码进 state（atob(state)），等于让攻击者任意指定。
+ * XFF 不在白名单时 getTrustedForwardedHost 返回 null，落到 URL origin 兜底——
+ * "宁失 header 不被伪造劫持"。
  */
 function resolveRedirectUri(c: Context): string {
   if (env.kimiRedirectUri) return env.kimiRedirectUri;
   const headers = c.req.raw.headers;
   const proto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  const host = headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const host = getTrustedForwardedHost(c.req.raw);
   if (host) return `${proto || "https"}://${host}${Paths.oauthCallback}`;
   try {
     return new URL(c.req.url).origin + Paths.oauthCallback;

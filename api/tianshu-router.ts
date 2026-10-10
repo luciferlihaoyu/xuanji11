@@ -1,9 +1,15 @@
 /**
  * 天枢 (Tianshu / New API 兼容网关) 模型管理路由
  *
- * - 从天枢拉取可用模型列表
+ * - 从天枢拉取可用模型列表（用 safeFetch + scope="admin" 走 egress 校验）
  * - 对话模型选择：持久化到 system_settings.tianshu_chat_model，关键词提取等 LLM 调用立即生效
  * - 嵌入模型选择：写入 embedding_model（legacy 配置键），并停用向量模板以使其生效
+ *
+ * L2 修复（Reviewer B L2 / 之前的 L2 报告）：tianshu 原用 global fetch 直连出网——
+ * admin 改 TIANSHU_BASE_URL 到内网即触发 SSRF。改用 safeFetch（DNS 钉死 + 协议
+ * 白名单 + egress allowlist）；scope="admin" 让 admin 显式配的固定服务目标在
+ * 60s 缓存窗口内复用校验，但管理员放行内网（EGRESS_ALLOW_PRIVATE_NET=true）
+ * 是部署侧显式决策。
  */
 import { z } from "zod";
 import { eq } from "drizzle-orm";
@@ -11,6 +17,8 @@ import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { systemSettings } from "@db/schema";
 import { tianshuApiUrl, tianshuApiKey, tianshuEnabled, tianshuBaseUrl } from "./lib/tianshu";
+import { safeFetch } from "./lib/safe-fetch";
+import { EgressError } from "./lib/egress";
 import { logAudit } from "./lib/audit";
 
 export const TIANSHU_CHAT_MODEL_KEY = "tianshu_chat_model";
@@ -79,20 +87,28 @@ export const tianshuRouter = createRouter({
       return { ok: false as const, error: "TIANSHU_API_KEY 未配置", models: [] as string[] };
     }
     try {
-      const resp = await fetch(`${tianshuApiUrl()}/models`, {
+      // L2 修复：用 safeFetch + scope="admin" 走 egress 校验，堵 SSRF
+      // （admin 改 TIANSHU_BASE_URL 到内网不再静默放行）。safeFetch 内部 DNS
+      // 钉死 + 协议白名单 + 每跳重新校验；timeout 仍由调用方 signal 控制。
+      const resp = await safeFetch(`${tianshuApiUrl()}/models`, {
         headers: { authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(15000),
+        scope: "admin",
       });
       if (!resp.ok) {
         return { ok: false as const, error: `天枢返回 HTTP ${resp.status}`, models: [] as string[] };
       }
-      const payload = (await resp.json()) as TianshuModelsPayload;
+      const payload = JSON.parse(await resp.text()) as TianshuModelsPayload;
       const models = (payload.data ?? [])
         .map((m) => m.id)
         .filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 255)
         .sort();
       return { ok: true as const, models };
     } catch (e) {
+      // EgressError：URL 被 egress 策略拒绝（内网 / 黑名单等）—— 提示管理员
+      if (e instanceof EgressError) {
+        return { ok: false as const, error: `天枢地址被出口策略拒绝: ${e.message}`, models: [] as string[] };
+      }
       return { ok: false as const, error: `天枢请求失败: ${e instanceof Error ? e.message : String(e)}`, models: [] as string[] };
     }
   }),

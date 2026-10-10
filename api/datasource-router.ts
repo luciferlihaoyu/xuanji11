@@ -11,7 +11,7 @@ import { env } from "./lib/env";
 import { getConnector, type CloudConnector } from "./connectors";
 import { ingestFile } from "./lib/ingestion";
 import { logAudit } from "./lib/audit";
-import { maskConnectorConfig, stripMaskedSecrets, redactAuditInput, isSecretKey } from "./lib/setting-mask";
+import { maskConnectorConfig, stripMaskedSecrets, redactAuditInput, isSecretKey, deepMergeObjects } from "./lib/setting-mask";
 
 const DATA_SOURCE_TYPES = ["cloud_drive", "nas", "database", "api", "webhook", "rss", "notion", "obsidian"] as const;
 type DataSourceType = (typeof DATA_SOURCE_TYPES)[number];
@@ -123,7 +123,8 @@ async function mergeConfigWithExisting(
 ): Promise<Record<string, unknown>> {
   const [existingRow] = await db.select().from(dataSources).where(eq(dataSources.id, id));
   const oldConfig = (existingRow?.config as Record<string, unknown> | null) ?? {};
-  return { ...oldConfig, ...nextConfig };
+  // t2（Reviewer B P1 闭环）：深合并嵌套 config——避免"改顶层字段静默清空嵌套凭据"
+  return deepMergeObjects(oldConfig, nextConfig);
 }
 
 function resolveConnectorFor(type: DataSourceType, config: Record<string, unknown>): ConnectorResolution {

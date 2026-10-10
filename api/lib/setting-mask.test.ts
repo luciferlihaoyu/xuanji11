@@ -6,6 +6,7 @@ import {
   isSecretKey,
   stripMaskedSecrets,
   redactAuditInput,
+  deepMergeObjects,
   MASK,
 } from "./setting-mask";
 
@@ -175,5 +176,52 @@ describe("redactAuditInput (t2 审计脱敏)", () => {
   it("非对象安全返回", () => {
     expect(redactAuditInput(null)).toBeNull();
     expect(redactAuditInput("plain")).toBe("plain");
+  });
+});
+
+describe("deepMergeObjects (t2 Reviewer B P1 闭环)", () => {
+  it("顶层 key 浅合并（向后兼容）", () => {
+    expect(deepMergeObjects({ a: 1, b: 2 }, { b: 3, c: 4 })).toEqual({ a: 1, b: 3, c: 4 });
+  });
+
+  it("嵌套对象递归合并（关键：改顶层不毁掉嵌套凭据）", () => {
+    // 模拟连接器 config：auth 子树含 apiKey + tenantId；用户编辑 baseUrl
+    const old = { baseUrl: "https://old", auth: { apiKey: "secret-key", tenantId: "t1" } };
+    // strip 后：{ baseUrl, auth: {} } —— 旧 auth 嵌套子树应被保留
+    const merged = deepMergeObjects(old, { baseUrl: "https://new", auth: {} });
+    expect(merged).toEqual({
+      baseUrl: "https://new",
+      auth: { apiKey: "secret-key", tenantId: "t1" },
+    });
+  });
+
+  it("嵌套对象新值覆盖（用户显式修改嵌套字段）", () => {
+    const merged = deepMergeObjects(
+      { auth: { apiKey: "old", tenantId: "t1" } },
+      { auth: { tenantId: "t2" } },
+    );
+    // apiKey 保留，tenantId 覆盖
+    expect(merged).toEqual({ auth: { apiKey: "old", tenantId: "t2" } });
+  });
+
+  it("数组整体替换（不递归合并）", () => {
+    expect(deepMergeObjects({ tags: ["a", "b"] }, { tags: ["c"] })).toEqual({ tags: ["c"] });
+  });
+
+  it("标量 override 胜出（含 null 覆盖）", () => {
+    expect(deepMergeObjects({ x: 1, y: 2 }, { y: null })).toEqual({ x: 1, y: null });
+  });
+
+  it("override 缺失的键保留 base 值", () => {
+    expect(deepMergeObjects({ a: 1, b: 2 }, {})).toEqual({ a: 1, b: 2 });
+  });
+
+  it("不修改入参对象（immutable）", () => {
+    const base = { auth: { apiKey: "k" } };
+    const baseRef = base;
+    const merged = deepMergeObjects(base, { auth: { tenantId: "t" } });
+    expect(base).toEqual({ auth: { apiKey: "k" } }); // base 未变
+    expect(base).toBe(baseRef); // identity
+    expect(merged).not.toBe(base);
   });
 });
