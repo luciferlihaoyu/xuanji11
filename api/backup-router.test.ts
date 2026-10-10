@@ -289,8 +289,12 @@ describe("backup router target registry", () => {
 
     const uploadMock = vi.mocked(repo.uploadFile);
     // the async executeBackup should push files through the repo
-    await vi.waitFor(() => expect(uploadMock).toHaveBeenCalled());
-    await new Promise((resolve) => setImmediate(resolve));
+    // M5 加固后加密派生为 scrypt（同步 ~100ms/次），executeBackup 全链比 SHA-256 时代慢——
+    // 等 manifest.json **真正**上传完成，而不是单 tick 盲等（afterEach 会清 env key，
+    // 盲等会撞上"manifest 加密时 key 已被清空"的时序坑）
+    await vi.waitFor(() => {
+      expect(uploadMock.mock.calls.some((c) => c[1] === "manifest.json")).toBe(true);
+    });
     // manifest.json is uploaded last
     const uploadedPaths = uploadMock.mock.calls.map((c) => c[1] as string);
     expect(uploadedPaths[uploadedPaths.length - 1]).toBe("manifest.json");
@@ -635,8 +639,10 @@ describe("版本化快照目录（runDir）", () => {
     });
 
     const uploadMock = vi.mocked(repo.uploadFile);
-    await vi.waitFor(() => expect(uploadMock).toHaveBeenCalled());
-    await new Promise((resolve) => setImmediate(resolve));
+    // M5 加固后等待 manifest.json 真正上传（scrypt 派生耗时，单 tick 盲等会撞 afterEach 清 key）
+    await vi.waitFor(() => {
+      expect(uploadMock.mock.calls.some((c) => c[1] === "manifest.json")).toBe(true);
+    });
 
     const runDirs = new Set(uploadMock.mock.calls.map((c) => (c[0] as Record<string, unknown>).runDir));
     expect(runDirs.size).toBe(1);
