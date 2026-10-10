@@ -17,6 +17,9 @@ const dbState = vi.hoisted(() => ({
   persistedHash: null as string | null,
   storedHash: null as string | null,
   settings: {} as Record<string, string>,
+  accounts: [] as Array<{ id: number; username: string; role: string }>,
+  // @db/schema mock 的 localAccounts 表标识（fake db 按 from() 参数分流）
+  localAccountsTable: { __table: "localAccounts" } as Record<string, unknown>,
 }));
 
 vi.mock("./queries/connection", () => ({
@@ -33,8 +36,12 @@ vi.mock("./queries/connection", () => ({
       },
     }),
     select: () => ({
-      from: () => ({
-        where: async (key: string): Promise<readonly SettingRow[]> => {
+      from: (table: unknown) => ({
+        where: async (key: string): Promise<readonly SettingRow[] | readonly { id: number }[]> => {
+          // L4：localAccounts 表按 username 查账号行（eq mock 返回 value=username 字符串）
+          if (table === dbState.localAccountsTable) {
+            return dbState.accounts.filter((a) => a.username === key);
+          }
           const value = dbState.settings[key] ?? null;
           return value ? [{ value }] : [];
         },
@@ -58,6 +65,7 @@ vi.mock("@db/schema", () => ({
   systemSettings: {
     key: "key",
   },
+  localAccounts: dbState.localAccountsTable,
 }));
 
 vi.mock("@contracts/constants", () => ({
@@ -293,5 +301,49 @@ describe("session revocation (t8/M4)", () => {
     expect(await verifyLocalToken(a)).toBeNull();
     // b 是另一次签发，jti 不同，应仍可验证
     expect(await verifyLocalToken(b)).not.toBeNull();
+  });
+});
+
+describe("L4: 会话→User 的 id 对接 local_accounts", () => {
+  beforeEach(() => {
+    dbState.accounts = [];
+  });
+
+  it("账号在表 → user.id 来自表（多账号审计粒度，不再全部塌缩到 1）", async () => {
+    dbState.accounts = [{ id: 7, username: "ops", role: "admin" }];
+    const { signLocalToken, authenticateLocalRequest } = await import("./local-auth");
+    const token = await signLocalToken("ops");
+
+    const user = await authenticateLocalRequest(new Headers({ cookie: "xuanji.sid=" + token }));
+
+    expect(user).toBeDefined();
+    expect(user?.id).toBe(7);
+    expect(user?.name).toBe("ops");
+  });
+
+  it("账号不在表（历史部署未落 local_accounts）→ 回退 id=1 保持兼容", async () => {
+    const { signLocalToken, authenticateLocalRequest } = await import("./local-auth");
+    const token = await signLocalToken("admin");
+
+    const user = await authenticateLocalRequest(new Headers({ cookie: "xuanji.sid=" + token }));
+
+    expect(user).toBeDefined();
+    expect(user?.id).toBe(1);
+  });
+
+  it("多账号互不串号：ops 与 second 各拿各的 id", async () => {
+    dbState.accounts = [
+      { id: 7, username: "ops", role: "admin" },
+      { id: 9, username: "second", role: "viewer" },
+    ];
+    const { signLocalToken, authenticateLocalRequest } = await import("./local-auth");
+
+    const u7 = await authenticateLocalRequest(new Headers({ cookie: "xuanji.sid=" + (await signLocalToken("ops")) }));
+    const u9 = await authenticateLocalRequest(new Headers({ cookie: "xuanji.sid=" + (await signLocalToken("second")) }));
+
+    expect(u7?.id).toBe(7);
+    expect(u9?.id).toBe(9);
+    // 注：role 映射（claim.role → user/admin）属 t4 既有逻辑且 signLocalToken
+    // 默认签 admin；本用例只验证 L4 的 id 对接，不覆盖 role。
   });
 });

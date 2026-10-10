@@ -9,7 +9,7 @@ import bcrypt from "bcryptjs";
 import { setCookie } from "hono/cookie";
 import type { Context } from "hono";
 import { getDb } from "./queries/connection";
-import { systemSettings } from "@db/schema";
+import { systemSettings, localAccounts } from "@db/schema";
 import { eq } from "drizzle-orm";
 import { env } from "./lib/env";
 import { getTrustedClientIp } from "./lib/trusted-ip";
@@ -217,8 +217,18 @@ export async function authenticateLocalRequest(
   const claim = await verifyLocalToken(token);
   if (!claim) return undefined;
 
+  // L4：会话→User 的 id 对接 local_accounts（t4 引入表后的收尾对接）。
+  // 多本地账号部署下审计/createdBy 不再全部塌缩到 id=1；查不到（历史部署
+  // 账号未落表、或 env 引导的初始 admin 首登前）回退 1 保持兼容。
+  const db = getDb();
+  const accountRows = await db
+    .select({ id: localAccounts.id })
+    .from(localAccounts)
+    .where(eq(localAccounts.username, claim.username));
+  const accountId = accountRows[0]?.id ?? 1;
+
   const user: User = {
-    id: 1,
+    id: accountId,
     unionId: LOCAL_ADMIN_UNION_ID,
     name: claim.username,
     email: null,
