@@ -96,6 +96,56 @@ describe("chunkText", () => {
     // 相邻分块应有重叠内容
     expect(chunks[1].startsWith(chunks[0].slice(-100).slice(0, 10))).toBe(true);
   });
+
+  // ==== 回归：尾块退化 bug（原第 32 行 start += Math.max(slice.length - overlap, 1)）====
+  // 机理：文档尾部剩余长度 ≤ overlap 时 slice.length - overlap ≤ 0，Math.max 兜底成 1，
+  // 游标每轮只前进 1 字符，把尾部每一个后缀都当独立 chunk 吐出（100→99→…→1 字符）。
+  // 生产事故：doc 6130（9397 字符）被切成 106 块 = 6 正常块 + 100 个递减垃圾块；
+  // 全库 93.5%（209,205 块）不足 100 字符、含单字块；向量库灌水导致 hybrid 检索贴 50s 超时。
+  it("生产复现：9397 字符长文应切 14 块，不得出现递减碎片与单字块", () => {
+    const text = "x".repeat(9397); // 无句边界，隔离尾块退化路径（不受断行修剪干扰）
+    const chunks = chunkText(text, 800, 100);
+    expect(chunks.length).toBe(14); // 设计期望 ceil((9397-800)/(800-100)) + 1 = 14
+    expect(Math.min(...chunks.map((c) => c.length))).toBeGreaterThan(1); // 禁止单字块
+    expect(chunks.some((c, i) => i > 0 && c === chunks[i - 1].slice(1))).toBe(false); // 禁止「右移一位」退化指纹
+  });
+
+  it("小尾块（≤ maxChars）只输出一次后立即终止，不再递减", () => {
+    const text = "z".repeat(2950); // 4 个满块 + 150 字符尾块
+    const chunks = chunkText(text, 800, 100);
+    expect(chunks.map((c) => c.length)).toEqual([800, 800, 800, 800, 150]); // 修复前：尾块 150 后继续吐 100,99,…,1 共 100+ 块
+  });
+
+  it("尾块修复不丢内容：相邻重叠恰为 overlap，且拼接可重建全文", () => {
+    const text = "x".repeat(2950);
+    const chunks = chunkText(text, 800, 100);
+    for (let i = 1; i < chunks.length; i++) {
+      expect(chunks[i].slice(0, 100)).toBe(chunks[i - 1].slice(-100)); // overlap 语义保持
+    }
+    let rebuilt = chunks[0];
+    for (let i = 1; i < chunks.length; i++) rebuilt += chunks[i].slice(100);
+    expect(rebuilt).toBe(text); // 一个字符都不丢
+  });
+
+  it("参数化：不同 maxChars/overlap 组合同样不尾块退化（非硬编码 800/100）", () => {
+    const c1 = chunkText("a".repeat(780), 300, 50); // 修复前：3 块后尾块退化 50 个（50,49,…,1），共 53 块
+    expect(c1.map((c) => c.length)).toEqual([300, 300, 280]);
+    const c2 = chunkText("b".repeat(630), 200, 20); // 修复前：4 块后尾块退化 20 个，共 25 块
+    expect(c2.map((c) => c.length)).toEqual([200, 200, 200, 90]);
+    expect(c1.every((c) => c.length > 1)).toBe(true);
+    expect(c2.every((c) => c.length > 1)).toBe(true);
+  });
+
+  it("正常路径保持：含句边界长文仍产出 ≤maxChars 的块、块数符合设计期望、无碎块", () => {
+    const doc = ("段落".repeat(300) + "。\n").repeat(10); // 6020 字符，触发断行修剪路径
+    const chunks = chunkText(doc, 800, 100);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.length).toBeLessThanOrEqual(11); // 设计期望约 ceil((6020-800)/700)+1=9，修剪使步长变短容差 +2；修复前此处会追加 100 个递减碎块
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(800);
+      expect(chunk.length).toBeGreaterThan(10); // 修复后不得出现 1~9 字符碎块（修复前存在）
+    }
+  });
 });
 
 describe("indexDocumentById", () => {

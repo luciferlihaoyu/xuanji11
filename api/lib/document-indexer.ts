@@ -29,7 +29,15 @@ export function chunkText(text: string, maxChars = 800, overlap = 100): string[]
       }
     }
     chunks.push(slice.trim());
-    start += Math.max(slice.length - overlap, 1);
+    // 修复「尾块退化」：原实现是 start += Math.max(slice.length - overlap, 1)。
+    // 当文档尾部剩余 ≤ overlap 时 slice.length - overlap ≤ 0，Math.max 兜底成 1，
+    // 游标每轮只前进 1 个字符，于是把尾部每一个后缀都当独立 chunk 吐出
+    // （100→99→…→1 字符的递减垃圾块）——生产库 93.5% 的 <100 字符碎块即源于此，
+    // 向量库被灌水导致 hybrid 检索暴力 KNN 全扫、贴 50s 超时线。
+    // 本窗口已覆盖到文本末尾（end >= length），或尾块不足一个重叠窗（游标无法有效
+    // 前进）时，尾块已完整推出，必须立即终止循环，而不是 +1 继续退化。
+    if (end >= normalized.length || slice.length <= overlap) break;
+    start += slice.length - overlap;
   }
   return chunks.filter((c) => c.length > 0);
 }
