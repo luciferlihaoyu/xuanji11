@@ -38,12 +38,17 @@ export default function TopNavbar() {
     setUserMenuOpen(false);
   }, [location.pathname, location.search]);
 
-  // 移动端菜单展开时锁住 body 滚动
+  // 移动端菜单展开时锁住 body 滚动，并支持 Esc 关闭（与 MobileDrawer 同口径）
   useEffect(() => {
     if (!mobileMenuOpen) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = prev; };
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') setMobileMenuOpen(false); };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = prev;
+    };
   }, [mobileMenuOpen]);
 
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {

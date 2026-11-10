@@ -6,6 +6,7 @@ import { useVectorModelTemplate, useVectorModelTemplates } from '@/hooks/useSett
 import { trpc, trpcClient } from '@/providers/trpc';
 import PermissionSelector from '@/components/PermissionSelector';
 import MobileDrawer from '@/components/MobileDrawer';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { isSameDay, isWithinInterval, startOfDay, endOfDay, subDays } from 'date-fns';
 import { Search, Grid3X3, List, Plus, X, Activity, Shield, Zap, Users, Pencil, Trash2, Eye, EyeOff, KeyRound, Copy } from 'lucide-react';
 
@@ -60,6 +61,7 @@ function getAvatarGradient(name: string) {
 }
 
 export default function AgentManagement() {
+  const isMobile = useIsMobile();
   const { addToast } = useAppStore();
   const { agents, create, update, delete: deleteAgent, updatePermissions, testLlmConnection, isLoading } = useAgents();
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -887,7 +889,8 @@ export default function AgentManagement() {
         {detailBody}
       </MobileDrawer>
 
-      {selectedAgentData && (
+      {/* 移动端不挂载桌面常驻面板：否则它与抽屉各渲染一份 detailBody（同 id datalist 双实例） */}
+      {selectedAgentData && !isMobile && (
         <div className="hidden md:block fixed top-12 right-0 bottom-0 w-full sm:w-[480px] z-40 border-l overflow-y-auto animate-slide-in-right" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
           {detailBody}
         </div>

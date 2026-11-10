@@ -43,7 +43,7 @@ export default function AuditLog() {
       </div>
 
       <div className="border rounded-md table-scroll" style={{ borderColor: 'var(--border-subtle)' }}>
-        <table className="w-full min-w-[640px] sm:min-w-0 text-sm">
+        <table className="w-full min-w-[640px] sm:min-w-full text-sm">
           <thead style={{ backgroundColor: 'var(--bg-tertiary)' }}>
             <tr>
               {['时间', '用户', '操作', '详情'].map((h) => (

@@ -511,6 +511,8 @@ body {
   textarea,
   select {
     font-size: 16px !important;
+    /* 天演评审 P0-4：只改字号会让 h-9/py-0.5 这类紧凑输入框行高跳变，显式压住行高 */
+    line-height: 1.25 !important;
   }
 
   /* 触屏没有 hover，去掉点按高亮块与 300ms 延迟 */

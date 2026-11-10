@@ -1,6 +1,7 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 interface MobileDrawerProps {
   /** 是否展开（仅移动端 <768px 生效，桌面端直接不渲染） */
@@ -35,10 +36,17 @@ export default function MobileDrawer({
   children,
   ariaLabel,
 }: MobileDrawerProps) {
+  const isMobile = useIsMobile();
+  // onClose 常是内联箭头函数（每次渲染换身份），用 ref 持有，避免打开期间反复重挂 keydown / 反复改 body.overflow
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
-    if (!open) return;
+    // 桌面端不渲染本组件（见下方 md:hidden），若调用方在桌面把 open 置 true（桌面另有常驻面板），
+    // 这里必须直接返回，否则会把桌面 body 锁死滚动。
+    if (!open || !isMobile) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') onCloseRef.current();
     };
     document.addEventListener('keydown', onKeyDown);
     const prevOverflow = document.body.style.overflow;
@@ -47,9 +55,9 @@ export default function MobileDrawer({
       document.removeEventListener('keydown', onKeyDown);
       document.body.style.overflow = prevOverflow;
     };
-  }, [open, onClose]);
+  }, [open, isMobile]);
 
-  if (!open) return null;
+  if (!open || !isMobile) return null;
 
   return (
     <div className="fixed inset-0 z-[60] md:hidden" role="dialog" aria-modal="true" aria-label={ariaLabel}>

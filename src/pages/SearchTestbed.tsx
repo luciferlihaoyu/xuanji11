@@ -271,7 +271,8 @@ export default function SearchTestbed() {
 
       {/* ── 评测集管理 ── */}
       <div className="grid md:grid-cols-2 gap-4">
-        <div className="p-3 rounded-lg border" style={{ borderColor: 'var(--border-subtle)' }}>
+        {/* min-w-0：卡内 truncate/nowrap 长标题会把 grid 项目的 min-content 撑到 419px，390px 下溢出 41px（实测） */}
+        <div className="p-3 rounded-lg border min-w-0" style={{ borderColor: 'var(--border-subtle)' }}>
           <div className="text-sm font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>评测用例（{cases.length}）</div>
           <div className="flex flex-col sm:flex-row gap-2 mb-3">
             <input
@@ -320,7 +321,7 @@ export default function SearchTestbed() {
         </div>
 
         {/* ── 评测报告 ── */}
-        <div className="p-3 rounded-lg border" style={{ borderColor: 'var(--border-subtle)' }}>
+        <div className="p-3 rounded-lg border min-w-0" style={{ borderColor: 'var(--border-subtle)' }}>
           <div className="text-sm font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>评测报告</div>
           {!evalReport && (
             <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
