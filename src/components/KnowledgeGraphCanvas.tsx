@@ -1,4 +1,5 @@
 import { useRef, useEffect, useImperativeHandle, forwardRef, useCallback } from 'react';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 /**
  * Obsidian Graph View 风格的知识图谱画布（纯 Canvas 2D，零 WebGL 依赖）。
@@ -216,9 +217,16 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
     const cool = useRef(false);
     const rafId = useRef(0);
     const glowCache = useRef<Map<string, HTMLCanvasElement>>(new Map());
+    // 移动端降载：dpr 上限 1.5（桌面 2），景深尘埃点数减半
+    const isMobile = useIsMobile();
+    const mobileRef = useRef(isMobile);
+    useEffect(() => {
+      mobileRef.current = isMobile;
+    }, [isMobile]);
+
     // 景深尘埃（两层）：初始化一次，固定种子稳定分布
-    const dustNear = useRef(makeDust(THEME.dust.near));
-    const dustFar = useRef(makeDust(THEME.dust.far));
+    const dustNear = useRef(makeDust(mobileRef.current ? Math.max(1, Math.round(THEME.dust.near / 2)) : THEME.dust.near));
+    const dustFar = useRef(makeDust(mobileRef.current ? Math.max(1, Math.round(THEME.dust.far / 2)) : THEME.dust.far));
 
     // 视口变换
     const tx = useRef(0);
@@ -497,7 +505,7 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
       if (!cv) return;
       const ctx = cv.getContext('2d');
       if (!ctx) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, mobileRef.current ? 1.5 : 2);
       const W = cv.clientWidth;
       const H = cv.clientHeight;
 
@@ -746,7 +754,7 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
       const container = containerRef.current;
       if (!cv || !container) return;
       const apply = () => {
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const dpr = Math.min(window.devicePixelRatio || 1, mobileRef.current ? 1.5 : 2);
         cv.width = container.clientWidth * dpr;
         cv.height = container.clientHeight * dpr;
         cv.style.width = `${container.clientWidth}px`;
@@ -788,7 +796,8 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
         const sx = nd.x * scale.current + tx.current;
         const sy = nd.y * scale.current + ty.current;
         const d2 = (sx - mx) * (sx - mx) + (sy - my) * (sy - my);
-        const hitR = 14 * 14; // 屏幕空间 14px 命中半径（小节点也好点）
+        // 屏幕空间命中半径：桌面 14px；触屏 22px（手指比鼠标粗，小节点也能点中）
+        const hitR = (mobileRef.current ? 22 : 14) ** 2;
         if (d2 < hitR && d2 < bd) {
           bd = d2;
           best = i;
@@ -1003,8 +1012,8 @@ const KnowledgeGraphCanvas = forwardRef<KnowledgeGraphCanvasHandle, KnowledgeGra
     }));
 
     return (
-      <div ref={containerRef} className="absolute inset-0" style={{ zIndex: 1 }}>
-        <canvas ref={canvasRef} style={{ display: 'block', cursor: 'grab' }} />
+      <div ref={containerRef} className="absolute inset-0 touch-pan-canvas" style={{ zIndex: 1 }}>
+        <canvas ref={canvasRef} className="touch-pan-canvas block w-full h-full" style={{ display: 'block', cursor: 'grab' }} />
       </div>
     );
   },

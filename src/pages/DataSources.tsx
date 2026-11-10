@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Cloud, HardDrive, Link2, FolderOpen, RefreshCw, Plus, X, Check, Trash2, Pencil, Upload, Newspaper, ExternalLink } from 'lucide-react';
 import { useDataSources } from '@/hooks/useDataSources';
+import MobileDrawer from '@/components/MobileDrawer';
 import { trpc } from '@/providers/trpc';
 import { runSequential, toggleAllIds, toggleId } from '@/lib/batch';
 
@@ -395,7 +396,7 @@ export default function DataSources() {
 
   if (isLoading) {
     return (
-      <div className="p-6 flex items-center justify-center min-h-[400px]" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      <div className="p-3 sm:p-5 lg:p-6 flex items-center justify-center min-h-[400px]" style={{ backgroundColor: 'var(--bg-primary)' }}>
         <RefreshCw className="w-6 h-6 animate-spin" style={{ color: 'var(--accent)' }} />
       </div>
     );
@@ -403,11 +404,164 @@ export default function DataSources() {
 
   const batchPct = batchParse.valid.length ? Math.round((batchProgress / batchParse.valid.length) * 100) : 0;
 
+  // ── 数据源表单字段（桌面居中弹窗与移动端右侧抽屉共用同一份，避免两处走样）──
+  const formFields = (
+    <div className="space-y-4">
+      <div>
+        <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>源名称 *</label>
+        <input
+          type="text"
+          value={form.name}
+          onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+          placeholder="例如：我的 API 接口"
+          className="input-base text-xs w-full"
+        />
+      </div>
+
+      <div>
+        <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>类型 *</label>
+        <select
+          value={form.type}
+          onChange={(e) => setForm((p) => ({ ...p, type: e.target.value, platform: e.target.value === 'cloud_drive' ? p.platform : '' }))}
+          className="input-base text-xs w-full"
+        >
+          {TYPE_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* 云盘平台选择 */}
+      {form.type === 'cloud_drive' && (
+        <div>
+          <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>平台 *</label>
+          <select
+            value={form.platform}
+            onChange={(e) => setForm((p) => ({ ...p, platform: e.target.value }))}
+            className="input-base text-xs w-full"
+          >
+            <option value="">请选择平台</option>
+            {CLOUD_PLATFORMS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          {form.platform && PLATFORM_CONFIG[form.platform]?.hint && (
+            <p className="text-[11px] mt-1 break-words" style={{ color: '#FB923C' }}>
+              {PLATFORM_CONFIG[form.platform].hint}
+            </p>
+          )}
+        </div>
+      )}
+
+      <div>
+        <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>
+          {form.type === 'cloud_drive' ? 'Access Token' : form.type === 'rss' ? 'Feed 地址' : 'URL / 路径'}
+        </label>
+        <input
+          type="text"
+          value={form.url}
+          onChange={(e) => setForm((p) => ({ ...p, url: e.target.value }))}
+          placeholder={form.type === 'rss' ? 'https://hnrss.org/frontpage' : 'https://api.example.com 或 /path/to/folder'}
+          className="input-base text-xs w-full"
+        />
+        {form.type === 'rss' && PLATFORM_CONFIG.rss.hint && (
+          <p className="text-[11px] mt-1 break-words" style={{ color: '#FB923C' }}>
+            {PLATFORM_CONFIG.rss.hint}
+          </p>
+        )}
+      </div>
+
+      <div>
+        <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>
+          {form.platform === '115' ? 'Access Token' : form.platform === 'aliyundrive' ? 'Access Token (可选)' : 'API Key / 密钥'}
+        </label>
+        <input
+          type="password"
+          value={form.apiKey}
+          onChange={(e) => setForm((p) => ({ ...p, apiKey: e.target.value }))}
+          placeholder={editingId ? '已保存，留空则不修改' : form.platform === '115' ? '115 OAuth 授权后的 access_token' : '需要时填写'}
+          className="input-base text-xs w-full"
+        />
+      </div>
+
+      {/* 阿里云盘需要 refreshToken */}
+      {form.platform === 'aliyundrive' && (
+        <div>
+          <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>
+            Refresh Token *
+          </label>
+          <input
+            type="password"
+            value={form.refreshToken}
+            onChange={(e) => setForm((p) => ({ ...p, refreshToken: e.target.value }))}
+            placeholder={editingId ? '已保存，留空则不修改' : '阿里云盘 refresh_token'}
+            className="input-base text-xs w-full"
+          />
+          <p className="text-[11px] mt-1 break-words" style={{ color: 'var(--text-muted)' }}>
+            refresh_token 用于自动刷新 access_token，长期有效
+          </p>
+        </div>
+      )}
+
+      <div>
+        <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>同步模式</label>
+        <div className="flex flex-wrap gap-2">
+          {['manual', 'hourly', 'daily'].map((m) => (
+            <button
+              key={m}
+              onClick={() => setForm((p) => ({ ...p, syncInterval: m }))}
+              className="chip text-xs py-1 px-3 transition-colors min-h-10 sm:min-h-0 inline-flex items-center"
+              style={{
+                backgroundColor: form.syncInterval === m ? 'var(--accent)' : undefined,
+                color: form.syncInterval === m ? '#0a0f1e' : undefined,
+              }}
+            >
+              {m === 'manual' ? '手动' : m === 'hourly' ? '每小时' : '每天'}
+            </button>
+          ))}
+        </div>
+        {/* 诚实提示：与后端 datasource-router 的 notice 口径一致 */}
+        {form.syncInterval !== 'manual' ? (
+          <p className="text-[11px] mt-1.5 break-words" style={{ color: '#FB923C' }}>
+            自动同步尚未启用，将仅保存配置——「每小时 / 每天」目前只是记录偏好，仍需手动点击「同步」触发。
+          </p>
+        ) : (
+          <p className="text-[11px] mt-1.5 break-words" style={{ color: 'var(--text-muted)' }}>
+            手动模式：创建后需自行点击卡片上的「同步」按钮拉取内容。
+          </p>
+        )}
+      </div>
+
+      {saveError && (
+        <p className="text-[11px] break-words" style={{ color: '#EF4444' }}>保存失败：{saveError}</p>
+      )}
+    </div>
+  );
+
+  // ── 表单操作按钮：桌面右对齐一行（原样），移动端底部抽屉内两枚全宽按钮 ──
+  const formActionsDesktop = (
+    <div className="flex justify-end gap-2 mt-6 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+      <button onClick={() => setShowModal(false)} className="btn-ghost text-xs py-2 px-4">取消</button>
+      <button onClick={handleSave} disabled={!form.name.trim()} className="btn-primary text-xs py-2 px-4">
+        {editingId ? '保存修改' : '创建数据源'}
+      </button>
+    </div>
+  );
+
+  const formActionsMobile = (
+    <div className="flex gap-2">
+      <button onClick={() => setShowModal(false)} className="btn-ghost text-xs py-2 px-4 flex-1 min-h-10 inline-flex items-center justify-center">取消</button>
+      <button onClick={handleSave} disabled={!form.name.trim()} className="btn-primary text-xs py-2 px-4 flex-1 min-h-10 inline-flex items-center justify-center">
+        {editingId ? '保存修改' : '创建数据源'}
+      </button>
+    </div>
+  );
+
   return (
-    <div className="p-6" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="p-3 sm:p-5 lg:p-6 min-h-app" style={{ backgroundColor: 'var(--bg-primary)' }}>
       {/* Stats */}
-      <div className="flex flex-wrap items-center justify-between mb-6">
-        <div className="flex gap-6 mb-4 sm:mb-0">
+      <div className="flex flex-wrap items-center justify-between gap-y-3 mb-4 sm:mb-6">
+        <div className="flex gap-6 mb-0">
           <div>
             <div className="text-2xl font-bold" style={{ color: 'var(--accent)' }}>{connectedCount} 个</div>
             <div className="text-xs" style={{ color: 'var(--text-muted)' }}>已连接源</div>
@@ -417,12 +571,12 @@ export default function DataSources() {
             <div className="text-xs" style={{ color: 'var(--text-muted)' }}>总数据源</div>
           </div>
         </div>
-        <div className="flex gap-2">
-          <button onClick={handleOpenBatch} className="btn-ghost text-xs py-2 px-4 flex items-center gap-1.5">
+        <div className="flex flex-wrap gap-2">
+          <button onClick={handleOpenBatch} className="btn-ghost text-xs py-2.5 sm:py-2 px-4 flex items-center gap-1.5 min-h-10 sm:min-h-0">
             <Upload className="w-3.5 h-3.5" />
             批量导入
           </button>
-          <button onClick={handleOpenCreate} className="btn-primary text-xs py-2 px-4 flex items-center gap-1.5">
+          <button onClick={handleOpenCreate} aria-label="添加数据源（打开配置面板）" className="btn-primary text-xs py-2.5 sm:py-2 px-4 flex items-center gap-1.5 min-h-10 sm:min-h-0">
             <Plus className="w-3.5 h-3.5" />
             添加数据源
           </button>
@@ -432,7 +586,7 @@ export default function DataSources() {
       {/* 批量操作条（2026-10-01）：勾选若干源 → 一键测试连接 / 一键同步 */}
       {dataSources.length > 0 && (
         <div className="flex flex-wrap items-center gap-3 mb-4 text-xs">
-          <label className="flex items-center gap-1.5 cursor-pointer">
+          <label className="flex items-center gap-1.5 cursor-pointer min-h-10 sm:min-h-0">
             <input
               type="checkbox"
               checked={dataSources.length > 0 && dataSources.every((s) => selected.has(s.id))}
@@ -443,23 +597,23 @@ export default function DataSources() {
           {selected.size > 0 && (
             <>
               <span style={{ color: 'var(--text-muted)' }}>已选 {selected.size} 个</span>
-              <button onClick={handleBatchTest} disabled={opsRunning} className="btn-ghost py-1.5 px-3">
+              <button onClick={handleBatchTest} disabled={opsRunning} className="btn-ghost py-2.5 sm:py-1.5 px-3 min-h-10 sm:min-h-0">
                 批量测试连接
               </button>
-              <button onClick={handleBatchSync} disabled={opsRunning} className="btn-ghost py-1.5 px-3">
+              <button onClick={handleBatchSync} disabled={opsRunning} className="btn-ghost py-2.5 sm:py-1.5 px-3 min-h-10 sm:min-h-0">
                 批量同步
               </button>
-              <button onClick={() => setSelected(new Set())} disabled={opsRunning} className="btn-ghost py-1.5 px-3">
+              <button onClick={() => setSelected(new Set())} disabled={opsRunning} className="btn-ghost py-2.5 sm:py-1.5 px-3 min-h-10 sm:min-h-0">
                 取消选择
               </button>
             </>
           )}
-          {batchNote && <span style={{ color: 'var(--accent-cyan)' }}>{batchNote}</span>}
-          <span className="ml-auto flex items-center gap-2">
-            <button onClick={handleOrganize} disabled={organizing} className="btn-ghost py-1.5 px-3" title="把归档功能上线前入库的旧文档挪进各自的源文件夹（只动尚未归档的）">
+          {batchNote && <span className="break-words" style={{ color: 'var(--accent-cyan)' }}>{batchNote}</span>}
+          <span className="w-full sm:w-auto sm:ml-auto flex flex-wrap items-center gap-2">
+            <button onClick={handleOrganize} disabled={organizing} className="btn-ghost py-2.5 sm:py-1.5 px-3 min-h-10 sm:min-h-0" title="把归档功能上线前入库的旧文档挪进各自的源文件夹（只动尚未归档的）">
               {organizing ? '整理中…' : '整理历史内容'}
             </button>
-            {organizeNote && <span style={{ color: 'var(--text-muted)' }}>{organizeNote}</span>}
+            {organizeNote && <span className="break-words" style={{ color: 'var(--text-muted)' }}>{organizeNote}</span>}
           </span>
         </div>
       )}
@@ -470,10 +624,10 @@ export default function DataSources() {
           <HardDrive className="w-12 h-12 mx-auto mb-3" style={{ color: 'var(--text-muted)' }} />
           <p className="text-sm mb-1" style={{ color: 'var(--text-secondary)' }}>暂无数据源</p>
           <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>添加你的第一个数据源，连接外部知识库</p>
-          <button onClick={handleOpenCreate} className="btn-primary text-xs py-2 px-4">添加数据源</button>
+          <button onClick={handleOpenCreate} aria-label="添加数据源（打开配置面板）" className="btn-primary text-xs py-2.5 sm:py-2 px-4 min-h-10 sm:min-h-0">添加数据源</button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4 mb-6 sm:mb-8">
           {dataSources.map((source) => {
             // 优先使用平台配置，再回退到类型配置
             const dsConfig: Record<string, string> = (source.config as Record<string, string>) || {};
@@ -484,19 +638,19 @@ export default function DataSources() {
             const isTesting = testingIds.has(source.id);
             return (
               <div key={source.id} className="card-base group">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-start justify-between gap-y-2 mb-3">
+                  <div className="flex items-center gap-3 min-w-0">
                     <input
                       type="checkbox"
                       checked={selected.has(source.id)}
                       onChange={() => setSelected(toggleId(selected, source.id))}
                       title="勾选后可批量测试连接 / 批量同步"
                     />
-                    <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${config.color}20` }}>
+                    <div className="w-10 h-10 shrink-0 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${config.color}20` }}>
                       <Icon className="w-5 h-5" style={{ color: config.color }} />
                     </div>
-                    <div>
-                      <h4 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{source.name}</h4>
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-semibold break-all" style={{ color: 'var(--text-primary)' }}>{source.name}</h4>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className={source.status === 'connected' ? 'status-dot-online' : source.status === 'error' ? 'status-dot-offline' : 'status-dot-away'} />
                         <span className="text-xs" style={{
@@ -507,39 +661,39 @@ export default function DataSources() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => setStreamFor({ id: source.id, name: source.name })} className="p-1.5 rounded hover:bg-white/5" style={{ color: '#FBBF24' }} title="内容（入库文章流）">
+                  <div className="flex flex-wrap gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
+                    <button onClick={() => setStreamFor({ id: source.id, name: source.name })} aria-label={`查看 ${source.name} 的入库内容`} className="p-1.5 rounded hover:bg-white/5 min-w-10 min-h-10 sm:min-w-0 sm:min-h-0 inline-flex items-center justify-center" style={{ color: '#FBBF24' }} title="内容（入库文章流）">
                       <Newspaper className="w-4 h-4" />
                     </button>
-                    <button onClick={() => handleTest(source.id)} disabled={isTesting} className="p-1.5 rounded hover:bg-white/5" style={{ color: '#34D399' }} title="测试连接">
+                    <button onClick={() => handleTest(source.id)} disabled={isTesting} aria-label={`测试 ${source.name} 的连接`} className="p-1.5 rounded hover:bg-white/5 min-w-10 min-h-10 sm:min-w-0 sm:min-h-0 inline-flex items-center justify-center" style={{ color: '#34D399' }} title="测试连接">
                       {isTesting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                     </button>
-                    <button onClick={() => handleSync(source.id)} disabled={isSyncing} className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--accent)' }} title="同步">
+                    <button onClick={() => handleSync(source.id)} disabled={isSyncing} aria-label={`同步 ${source.name}`} className="p-1.5 rounded hover:bg-white/5 min-w-10 min-h-10 sm:min-w-0 sm:min-h-0 inline-flex items-center justify-center" style={{ color: 'var(--accent)' }} title="同步">
                       <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
                     </button>
-                    <button onClick={() => handleOpenEdit(source)} className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }} title="编辑">
+                    <button onClick={() => handleOpenEdit(source)} aria-label={`编辑 ${source.name} 的配置（打开配置面板）`} className="p-1.5 rounded hover:bg-white/5 min-w-10 min-h-10 sm:min-w-0 sm:min-h-0 inline-flex items-center justify-center" style={{ color: 'var(--text-muted)' }} title="编辑">
                       <Pencil className="w-4 h-4" />
                     </button>
-                    <button onClick={() => handleDelete(source.id)} className="p-1.5 rounded hover:bg-red-500/10" style={{ color: '#EF4444' }} title="删除">
+                    <button onClick={() => handleDelete(source.id)} aria-label={`删除 ${source.name}`} className="p-1.5 rounded hover:bg-red-500/10 min-w-10 min-h-10 sm:min-w-0 sm:min-h-0 inline-flex items-center justify-center" style={{ color: '#EF4444' }} title="删除">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
 
-                <div className="space-y-2 mb-3">
-                  <div className="flex items-center gap-2">
+                <div className="space-y-2 mb-3 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="chip text-[10px] py-0.5 px-2" style={{ backgroundColor: `${config.color}20`, color: config.color }}>{config.label}</span>
                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{source.type}</span>
                   </div>
                   {dsConfig.url && typeof dsConfig.url === 'string' && (
-                    <code className="text-[11px] block truncate" style={{ color: 'var(--text-muted)' }}>{dsConfig.url}</code>
+                    <code className="text-xs sm:text-[11px] block break-all sm:truncate min-w-0" style={{ color: 'var(--text-muted)' }}>{dsConfig.url}</code>
                   )}
                   {source.lastError && (
-                    <p className="text-[11px] truncate" style={{ color: '#EF4444' }}>{source.lastError}</p>
+                    <p className="text-xs sm:text-[11px] break-all sm:truncate min-w-0" style={{ color: '#EF4444' }}>{source.lastError}</p>
                   )}
                 </div>
 
-                <div className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                <div className="flex flex-wrap items-center justify-between gap-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
                   <span>最后同步: {source.lastSyncAt ? new Date(source.lastSyncAt).toLocaleString() : '从未'}</span>
                   {dsConfig.syncInterval && typeof dsConfig.syncInterval === 'string' && (
                     <span className="chip text-[10px] py-0.5 px-2">{dsConfig.syncInterval}</span>
@@ -551,167 +705,46 @@ export default function DataSources() {
         </div>
       )}
 
-      {/* Add/Edit Modal */}
+      {/* Add/Edit 面板：≥md 居中弹窗（桌面视觉原样），<md 收进右侧 MobileDrawer（遮罩/Esc/滚动锁由基座负责） */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
-          <div className="animate-scale-in rounded-lg border p-4 sm:p-6 w-[480px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
-                {editingId ? '编辑数据源' : '添加数据源'}
-              </h3>
-              <button onClick={() => setShowModal(false)} className="p-1 rounded hover:bg-white/5">
-                <X className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>源名称 *</label>
-                <input
-                  type="text"
-                  value={form.name}
-                  onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-                  placeholder="例如：我的 API 接口"
-                  className="input-base text-xs w-full"
-                />
+        <>
+          <div className="fixed inset-0 z-50 hidden md:flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
+            <div className="animate-scale-in rounded-lg border p-4 sm:p-6 w-[480px] max-w-[calc(100vw-2rem)] max-h-[90dvh] overflow-y-auto" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
+                  {editingId ? '编辑数据源' : '添加数据源'}
+                </h3>
+                <button onClick={() => setShowModal(false)} className="p-1 rounded hover:bg-white/5" aria-label="关闭数据源配置面板">
+                  <X className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
+                </button>
               </div>
 
-              <div>
-                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>类型 *</label>
-                <select
-                  value={form.type}
-                  onChange={(e) => setForm((p) => ({ ...p, type: e.target.value, platform: e.target.value === 'cloud_drive' ? p.platform : '' }))}
-                  className="input-base text-xs w-full"
-                >
-                  {TYPE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </select>
-              </div>
+              {formFields}
 
-              {/* 云盘平台选择 */}
-              {form.type === 'cloud_drive' && (
-                <div>
-                  <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>平台 *</label>
-                  <select
-                    value={form.platform}
-                    onChange={(e) => setForm((p) => ({ ...p, platform: e.target.value }))}
-                    className="input-base text-xs w-full"
-                  >
-                    <option value="">请选择平台</option>
-                    {CLOUD_PLATFORMS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </select>
-                  {form.platform && PLATFORM_CONFIG[form.platform]?.hint && (
-                    <p className="text-[11px] mt-1" style={{ color: '#FB923C' }}>
-                      {PLATFORM_CONFIG[form.platform].hint}
-                    </p>
-                  )}
-                </div>
-              )}
-
-              <div>
-                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>
-                  {form.type === 'cloud_drive' ? 'Access Token' : form.type === 'rss' ? 'Feed 地址' : 'URL / 路径'}
-                </label>
-                <input
-                  type="text"
-                  value={form.url}
-                  onChange={(e) => setForm((p) => ({ ...p, url: e.target.value }))}
-                  placeholder={form.type === 'rss' ? 'https://hnrss.org/frontpage' : 'https://api.example.com 或 /path/to/folder'}
-                  className="input-base text-xs w-full"
-                />
-                {form.type === 'rss' && PLATFORM_CONFIG.rss.hint && (
-                  <p className="text-[11px] mt-1" style={{ color: '#FB923C' }}>
-                    {PLATFORM_CONFIG.rss.hint}
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>
-                  {form.platform === '115' ? 'Access Token' : form.platform === 'aliyundrive' ? 'Access Token (可选)' : 'API Key / 密钥'}
-                </label>
-                <input
-                  type="password"
-                  value={form.apiKey}
-                  onChange={(e) => setForm((p) => ({ ...p, apiKey: e.target.value }))}
-                  placeholder={editingId ? '已保存，留空则不修改' : form.platform === '115' ? '115 OAuth 授权后的 access_token' : '需要时填写'}
-                  className="input-base text-xs w-full"
-                />
-              </div>
-
-              {/* 阿里云盘需要 refreshToken */}
-              {form.platform === 'aliyundrive' && (
-                <div>
-                  <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>
-                    Refresh Token *
-                  </label>
-                  <input
-                    type="password"
-                    value={form.refreshToken}
-                    onChange={(e) => setForm((p) => ({ ...p, refreshToken: e.target.value }))}
-                    placeholder={editingId ? '已保存，留空则不修改' : '阿里云盘 refresh_token'}
-                    className="input-base text-xs w-full"
-                  />
-                  <p className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>
-                    refresh_token 用于自动刷新 access_token，长期有效
-                  </p>
-                </div>
-              )}
-
-              <div>
-                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>同步模式</label>
-                <div className="flex gap-2">
-                  {['manual', 'hourly', 'daily'].map((m) => (
-                    <button
-                      key={m}
-                      onClick={() => setForm((p) => ({ ...p, syncInterval: m }))}
-                      className="chip text-xs py-1 px-3 transition-colors"
-                      style={{
-                        backgroundColor: form.syncInterval === m ? 'var(--accent)' : undefined,
-                        color: form.syncInterval === m ? '#0a0f1e' : undefined,
-                      }}
-                    >
-                      {m === 'manual' ? '手动' : m === 'hourly' ? '每小时' : '每天'}
-                    </button>
-                  ))}
-                </div>
-                {/* 诚实提示：与后端 datasource-router 的 notice 口径一致 */}
-                {form.syncInterval !== 'manual' ? (
-                  <p className="text-[11px] mt-1.5" style={{ color: '#FB923C' }}>
-                    自动同步尚未启用，将仅保存配置——「每小时 / 每天」目前只是记录偏好，仍需手动点击「同步」触发。
-                  </p>
-                ) : (
-                  <p className="text-[11px] mt-1.5" style={{ color: 'var(--text-muted)' }}>
-                    手动模式：创建后需自行点击卡片上的「同步」按钮拉取内容。
-                  </p>
-                )}
-              </div>
-
-              {saveError && (
-                <p className="text-[11px]" style={{ color: '#EF4444' }}>保存失败：{saveError}</p>
-              )}
-            </div>
-
-            <div className="flex justify-end gap-2 mt-6 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-              <button onClick={() => setShowModal(false)} className="btn-ghost text-xs py-2 px-4">取消</button>
-              <button onClick={handleSave} disabled={!form.name.trim()} className="btn-primary text-xs py-2 px-4">
-                {editingId ? '保存修改' : '创建数据源'}
-              </button>
+              {formActionsDesktop}
             </div>
           </div>
-        </div>
+
+          <MobileDrawer
+            open={showModal}
+            onClose={() => setShowModal(false)}
+            side="right"
+            title={editingId ? '编辑数据源' : '添加数据源'}
+            ariaLabel="数据源配置面板"
+            footer={formActionsMobile}
+          >
+            <div className="p-3">{formFields}</div>
+          </MobileDrawer>
+        </>
       )}
 
       {/* Batch Import Modal (t6) */}
       {showBatch && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
-          <div className="animate-scale-in rounded-lg border p-4 sm:p-6 w-[560px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>批量导入 RSS 数据源</h3>
-              <button onClick={() => setShowBatch(false)} disabled={batchRunning} className="p-1 rounded hover:bg-white/5 disabled:opacity-40">
+          <div className="animate-scale-in rounded-lg border p-4 sm:p-6 w-[560px] max-w-[calc(100vw-2rem)] max-h-[90dvh] overflow-y-auto overscroll-contain" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <h3 className="text-lg font-bold break-words" style={{ color: 'var(--text-primary)' }}>批量导入 RSS 数据源</h3>
+              <button onClick={() => setShowBatch(false)} disabled={batchRunning} aria-label="关闭批量导入" className="p-1 rounded hover:bg-white/5 disabled:opacity-40 min-w-10 min-h-10 sm:min-w-0 sm:min-h-0 inline-flex items-center justify-center shrink-0">
                 <X className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
               </button>
             </div>
@@ -748,11 +781,11 @@ export default function DataSources() {
                 ) : (
                   <div className="max-h-40 overflow-y-auto rounded border p-2 space-y-1" style={{ borderColor: 'var(--border-subtle)' }}>
                     {batchParse.rows.map((r) => (
-                      <div key={r.lineNo} className="text-[11px] flex items-baseline gap-2">
-                        <span style={{ color: 'var(--text-muted)' }}>L{r.lineNo}</span>
-                        <span style={{ color: r.error ? '#EF4444' : 'var(--text-primary)' }}>{r.name}</span>
-                        <code className="truncate" style={{ color: 'var(--text-muted)' }}>{r.url}</code>
-                        {r.error && <span style={{ color: '#EF4444' }}>— {r.error}</span>}
+                      <div key={r.lineNo} className="text-[11px] flex flex-wrap items-baseline gap-x-2 gap-y-0.5 min-w-0">
+                        <span className="shrink-0" style={{ color: 'var(--text-muted)' }}>L{r.lineNo}</span>
+                        <span className="break-all min-w-0" style={{ color: r.error ? '#EF4444' : 'var(--text-primary)' }}>{r.name}</span>
+                        <code className="break-all min-w-0" style={{ color: 'var(--text-muted)' }}>{r.url}</code>
+                        {r.error && <span className="break-words" style={{ color: '#EF4444' }}>— {r.error}</span>}
                       </div>
                     ))}
                   </div>
@@ -791,10 +824,10 @@ export default function DataSources() {
                 {batchResult.failed.length > 0 && (
                   <div className="max-h-40 overflow-y-auto rounded border p-2 space-y-1" style={{ borderColor: 'var(--border-subtle)' }}>
                     {batchResult.failed.map((f, i) => (
-                      <div key={`${f.url}-${i}`} className="text-[11px]">
-                        <span style={{ color: '#EF4444' }}>✗ {f.name}</span>
-                        <code className="block truncate mt-0.5" style={{ color: 'var(--text-muted)' }}>{f.url}</code>
-                        <span style={{ color: 'var(--text-secondary)' }}>原因：{f.reason}</span>
+                      <div key={`${f.url}-${i}`} className="text-[11px] min-w-0">
+                        <span className="break-all" style={{ color: '#EF4444' }}>✗ {f.name}</span>
+                        <code className="block break-all mt-0.5 min-w-0" style={{ color: 'var(--text-muted)' }}>{f.url}</code>
+                        <span className="break-words" style={{ color: 'var(--text-secondary)' }}>原因：{f.reason}</span>
                       </div>
                     ))}
                   </div>
@@ -802,14 +835,14 @@ export default function DataSources() {
               </div>
             )}
 
-            <div className="flex justify-end gap-2 mt-6 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-              <button onClick={() => setShowBatch(false)} disabled={batchRunning} className="btn-ghost text-xs py-2 px-4 disabled:opacity-40">
+            <div className="flex flex-col sm:flex-row justify-end gap-2 mt-6 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+              <button onClick={() => setShowBatch(false)} disabled={batchRunning} className="btn-ghost text-xs py-2 px-4 min-h-10 sm:min-h-0 disabled:opacity-40">
                 {batchResult ? '关闭' : '取消'}
               </button>
               <button
                 onClick={handleBatchImport}
                 disabled={batchRunning || batchParse.overLimit || batchParse.valid.length === 0}
-                className="btn-primary text-xs py-2 px-4 disabled:opacity-40"
+                className="btn-primary text-xs py-2 px-4 min-h-10 sm:min-h-0 disabled:opacity-40"
               >
                 {batchRunning ? '导入中…' : `导入 ${batchParse.valid.length} 条`}
               </button>
@@ -841,18 +874,18 @@ function ContentStreamDrawer({ dataSourceId, name, onClose }: { dataSourceId: nu
   return (
     <div className="fixed inset-0 z-50 flex justify-end" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }} onClick={onClose}>
       <div
-        className="animate-scale-in w-full max-w-xl h-full overflow-y-auto border-l p-4 sm:p-6"
+        className="animate-scale-in w-full max-w-xl h-full overflow-y-auto overscroll-contain border-l px-3 pt-3 pb-safe sm:p-6"
         style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>内容 · {name}</h3>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+        <div className="flex items-start justify-between gap-2 mb-4">
+          <div className="min-w-0">
+            <h3 className="text-lg font-bold break-all" style={{ color: 'var(--text-primary)' }}>内容 · {name}</h3>
+            <p className="text-xs mt-0.5 break-words" style={{ color: 'var(--text-muted)' }}>
               {streamQuery.isLoading ? '加载中…' : `共 ${items.length} 条（按入库时间倒序，只含同步成功条目）`}
             </p>
           </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-white/5">
+          <button onClick={onClose} aria-label="关闭内容流" className="p-1 rounded hover:bg-white/5 min-w-10 min-h-10 sm:min-w-0 sm:min-h-0 inline-flex items-center justify-center shrink-0">
             <X className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
           </button>
         </div>
@@ -870,12 +903,12 @@ function ContentStreamDrawer({ dataSourceId, name, onClose }: { dataSourceId: nu
               <div key={it.id} className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)' }}>
                 <button
                   onClick={() => setOpenItemId(expanded ? null : it.id)}
-                  className="w-full text-left text-sm font-medium hover:opacity-80"
+                  className="w-full text-left text-sm font-medium hover:opacity-80 break-words py-1"
                   style={{ color: 'var(--text-primary)' }}
                 >
                   {expanded ? '▾ ' : '▸ '}{it.name}
                 </button>
-                <div className="flex items-center gap-3 mt-1.5 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-[11px] sm:text-[10px]" style={{ color: 'var(--text-muted)' }}>
                   <span>{new Date(it.createdAt).toLocaleString()}</span>
                   {it.sourceUrl && (
                     <a href={it.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline" style={{ color: 'var(--accent-cyan)' }}>
@@ -885,7 +918,7 @@ function ContentStreamDrawer({ dataSourceId, name, onClose }: { dataSourceId: nu
                   {it.documentId ? <span>文档 #{it.documentId}</span> : null}
                 </div>
                 {expanded && (
-                  <div className="mt-2 pt-2 border-t text-xs leading-relaxed whitespace-pre-wrap" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
+                  <div className="mt-2 pt-2 border-t text-xs leading-relaxed whitespace-pre-wrap break-words" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
                     {it.documentId
                       ? docQuery.isLoading
                         ? '加载正文…'

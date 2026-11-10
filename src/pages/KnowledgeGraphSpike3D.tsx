@@ -12,8 +12,10 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import ForceGraph3D from '3d-force-graph';
+import { List, X } from 'lucide-react';
 import { trpc } from '@/providers/trpc';
 import { useAppStore } from '@/store/useAppStore';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 /** 与 2D 图谱同口径的霓虹六色 */
 const PALETTE = {
@@ -89,6 +91,9 @@ export default function KnowledgeGraphSpike3D() {
   const [error, setError] = useState<string | null>(null);
   const theme = useAppStore(s => s.theme);
   const isDark = theme === 'dark';
+  const isMobile = useIsMobile();
+  // 移动端：右上图例默认折叠成 40×40 图标按钮（契约第 9 条）
+  const [legendOpen, setLegendOpen] = useState(false);
   const COLORS = isDark ? PALETTE.dark : PALETTE.light;
   const graphQuery = trpc.knowledge.getGraph.useQuery();
 
@@ -156,10 +161,11 @@ export default function KnowledgeGraphSpike3D() {
       // 灌数据：warmupTicks 在 graphData 调用时同步跑 —— 必须在所有力学配置之后
       graph.graphData({ nodes, links });
 
-      // HiDPI 锐度
-      graph.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      // 像素比：桌面 HiDPI 上限 2；移动端封顶 1.5（填充率降载，节点/连线数不变）
+      graph.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, isMobile ? 1.5 : 2));
       const ctl = graph.controls() as { autoRotate: boolean; autoRotateSpeed: number };
-      ctl.autoRotate = true;
+      // 自动旋转 = 引擎常驻重绘；移动端关掉，只在用户拖动时出帧
+      ctl.autoRotate = !isMobile;
       ctl.autoRotateSpeed = 0.6;
       // 布局沉降后取景：相机抬高 20° 俯角
       setTimeout(() => {
@@ -189,17 +195,49 @@ export default function KnowledgeGraphSpike3D() {
   return (
     <div style={{ position: 'fixed', inset: 0, top: 48, background: isDark ? '#09090b' : '#eef2f8', transition: 'background 0.4s' }}>
       {/* key=theme：切主题时整棵 DOM 重挂载（旧 WebGL 上下文随旧 canvas 销毁） */}
-      <div key={theme} ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
-      {/* HUD */}
-      <div style={{ position: 'absolute', left: 18, top: 16, zIndex: 10, color: sub, fontSize: 12, letterSpacing: 0.4, pointerEvents: 'none' }}>
-        <b style={{ color: fg, fontSize: 15, display: 'block', marginBottom: 4, letterSpacing: 1.5 }}>
+      <div key={theme} ref={containerRef} className="touch-pan-canvas" style={{ position: 'absolute', inset: 0 }} />
+      {/* HUD（移动端收左上角小字，计数与标题同行，避免把画布挤掉） */}
+      <div style={{
+        position: 'absolute', left: isMobile ? 12 : 18, top: isMobile ? 10 : 16, zIndex: 10, color: sub,
+        fontSize: 12, letterSpacing: 0.4, pointerEvents: 'none',
+        maxWidth: isMobile ? 'calc(100vw - 80px)' : undefined,
+      }}>
+        <b style={{
+          color: fg, fontSize: isMobile ? 13 : 15, display: 'block', marginBottom: 4, letterSpacing: 1.5,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>
           璇玑 · 星云图（3D 预览）
         </b>
         {graphQuery.data
           ? `${(graphQuery.data as { nodes: unknown[] }).nodes.length} 节点`
           : '载入中…'}
       </div>
-      <div style={{ position: 'absolute', right: 18, top: 16, zIndex: 10, color: sub, fontSize: 12, lineHeight: '22px', background: isDark ? 'rgba(12,14,18,.55)' : 'rgba(255,255,255,.6)', border: `1px solid ${isDark ? 'rgba(120,160,220,.14)' : 'rgba(90,120,160,.2)'}`, borderRadius: 10, padding: '10px 14px', backdropFilter: 'blur(6px)' }}>
+      {/* 图例：桌面右上常驻；移动端折叠为图标按钮 → 点开为 ≤320px 面板，关闭按钮 ≥40×40 */}
+      {isMobile && (
+        <button
+          type="button"
+          onClick={() => setLegendOpen(o => !o)}
+          aria-label={legendOpen ? '关闭图例' : '展开图例'}
+          aria-expanded={legendOpen}
+          className="tap-target absolute rounded-lg"
+          style={{
+            right: 10, top: 64, zIndex: 20, color: sub,
+            background: isDark ? 'rgba(12,14,18,.75)' : 'rgba(255,255,255,.85)',
+            border: `1px solid ${isDark ? 'rgba(120,160,220,.3)' : 'rgba(90,120,160,.3)'}`,
+          }}
+        >
+          {legendOpen ? <X className="w-4 h-4" /> : <List className="w-4 h-4" />}
+        </button>
+      )}
+      <div style={{
+        position: 'absolute', right: isMobile ? 10 : 18, top: isMobile ? 112 : 16, zIndex: 10, color: sub,
+        fontSize: 12, lineHeight: '22px',
+        background: isDark ? 'rgba(12,14,18,.55)' : 'rgba(255,255,255,.6)',
+        border: `1px solid ${isDark ? 'rgba(120,160,220,.14)' : 'rgba(90,120,160,.2)'}`,
+        borderRadius: 10, padding: isMobile ? '8px 12px' : '10px 14px', backdropFilter: 'blur(6px)',
+        maxWidth: isMobile ? 'min(86vw, 320px)' : undefined,
+        display: isMobile && !legendOpen ? 'none' : undefined,
+      }}>
         {Object.keys(COLORS).map(c => (
           <div key={c}>
             <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', marginRight: 7, background: COLORS[c], boxShadow: `0 0 8px ${COLORS[c]}` }} />
@@ -207,8 +245,13 @@ export default function KnowledgeGraphSpike3D() {
           </div>
         ))}
       </div>
-      <div style={{ position: 'absolute', left: 18, bottom: 16, zIndex: 10, color: faint, fontSize: 11 }}>
-        拖动旋转 · 滚轮缩放 · 悬停看名称 · 点击聚焦 ｜ 跟随「昼白/深空」主题切换
+      <div style={{
+        position: 'absolute', left: isMobile ? 12 : 18,
+        bottom: isMobile ? 'calc(12px + env(safe-area-inset-bottom))' : 16, zIndex: 10, color: faint, fontSize: 11,
+        maxWidth: isMobile ? 'calc(100vw - 24px)' : undefined,
+      }}>
+        <span className="md:hidden">单指拖动旋转，双指缩放</span>
+        <span className="hidden md:inline">拖动旋转 · 滚轮缩放 · 悬停看名称 · 点击聚焦 ｜ 跟随「昼白/深空」主题切换</span>
       </div>
       {error && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ff6b9d', fontSize: 13, zIndex: 20 }}>

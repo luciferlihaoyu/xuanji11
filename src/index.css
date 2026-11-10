@@ -436,3 +436,109 @@
               border-color 0.3s ease,
               box-shadow 0.3s ease;
 }
+
+/* ============================================================
+   移动端适配基座 (2026-11-10 碧霄)
+   口径：docs/mobile-adaptation.md
+   断点沿用 Tailwind 默认：mobile <640 / tablet 640-1023 / desktop >=1024
+   ============================================================ */
+
+/* 顶栏高度常量 48px —— 页面全高计算与抽屉定位共用 */
+:root {
+  --app-header-h: 48px;
+}
+
+/* 横向溢出兜底：根因必须在页面内修掉，这里只防「整页可拖动」 */
+html,
+body {
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+/* 安全区 / 触控热区：放在 components 层（优先级低于 utilities），
+   这样页面写的 `sm:p-6`、`md:min-w-0` 等 Tailwind 工具类可以正常覆盖它们。
+   —— 2026-11-10 碧霄：原先放在 utilities 层尾部，会反压 md:/sm: 还原类。 */
+@layer components {
+  /* 底部安全区（iPhone 手势条） */
+  .pb-safe { padding-bottom: max(0.75rem, env(safe-area-inset-bottom)); }
+  .pt-safe { padding-top: env(safe-area-inset-top); }
+  .mb-safe { margin-bottom: env(safe-area-inset-bottom); }
+
+  /* 触控热区 >= 40x40 */
+  .tap-target {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
+
+@layer utilities {
+  /* 全高页面：用 dvh 避开移动浏览器地址栏吞高度 */  .h-app { height: calc(100dvh - var(--app-header-h)); }
+  .min-h-app { min-height: calc(100dvh - var(--app-header-h)); }
+
+  /* 滚动条隐藏（横向标签条 / 图表容器） */
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+  /* 表格 / 宽内容横向滚动容器 */
+  .table-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .table-scroll::-webkit-scrollbar { display: none; }
+
+  /* 画布类容器：禁掉浏览器手势接管，交给 three/graph 自己处理 */
+  .touch-pan-canvas { touch-action: none; }
+
+  /* 移动抽屉动画方向（左滑入） */
+  .animate-slide-in-left { animation: slide-in-left 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+}
+
+@keyframes slide-in-left {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+@media (max-width: 639px) {
+  /* iOS：输入框字号 < 16px 会在聚焦时强制放大整页 */
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+
+  /* 触屏没有 hover，去掉点按高亮块与 300ms 延迟 */
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* 长按选中在列表上容易误触，正文仍可选中 */
+  .no-select-mobile {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* 仅在桌面有意义的元素在移动端隐藏 */
+  .desktop-only { display: none !important; }
+
+  /* 移动端页面根容器默认收紧横向留白（配合页面的 p-3 使用） */
+  .app-content {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-slide-in-left,
+  .animate-slide-in-right,
+  .animate-slide-up,
+  .animate-scale-in {
+    animation-duration: 0.01ms !important;
+  }
+}

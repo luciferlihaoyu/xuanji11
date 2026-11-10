@@ -16,7 +16,7 @@ import { formatDate, formatFileSize } from './utils';
 
 export function PageLoading() {
   return (
-    <div className="flex h-[calc(100vh-48px)] items-center justify-center" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="flex h-app items-center justify-center px-3 sm:px-4" style={{ backgroundColor: 'var(--bg-primary)' }}>
       <div className="flex flex-col items-center gap-3">
         <div
           className="animate-rotate w-8 h-8 rounded-full border-2"
@@ -30,12 +30,12 @@ export function PageLoading() {
 
 export function PageError({ title, message }: { title: string; message: string }) {
   return (
-    <div className="flex h-[calc(100vh-48px)] items-center justify-center" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="flex h-app items-center justify-center px-3 sm:px-4" style={{ backgroundColor: 'var(--bg-primary)' }}>
       <div className="text-center max-w-md px-4">
         <FileText className="w-12 h-12 mx-auto mb-3" style={{ color: 'var(--text-muted)' }} />
         <h2 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>{title}</h2>
-        <p className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>{message}</p>
-        <Link to="/kb" className="btn-primary text-xs px-4 py-2 inline-flex items-center gap-1">
+        <p className="text-sm mb-4 break-words" style={{ color: 'var(--text-secondary)' }}>{message}</p>
+        <Link to="/kb" className="btn-primary text-xs px-4 py-2 min-h-[40px] inline-flex items-center gap-1 sm:min-h-0">
           <ChevronLeft className="w-4 h-4" /> 返回知识库
         </Link>
       </div>
@@ -50,6 +50,8 @@ interface RightPanelProps {
   onEdit: () => void;
   onDelete: () => void;
   onCreateAssociation: () => void;
+  /** true = 渲染进移动端抽屉（撑满抽屉宽度、去掉桌面边框与固定宽度、底部留安全区） */
+  embedded?: boolean;
 }
 
 export function RightPanel({
@@ -59,6 +61,7 @@ export function RightPanel({
   onEdit,
   onDelete,
   onCreateAssociation,
+  embedded = false,
 }: RightPanelProps) {
   const [tags, setTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState('');
@@ -90,11 +93,13 @@ export function RightPanel({
 
   return (
     <div
-      className="w-[300px] shrink-0 border-l overflow-y-auto"
+      className={embedded
+        ? 'w-full overflow-y-auto overscroll-contain'
+        : 'hidden md:flex flex-col w-[300px] shrink-0 border-l overflow-y-auto'}
       style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
     >
       <div className="p-4">
-        <h3 className="text-base font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>{doc.title}</h3>
+        <h3 className="text-base font-semibold mb-1 break-words" style={{ color: 'var(--text-primary)' }}>{doc.title}</h3>
         <span className="chip text-[10px] py-0.5 px-2 mb-4 inline-block">{displayType}</span>
 
         <div className="space-y-3 mb-6">
@@ -107,11 +112,11 @@ export function RightPanel({
           ].map((item) => (
             <div
               key={item.label}
-              className="flex justify-between py-1.5 border-b"
+              className="flex justify-between gap-2 py-1.5 border-b"
               style={{ borderColor: 'var(--border-subtle)' }}
             >
-              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{item.label}</span>
-              <span className="text-xs" style={{ color: 'var(--text-primary)' }}>{item.value}</span>
+              <span className="text-xs shrink-0" style={{ color: 'var(--text-muted)' }}>{item.label}</span>
+              <span className="text-xs text-right break-words min-w-0" style={{ color: 'var(--text-primary)' }}>{item.value}</span>
             </div>
           ))}
           <div className="flex justify-between py-1.5 border-b items-center" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -127,9 +132,9 @@ export function RightPanel({
         </div>
 
         <div className="mb-6">
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between gap-2 mb-2">
             <h4 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>关联知识</h4>
-            <button onClick={onCreateAssociation} className="btn-ghost text-[10px] py-1 px-2 flex items-center gap-1">
+            <button onClick={onCreateAssociation} className="btn-ghost text-[10px] py-1 px-2 min-h-[40px] flex items-center gap-1 sm:min-h-0">
               <Plus className="w-3 h-3" />
               创建关联
             </button>
@@ -137,9 +142,9 @@ export function RightPanel({
           {(associatedNodes ?? []).length > 0 ? (
             <div className="space-y-2">
               {associatedNodes?.map((k) => (
-                <Link key={k.id} to="/" className="block p-2 rounded hover:bg-white/5 transition-colors">
-                  <div className="text-xs font-medium" style={{ color: 'var(--accent-cyan)' }}>{k.title}</div>
-                  <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                <Link key={k.id} to="/" className="block p-2 rounded hover:bg-white/5 transition-colors min-h-[40px] sm:min-h-0">
+                  <div className="text-xs font-medium break-words" style={{ color: 'var(--accent-cyan)' }}>{k.title}</div>
+                  <div className="text-[11px] break-words" style={{ color: 'var(--text-muted)' }}>
                     {(k.content ?? '').slice(0, 60) || '无描述'}
                   </div>
                 </Link>
@@ -159,7 +164,7 @@ export function RightPanel({
             {tags.map((tag) => (
               <span key={tag} className="chip chip-violet text-[10px] py-0.5 px-2 flex items-center gap-1">
                 {tag}
-                <button onClick={() => removeTag(tag)} className="hover:text-[var(--accent-rose)]">
+                <button onClick={() => removeTag(tag)} className="hover:text-[var(--accent-rose)] min-w-[32px] min-h-[32px] inline-flex items-center justify-center sm:min-w-0 sm:min-h-0" aria-label={`移除标签 ${tag}`}>
                   <X className="w-2.5 h-2.5" />
                 </button>
               </span>
@@ -172,9 +177,9 @@ export function RightPanel({
               onChange={(e) => setNewTag(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && addTag()}
               placeholder="添加标签..."
-              className="input-base text-xs h-7 flex-1"
+              className="input-base text-xs h-9 flex-1 min-w-0 sm:h-7"
             />
-            <button onClick={addTag} className="btn-secondary text-xs h-7 px-2">
+            <button onClick={addTag} className="btn-secondary text-xs h-9 px-2 min-w-[40px] sm:h-7 sm:min-w-0" aria-label="添加标签">
               <Plus className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -199,20 +204,20 @@ export function RightPanel({
           </div>
         </div>
 
-        <div className="space-y-2 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-          <button onClick={onDownload} className="btn-primary w-full text-xs py-2 flex items-center justify-center gap-1.5">
+        <div className={embedded ? 'space-y-2 pt-4 pb-safe' : 'space-y-2 pt-4'} style={{ borderTop: '1px solid var(--border-subtle)' }}>
+          <button onClick={onDownload} className="btn-primary w-full text-xs py-2.5 min-h-[40px] flex items-center justify-center gap-1.5 sm:py-2 sm:min-h-0">
             <Download className="w-3.5 h-3.5" />
             下载
           </button>
-          <button onClick={onEdit} className="btn-secondary w-full text-xs py-2 flex items-center justify-center gap-1.5">
+          <button onClick={onEdit} className="btn-secondary w-full text-xs py-2.5 min-h-[40px] flex items-center justify-center gap-1.5 sm:py-2 sm:min-h-0">
             <Edit3 className="w-3.5 h-3.5" />
             编辑
           </button>
-          <Link to="/kb" className="btn-ghost w-full text-xs py-2 flex items-center justify-center gap-1.5">
+          <Link to="/kb" className="btn-ghost w-full text-xs py-2.5 min-h-[40px] flex items-center justify-center gap-1.5 sm:py-2 sm:min-h-0">
             <FolderOpen className="w-3.5 h-3.5" />
             在文件夹中查看
           </Link>
-          <button onClick={onDelete} className="btn-danger w-full text-xs py-2 flex items-center justify-center gap-1.5">
+          <button onClick={onDelete} className="btn-danger w-full text-xs py-2.5 min-h-[40px] flex items-center justify-center gap-1.5 sm:py-2 sm:min-h-0">
             <Trash2 className="w-3.5 h-3.5" />
             删除
           </button>

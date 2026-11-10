@@ -138,7 +138,7 @@ export default function SearchTestbed() {
   const fmt = (n: number | undefined) => (n === undefined ? '·' : n.toFixed(3));
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-3 sm:p-5 lg:p-6 max-w-6xl mx-auto min-h-app">
       <div className="flex items-center gap-3 mb-1">
         <FlaskConical size={22} className="text-cyan-400" />
         <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>检索测试台</h1>
@@ -147,38 +147,38 @@ export default function SearchTestbed() {
         调参数 → 看分数分解 → 固化评测用例 → 跑评测集。改检索逻辑前后各跑一次，用 recall@K / MRR 自证好坏。
       </p>
 
-      {/* ── 控件行 ── */}
-      <div className="flex flex-wrap items-center gap-3 mb-4 p-3 rounded-lg border" style={{ borderColor: 'var(--border-subtle)' }}>
+      {/* ── 控件行（移动端单列堆叠，≥sm 恢复横排）── */}
+      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 mb-4 p-3 rounded-lg border" style={{ borderColor: 'var(--border-subtle)' }}>
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && runSearch()}
           placeholder="查询词，如：引用可定位"
-          className="flex-1 min-w-64 px-3 py-1.5 rounded text-sm outline-none border"
+          className="flex-1 min-w-0 sm:min-w-64 px-3 py-2 sm:py-1.5 rounded text-sm outline-none border"
           style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)', borderColor: 'var(--border-subtle)' }}
         />
         <select
           value={mode}
           onChange={(e) => setMode(e.target.value as Mode)}
-          className="px-2 py-1.5 rounded text-sm border"
+          className="px-2 py-2 sm:py-1.5 rounded text-sm border min-h-10 sm:min-h-0"
           style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)', borderColor: 'var(--border-subtle)' }}
         >
           <option value="hybrid">hybrid（融合）</option>
           <option value="keyword">keyword（BM25）</option>
           <option value="vector">vector（语义）</option>
         </select>
-        <label className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
+        <label className="flex items-center gap-1.5 text-xs min-h-10 sm:min-h-0" style={{ color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={rerank} onChange={(e) => setRerank(e.target.checked)} />
           LLM 重排
         </label>
-        <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+        <label className="flex items-center gap-2 text-xs min-h-10 sm:min-h-0" style={{ color: 'var(--text-secondary)' }}>
           topK {topK}
           <input type="range" min={1} max={20} value={topK} onChange={(e) => setTopK(Number(e.target.value))} className="w-24" />
         </label>
         <button
           onClick={runSearch}
           disabled={!trimmed || isLoading}
-          className="flex items-center gap-1.5 px-4 py-1.5 rounded text-sm font-medium text-white bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40"
+          className="flex items-center justify-center gap-1.5 px-4 py-2 sm:py-1.5 rounded text-sm font-medium text-white bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 w-full sm:w-auto min-h-10 sm:min-h-0"
         >
           <Play size={14} /> 检索{dirty ? '（参数已改）' : ''}
         </button>
@@ -192,7 +192,7 @@ export default function SearchTestbed() {
 
       {/* ── metadata 条 ── */}
       {metadata && (
-        <div className="flex flex-wrap gap-x-5 gap-y-1 text-[11px] mb-3 px-3 py-2 rounded" style={{ background: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>
+        <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs sm:text-[11px] mb-3 px-3 py-2 rounded break-words" style={{ background: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>
           <span>耗时 <b className="text-cyan-400">{metadata.durationMs}ms</b></span>
           <span>keyword 路 <b>{metadata.keywordResults}</b></span>
           <span>vector 路 <b>{metadata.vectorResults}</b></span>
@@ -208,8 +208,9 @@ export default function SearchTestbed() {
       {isLoading && <div className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>检索中…</div>}
 
       {results.length > 0 && (
-        <div className="overflow-x-auto mb-6 rounded-lg border" style={{ borderColor: 'var(--border-subtle)' }}>
-          <table className="w-full text-xs">
+        /* 移动端横向滚动（table-scroll 基座）：min-w-[640px] 保列不挤压，≥sm 由 min-w-full 填满容器 */
+        <div className="table-scroll mb-6 rounded-lg border" style={{ borderColor: 'var(--border-subtle)' }}>
+          <table className="w-full min-w-[640px] sm:min-w-full text-xs">
             <thead>
               <tr className="text-left" style={{ background: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>
                 <th className="px-2 py-2">期望</th>
@@ -237,7 +238,7 @@ export default function SearchTestbed() {
                         <span style={{ color: 'var(--text-muted)' }}>—</span>
                       )}
                     </td>
-                    <td className="px-2 py-1.5 max-w-56 truncate" style={{ color: 'var(--text-primary)' }} title={r.title}>
+                    <td className="px-2 py-1.5 max-w-56 truncate break-words" style={{ color: 'var(--text-primary)' }} title={r.title}>
                       {r.title}
                     </td>
                     <td className="px-2 py-1.5 font-mono text-cyan-400">{fmt(r.score)}</td>
@@ -245,11 +246,11 @@ export default function SearchTestbed() {
                     <td className="px-2 py-1.5 font-mono">{fmt(sb?.vector)}</td>
                     <td className="px-2 py-1.5 font-mono">{fmt(sb?.rrf)}</td>
                     <td className="px-2 py-1.5 font-mono">{fmt(sb?.llmRerank)}</td>
-                    <td className="px-2 py-1.5">{(r.sources ?? []).join('+') || '—'}</td>
-                    <td className="px-2 py-1.5">
+                    <td className="px-2 py-1.5 break-words">{(r.sources ?? []).join('+') || '—'}</td>
+                    <td className="px-2 py-1.5 break-words">
                       <div className="flex flex-wrap gap-1">
                         {(r.reasons ?? []).map((reason) => (
-                          <span key={reason} className="px-1 py-0.5 rounded text-[10px]" style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
+                          <span key={reason} className="px-1 py-0.5 rounded text-[10px] break-words" style={{ background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
                             {reason}
                           </span>
                         ))}
@@ -272,23 +273,23 @@ export default function SearchTestbed() {
       <div className="grid md:grid-cols-2 gap-4">
         <div className="p-3 rounded-lg border" style={{ borderColor: 'var(--border-subtle)' }}>
           <div className="text-sm font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>评测用例（{cases.length}）</div>
-          <div className="flex gap-2 mb-3">
+          <div className="flex flex-col sm:flex-row gap-2 mb-3">
             <input
               value={evalNote}
               onChange={(e) => setEvalNote(e.target.value)}
               placeholder="备注（可选）"
-              className="flex-1 px-2 py-1 rounded text-xs border"
+              className="flex-1 min-w-0 px-2 py-2 sm:py-1 rounded text-xs border"
               style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)', borderColor: 'var(--border-subtle)' }}
             />
             <button
               onClick={handleSaveCase}
               disabled={createCase.isPending || !trimmed || selectedIds.length === 0}
-              className="flex items-center gap-1 px-3 py-1 rounded text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-40"
+              className="flex items-center justify-center gap-1 px-3 py-2 sm:py-1 rounded text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-40 min-h-10 sm:min-h-0 shrink-0"
             >
               <Save size={12} /> 存为用例{selectedIds.length > 0 ? `（${selectedIds.length}）` : ''}
             </button>
           </div>
-          <div className="space-y-1.5 max-h-64 overflow-y-auto">
+          <div className="space-y-1.5 max-h-64 overflow-y-auto min-h-0 overscroll-contain">
             {cases.length === 0 && (
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 还没有用例。检索后勾选「期望」命中的文档，点「存为用例」。
@@ -298,11 +299,11 @@ export default function SearchTestbed() {
               <div key={c.id} className="flex items-center gap-2 text-xs px-2 py-1.5 rounded" style={{ background: 'var(--bg-secondary)' }}>
                 <div className="flex-1 min-w-0">
                   <div className="truncate" style={{ color: 'var(--text-primary)' }}>{c.query}</div>
-                  <div style={{ color: 'var(--text-muted)' }}>
+                  <div className="break-words" style={{ color: 'var(--text-muted)' }}>
                     期望 {parseExpected(c.expectedDocIds).join(', ')}{c.note ? ` · ${c.note}` : ''}
                   </div>
                 </div>
-                <button onClick={() => handleDeleteCase(c.id)} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }} title="删除用例">
+                <button onClick={() => handleDeleteCase(c.id)} className="p-1 rounded hover:bg-white/5 inline-flex items-center justify-center min-w-10 min-h-10 md:min-w-0 md:min-h-0 shrink-0" style={{ color: 'var(--text-muted)' }} title="删除用例" aria-label={`删除用例：${c.query}`}>
                   <Trash2 size={13} />
                 </button>
               </div>
@@ -328,44 +329,44 @@ export default function SearchTestbed() {
           )}
           {evalReport && (
             <>
-              <div className="grid grid-cols-4 gap-2 mb-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
                 <div className="p-2 rounded text-center" style={{ background: 'var(--bg-secondary)' }}>
-                  <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>mean recall@{topK}</div>
+                  <div className="text-xs sm:text-[10px]" style={{ color: 'var(--text-muted)' }}>mean recall@{topK}</div>
                   <div className="text-lg font-bold text-cyan-400">{evalReport.metrics.meanRecallAtK}</div>
                 </div>
                 <div className="p-2 rounded text-center" style={{ background: 'var(--bg-secondary)' }}>
-                  <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>MRR</div>
+                  <div className="text-xs sm:text-[10px]" style={{ color: 'var(--text-muted)' }}>MRR</div>
                   <div className="text-lg font-bold text-violet-400">{evalReport.metrics.mrr}</div>
                 </div>
                 <div className="p-2 rounded text-center" style={{ background: 'var(--bg-secondary)' }}>
-                  <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>同族兄弟混淆</div>
+                  <div className="text-xs sm:text-[10px]" style={{ color: 'var(--text-muted)' }}>同族兄弟混淆</div>
                   <div className="text-lg font-bold" style={{ color: (evalReport.metrics.siblingConfusionCount ?? 0) > 0 ? '#22d3ee' : 'var(--text-primary)' }}>
                     {evalReport.metrics.siblingConfusionCount === undefined ? '—' : evalReport.metrics.siblingConfusionCount}
                   </div>
-                  <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                  <div className="text-xs sm:text-[10px]" style={{ color: 'var(--text-muted)' }}>
                     {evalReport.metrics.siblingConfusionCount === undefined ? '旧版本无此字段' : evalReport.metrics.siblingConfusionCount > 0 ? '未命中但命中了近重复同族' : '无近重复干扰'}
                   </div>
                 </div>
                 <div className="p-2 rounded text-center" style={{ background: 'var(--bg-secondary)' }}>
-                  <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>用例 / 耗时</div>
+                  <div className="text-xs sm:text-[10px]" style={{ color: 'var(--text-muted)' }}>用例 / 耗时</div>
                   <div className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
                     {evalReport.metrics.caseCount}/{evalReport.durationMs}ms
                   </div>
-                  <div className="text-[10px]" style={{ color: evalReport.metrics.failedCount > 0 ? '#fb7185' : 'var(--text-muted)' }}>
+                  <div className="text-xs sm:text-[10px]" style={{ color: evalReport.metrics.failedCount > 0 ? '#fb7185' : 'var(--text-muted)' }}>
                     {evalReport.metrics.failedCount > 0 ? `${evalReport.metrics.failedCount} 条检索失败（不计入指标）` : '全部成功'}
                   </div>
                 </div>
               </div>
-              <div className="space-y-1 max-h-48 overflow-y-auto">
+              <div className="space-y-1 max-h-48 overflow-y-auto min-h-0 overscroll-contain">
                 {evalReport.results.map((r) => {
                   const failed = !!r.error;
                   const good = !failed && r.recallAtK >= 0.999;
                   const bad = !failed && r.recallAtK === 0;
                   return (
-                    <div key={r.caseId} className="flex items-center gap-2 text-xs px-2 py-1 rounded" style={{ background: 'var(--bg-secondary)' }}>
+                    <div key={r.caseId} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs px-2 py-1.5 sm:py-1 rounded" style={{ background: 'var(--bg-secondary)' }}>
                       {failed ? <AlertTriangle size={13} className="text-rose-400 shrink-0" /> : good ? <CheckCircle2 size={13} className="text-emerald-400 shrink-0" /> : bad ? <XCircle size={13} className="text-rose-400 shrink-0" /> : <span className="shrink-0 w-[13px] text-center" style={{ color: 'var(--text-muted)' }}>◐</span>}
                       <span className="flex-1 min-w-0 truncate" style={{ color: 'var(--text-primary)' }}>{r.query}</span>
-                      <span className="font-mono shrink-0" style={{ color: r.missReason === 'sibling' ? '#22d3ee' : 'var(--text-muted)' }}>
+                      <span className="font-mono shrink-0 break-words w-full sm:w-auto" style={{ color: r.missReason === 'sibling' ? '#22d3ee' : 'var(--text-muted)' }}>
                         {failed
                           ? `检索失败：${r.error}`
                           : `recall ${r.recallAtK} · rr ${r.reciprocalRank} · 命中 [${r.hitDocIds.join(', ')}]${r.missReason === 'sibling' ? ' · 同族兄弟（近重复，可分性上限）' : ''}`}
@@ -381,7 +382,7 @@ export default function SearchTestbed() {
 
       {/* 底部提示 */}
       {results.length > 0 && (
-        <p className="text-[11px] mt-4" style={{ color: 'var(--text-muted)' }}>
+        <p className="text-xs sm:text-[11px] mt-4 break-words" style={{ color: 'var(--text-muted)' }}>
           共 {results.length} 条结果，其中文档 {docResults.length} 条可勾选为期望命中。分数分解：kw/vec 为各路 RRF 分量，rrf 为融合总分，rerank 为 LLM 重排分（0~10，仅开启时显示）。
         </p>
       )}

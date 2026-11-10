@@ -58,16 +58,16 @@ export function ConnectorBrowser({ platform }: { platform: string }) {
 
   return (
     <div className="mt-3 rounded-lg p-3" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-subtle)' }}>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-1.5 text-[11px] font-mono" style={{ color: 'var(--text-muted)' }}>
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="flex items-center gap-1 min-w-0 text-xs sm:text-[11px] font-mono" style={{ color: 'var(--text-muted)' }}>
           {parentPath !== null && (
-            <button onClick={() => setPath(parentPath)} className="p-0.5 rounded hover:opacity-70" title="返回上级">
+            <button onClick={() => setPath(parentPath)} className="p-0.5 rounded hover:opacity-70 flex min-h-10 min-w-10 items-center justify-center sm:min-h-0 sm:min-w-0 shrink-0" title="返回上级">
               <ArrowLeft className="w-3.5 h-3.5" />
             </button>
           )}
           <span className="truncate max-w-56">{path}</span>
         </div>
-        <button onClick={() => void browseQuery.refetch()} className="p-1 rounded hover:opacity-70" style={{ color: 'var(--text-muted)' }} title="刷新">
+        <button onClick={() => void browseQuery.refetch()} className="p-1 rounded hover:opacity-70 flex min-h-10 min-w-10 items-center justify-center sm:min-h-0 sm:min-w-0 shrink-0" style={{ color: 'var(--text-muted)' }} title="刷新">
           <RefreshCw className="w-3.5 h-3.5" />
         </button>
       </div>
@@ -77,13 +77,13 @@ export function ConnectorBrowser({ platform }: { platform: string }) {
           <Loader2 className="w-3.5 h-3.5 animate-spin" /> 读取中...
         </div>
       ) : error ? (
-        <div className="text-[11px] py-2" style={{ color: '#ef4444' }}>{error}</div>
+        <div className="text-xs sm:text-[11px] py-2 break-words" style={{ color: '#ef4444' }}>{error}</div>
       ) : files.length === 0 ? (
-        <div className="text-[11px] py-2" style={{ color: 'var(--text-muted)' }}>空目录</div>
+        <div className="text-xs sm:text-[11px] py-2" style={{ color: 'var(--text-muted)' }}>空目录</div>
       ) : (
-        <div className="space-y-1 max-h-64 overflow-y-auto">
+        <div className="space-y-1 max-h-64 overflow-y-auto overscroll-contain">
           {files.map((f) => (
-            <div key={f.id} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded hover:bg-[rgba(255,255,255,0.03)]">
+            <div key={f.id} className="flex items-center justify-between gap-2 px-2 py-1.5 min-h-10 sm:min-h-0 rounded hover:bg-[rgba(255,255,255,0.03)]">
               <button
                 className="flex items-center gap-2 min-w-0 text-left"
                 onClick={() => f.type === 'folder' && setPath(f.id)}
@@ -92,7 +92,7 @@ export function ConnectorBrowser({ platform }: { platform: string }) {
                 {f.type === 'folder'
                   ? <FolderOpen className="w-3.5 h-3.5 shrink-0" style={{ color: '#fbbf24' }} />
                   : <File className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--text-muted)' }} />}
-                <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>{f.name}</span>
+                <span className="text-xs truncate min-w-0" style={{ color: 'var(--text-primary)' }}>{f.name}</span>
                 {f.type === 'file' && (
                   <span className="text-[10px] shrink-0" style={{ color: 'var(--text-muted)' }}>{fmtSize(f.size)}</span>
                 )}
@@ -101,7 +101,7 @@ export function ConnectorBrowser({ platform }: { platform: string }) {
                 <button
                   onClick={() => void handleIngest(f)}
                   disabled={importing === f.id}
-                  className="flex items-center gap-1 text-[10px] px-2 py-1 rounded shrink-0 transition-colors"
+                  className="flex items-center justify-center gap-1 text-xs sm:text-[10px] px-2 py-1.5 sm:py-1 min-h-10 sm:min-h-0 rounded shrink-0 transition-colors"
                   style={{ color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}
                 >
                   {importing === f.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}

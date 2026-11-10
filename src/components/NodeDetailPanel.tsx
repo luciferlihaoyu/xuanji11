@@ -84,7 +84,7 @@ export default function NodeDetailPanel({
     .filter(Boolean);
 
   return (
-    <div className="panel-floating p-4 w-[320px]">
+    <div className="panel-floating p-4 w-full md:w-[320px]">
       {/* Header */}
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -101,15 +101,16 @@ export default function NodeDetailPanel({
               style={{ color: 'var(--text-primary)' }}
             />
           ) : (
-            <h3 className="text-lg font-bold truncate" style={{ color: 'var(--text-primary)' }}>
+            <h3 className="text-lg font-bold truncate min-w-0" style={{ color: 'var(--text-primary)' }}>
               {node.name}
             </h3>
           )}
         </div>
         <button
           onClick={onClose}
-          className="p-1 rounded hover:bg-white/5 transition-colors shrink-0"
+          className="p-1 rounded hover:bg-white/5 transition-colors shrink-0 min-w-10 min-h-10 md:min-w-0 md:min-h-0"
           style={{ color: 'var(--text-muted)' }}
+          aria-label="关闭节点详情"
         >
           <X className="w-4 h-4" />
         </button>
@@ -120,7 +121,7 @@ export default function NodeDetailPanel({
         <div className="space-y-3 mb-4">
           {/* Category */}
           <div>
-            <label className="text-[10px] font-medium uppercase tracking-wide block mb-1.5" style={{ color: 'var(--text-muted)' }}>
+            <label className="text-xs md:text-[10px] font-medium uppercase tracking-wide block mb-1.5" style={{ color: 'var(--text-muted)' }}>
               类别
             </label>
             <div className="flex items-center gap-2">
@@ -144,7 +145,7 @@ export default function NodeDetailPanel({
 
           {/* Importance */}
           <div>
-            <div className="flex justify-between text-[10px] mb-1 font-mono" style={{ color: 'var(--text-muted)' }}>
+            <div className="flex justify-between text-xs md:text-[10px] mb-1 font-mono" style={{ color: 'var(--text-muted)' }}>
               <span className="uppercase tracking-wide">重要性</span>
               <span style={{ color: 'var(--accent-cyan)' }}>{editImportance}/10</span>
             </div>
@@ -154,14 +155,14 @@ export default function NodeDetailPanel({
               max={10}
               value={editImportance}
               onChange={(e) => setEditImportance(Number(e.target.value))}
-              className="w-full h-1 rounded-full appearance-none cursor-pointer"
+              className="w-full h-10 md:h-1 py-[18px] md:py-0 rounded-full appearance-none cursor-pointer bg-clip-content"
               style={{ backgroundColor: 'var(--bg-tertiary)', accentColor: 'var(--accent-cyan)' }}
             />
           </div>
 
           {/* Tags */}
           <div>
-            <label className="text-[10px] font-medium uppercase tracking-wide block mb-1.5" style={{ color: 'var(--text-muted)' }}>
+            <label className="text-xs md:text-[10px] font-medium uppercase tracking-wide block mb-1.5" style={{ color: 'var(--text-muted)' }}>
               标签（逗号分隔）
             </label>
             <input
@@ -186,7 +187,7 @@ export default function NodeDetailPanel({
 
           {/* Summary */}
           <div>
-            <label className="text-[10px] font-medium uppercase tracking-wide block mb-1.5" style={{ color: 'var(--text-muted)' }}>
+            <label className="text-xs md:text-[10px] font-medium uppercase tracking-wide block mb-1.5" style={{ color: 'var(--text-muted)' }}>
               摘要
             </label>
             <textarea
@@ -232,7 +233,7 @@ export default function NodeDetailPanel({
           )}
 
           {/* Summary */}
-          <p className="text-xs leading-relaxed mb-4" style={{ color: 'var(--text-secondary)' }}>
+          <p className="text-xs leading-relaxed mb-4 break-words" style={{ color: 'var(--text-secondary)' }}>
             {node.summary || '暂无摘要'}
           </p>
 
@@ -242,9 +243,9 @@ export default function NodeDetailPanel({
               <h4 className="text-sm font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>
                 关联知识 ({connectedNodes.length})
               </h4>
-              <div className="space-y-1.5 max-h-[160px] overflow-y-auto">
+              <div className="space-y-1.5 max-h-[160px] min-h-0 overflow-y-auto overscroll-contain">
                 {connectedNodes.slice(0, 8).map((n) => (
-                  <div key={n.edgeId ?? n.id} className="flex items-center gap-2 py-1 group">
+                  <div key={n.edgeId ?? n.id} className="flex items-center gap-2 py-1.5 md:py-1 group min-h-10 md:min-h-0">
                     <span
                       className="w-1.5 h-1.5 rounded-full shrink-0"
                       style={{ backgroundColor: categoryColors[n.category] }}
@@ -257,9 +258,10 @@ export default function NodeDetailPanel({
                     {onDeleteEdge && n.edgeId && (
                       <button
                         onClick={() => onDeleteEdge(n.edgeId)}
-                        className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/15 transition-all shrink-0"
+                        className="p-0.5 rounded opacity-100 md:opacity-0 md:group-hover:opacity-100 hover:bg-red-500/15 transition-all shrink-0 min-w-10 min-h-10 md:min-w-0 md:min-h-0"
                         style={{ color: 'var(--text-muted)' }}
                         title="删除这条关联（反馈：这条边连错了）"
+                        aria-label={`删除与「${n.name}」的关联`}
                       >
                         <X className="w-3 h-3" />
                       </button>
@@ -278,14 +280,14 @@ export default function NodeDetailPanel({
           <>
             <button
               onClick={handleSave}
-              className="btn-primary w-full text-xs py-2 flex items-center justify-center gap-1.5"
+              className="btn-primary w-full text-xs py-2 min-h-10 md:min-h-0 flex items-center justify-center gap-1.5"
             >
               <Save className="w-3.5 h-3.5" />
               保存
             </button>
             <button
               onClick={handleCancelEdit}
-              className="btn-ghost w-full text-xs py-2 flex items-center justify-center gap-1.5"
+              className="btn-ghost w-full text-xs py-2 min-h-10 md:min-h-0 flex items-center justify-center gap-1.5"
             >
               取消
             </button>
@@ -294,16 +296,16 @@ export default function NodeDetailPanel({
           <>
             <Link
               to={`/kb/${node.id}`}
-              className="btn-primary w-full text-xs py-2 flex items-center justify-center gap-1.5"
+              className="btn-primary w-full text-xs py-2 min-h-10 md:min-h-0 flex items-center justify-center gap-1.5"
             >
               <ExternalLink className="w-3.5 h-3.5" />
               查看详情
             </Link>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               {onUpdate && (
                 <button
                   onClick={() => setIsEditing(true)}
-                  className="btn-secondary flex-1 text-xs py-1.5 flex items-center justify-center gap-1"
+                  className="btn-secondary flex-1 text-xs py-1.5 min-h-10 md:min-h-0 flex items-center justify-center gap-1"
                 >
                   <Edit3 className="w-3.5 h-3.5" />
                   编辑
@@ -312,7 +314,7 @@ export default function NodeDetailPanel({
               {onConnect && (
                 <button
                   onClick={() => onConnect(node.id)}
-                  className="btn-secondary flex-1 text-xs py-1.5 flex items-center justify-center gap-1"
+                  className="btn-secondary flex-1 text-xs py-1.5 min-h-10 md:min-h-0 flex items-center justify-center gap-1"
                 >
                   <Link2 className="w-3.5 h-3.5" />
                   连线
@@ -325,7 +327,7 @@ export default function NodeDetailPanel({
                       onDelete(node.id);
                     }
                   }}
-                  className="btn-danger flex-1 text-xs py-1.5 flex items-center justify-center gap-1"
+                  className="btn-danger flex-1 text-xs py-1.5 min-h-10 md:min-h-0 flex items-center justify-center gap-1"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   删除

@@ -5,6 +5,8 @@ import GraphControlPanel from '@/components/GraphControlPanel';
 import NodeDetailPanel from '@/components/NodeDetailPanel';
 import BottomInfoBar from '@/components/BottomInfoBar';
 import BgImageUpload from '@/components/BgImageUpload';
+import MobileDrawer from '@/components/MobileDrawer';
+import { useIsMobile } from '@/hooks/use-mobile';
 import KnowledgeGraphCanvas, { type KnowledgeGraphCanvasHandle } from '@/components/KnowledgeGraphCanvas';
 import { lazy, Suspense } from 'react';
 const GraphSphere3D = lazy(() => import('@/pages/GraphSphere3D'));
@@ -19,7 +21,7 @@ function loadViewMode(): KgViewMode {
   } catch { /* ignore */ }
   return 'sphere';
 }
-import { Plus, Link2, X, ExternalLink, Edit3, Trash2 } from 'lucide-react';
+import { Plus, Link2, X, ExternalLink, Edit3, Trash2, SlidersHorizontal, Info } from 'lucide-react';
 
 /**
  * 「类脑 / Neural」霓虹调色板（深空底专用）。
@@ -70,6 +72,10 @@ interface RenderEdge {
 export default function KnowledgeGraph() {
   const canvasRef = useRef<KnowledgeGraphCanvasHandle>(null);
   const controlPanelRef = useRef<HTMLDivElement>(null);
+  const isMobile = useIsMobile();
+  // 移动端抽屉（<768px）：控制面板 / 节点详情。桌面用常驻布局，互不影响。
+  const [mobileControlOpen, setMobileControlOpen] = useState(false);
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
   // 桌面端默认展开（屏幕够大），移动端默认收起（避免挡住画布）
   const [controlPanelOpen, setControlPanelOpen] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
@@ -92,6 +98,12 @@ export default function KnowledgeGraph() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const selectedNodeIdRef = useRef(selectedNodeId);
   useEffect(() => { selectedNodeIdRef.current = selectedNodeId; }, [selectedNodeId]);
+
+  // 移动端：选中节点即弹出详情抽屉（关抽屉不改选中态，故不会被立刻重开）
+  useEffect(() => {
+    if (!isMobile) return;
+    setMobileDetailOpen(Boolean(selectedNodeId));
+  }, [selectedNodeId, isMobile]);
 
   const [edgeMode, setEdgeMode] = useState<false | 'source'>(false);
 
@@ -214,6 +226,8 @@ export default function KnowledgeGraph() {
       }
     }
     setSelectedNodeId(id);
+    // 移动端：点选节点即弹出详情抽屉，点空白即收起（未选中时抽屉不渲染）
+    setMobileDetailOpen(id !== null);
   }, [edgeMode]);
 
   const handleCanvasContextMenu = useCallback((nodeId: string, x: number, y: number) => {
@@ -404,8 +418,74 @@ export default function KnowledgeGraph() {
   const selectedNodeData = selectedNodeId ? renderNodes.find((n) => n.id === selectedNodeId) : null;
   const connectedEdges = selectedNodeId ? renderEdges.filter((e) => e.source === selectedNodeId || e.target === selectedNodeId) : [];
 
+  // 控制面板内容：桌面常驻面板与移动端抽屉共用（同一状态源，不改业务逻辑）
+  const controlPanelBody = (
+    <>
+      <div className="panel-floating p-2 mb-3 w-full md:w-[200px]">
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="btn-primary flex-1 text-xs py-1.5 min-h-10 md:min-h-0 flex items-center justify-center gap-1"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            新建节点
+          </button>
+          <button
+            onClick={() => {
+              if (edgeMode) {
+                setEdgeMode(false);
+                setSelectedNodeId(null);
+              } else if (selectedNodeId) {
+                setEdgeMode('source');
+              } else {
+                addToast({ type: 'info', title: '请先选择一个节点' });
+              }
+            }}
+            className={`flex-1 text-xs py-1.5 min-h-10 md:min-h-0 flex items-center justify-center gap-1 ${edgeMode ? 'btn-danger' : 'btn-secondary'}`}
+          >
+            {edgeMode ? <X className="w-3.5 h-3.5" /> : <Link2 className="w-3.5 h-3.5" />}
+            {edgeMode ? '取消连线' : '连线'}
+          </button>
+        </div>
+        {edgeMode && (
+          <p className="text-xs sm:text-[10px] mt-2" style={{ color: 'var(--accent-cyan)' }}>
+            点击目标节点完成连线
+          </p>
+        )}
+        <button
+          onClick={() => { setShowAutoLinkModal(true); setAutoLinkPreview(null); }}
+          className="btn-ghost w-full text-xs py-1.5 min-h-10 md:min-h-0 mt-2 flex items-center justify-center gap-1"
+          style={{ color: 'var(--accent-cyan)' }}
+        >
+          <Link2 className="w-3.5 h-3.5" />
+          一键自动建边
+        </button>
+      </div>
+      <GraphControlPanel
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        filteredCategories={filteredCategories}
+        onToggleCategory={toggleCategory}
+        gravityStrength={gravityStrength}
+        onGravityChange={setGravityStrength}
+        nodeSpacing={nodeSpacing}
+        onSpacingChange={setNodeSpacing}
+        categoryLabels={CATEGORY_LABELS}
+        categoryColors={CATEGORY_COLORS}
+        nodeCounts={Object.fromEntries(Object.keys(CATEGORY_COLORS).map((cat) => [cat, renderNodes.filter((n) => n.category === cat).length]))}
+        onFocusSelected={handleFocusSelected}
+        onResetView={handleResetView}
+        onExportGraph={handleExportGraph}
+      />
+      {/* Background Upload */}
+      <div className="mt-3 panel-floating p-3 w-full md:w-[200px]">
+        <BgImageUpload />
+      </div>
+    </>
+  );
+
   return (
-    <div ref={containerRef} className="relative w-full" style={{ height: 'calc(100vh - 48px)', overflow: 'hidden' }}>
+    <div ref={containerRef} className="relative w-full h-app" style={{ overflow: 'hidden' }}>
       {/* Background */}
       <div
         className="absolute inset-0 bg-grid"
@@ -457,7 +537,7 @@ export default function KnowledgeGraph() {
       {/* Obsidian 风格 Canvas（点击图区空白处即收起侧边栏） */}
       {kgView === '2d' && !isGraphLoading && (
         <div
-          className="absolute inset-0"
+          className="absolute inset-0 touch-pan-canvas"
           onPointerDown={() => {
             // 连线模式下保留面板（面板里有"点击目标节点完成连线"的提示），其余情况点图区即收起
             if (edgeMode) return;
@@ -483,30 +563,32 @@ export default function KnowledgeGraph() {
 
       {/* 缩放按钮（移动端友好）——仅 2D 模式 */}
       {kgView === '2d' && (
-      <div className="absolute right-3 bottom-16 z-10 flex flex-col gap-1.5">
+      <div className="absolute right-3 bottom-24 md:bottom-16 z-10 flex flex-col gap-1.5">
         <button
           onClick={() => canvasRef.current?.zoomBy(1.3)}
-          className="w-9 h-9 rounded-full border text-lg font-bold flex items-center justify-center active:scale-95 transition-transform"
+          className="w-10 h-10 md:w-9 md:h-9 rounded-full border text-lg font-bold flex items-center justify-center active:scale-95 transition-transform"
           style={{ backgroundColor: 'rgba(255,255,255,0.85)', borderColor: 'rgba(30,40,60,0.15)', color: '#5a6472' }}
           title="放大"
+          aria-label="放大"
         >+</button>
         <button
           onClick={() => canvasRef.current?.zoomBy(1 / 1.3)}
-          className="w-9 h-9 rounded-full border text-lg font-bold flex items-center justify-center active:scale-95 transition-transform"
+          className="w-10 h-10 md:w-9 md:h-9 rounded-full border text-lg font-bold flex items-center justify-center active:scale-95 transition-transform"
           style={{ backgroundColor: 'rgba(255,255,255,0.85)', borderColor: 'rgba(30,40,60,0.15)', color: '#5a6472' }}
           title="缩小"
+          aria-label="缩小"
         >−</button>
       </div>
       )}
 
-      {/* 图谱类型切换器 */}
-      <div className="absolute top-4 left-4 z-20 flex gap-1 rounded-full border px-1 py-1"
+      {/* 图谱类型切换器（移动端压缩内边距，右侧让位给抽屉入口） */}
+      <div className="absolute top-3 left-3 md:top-4 md:left-4 z-20 flex gap-1 rounded-full border px-1 py-1 max-w-[calc(100vw-6.5rem)] md:max-w-none no-scrollbar overflow-x-auto"
         style={{ backgroundColor: 'rgba(10,13,20,.72)', backdropFilter: 'blur(12px)', borderColor: 'rgba(120,160,220,0.18)' }}>
         {([['sphere', '3D 球体'], ['workbench', '3D 工作台'], ['2d', '2D 经典']] as [KgViewMode, string][]).map(([m, label]) => (
           <button
             key={m}
             onClick={() => switchKgView(m)}
-            className="px-3 py-1 rounded-full text-xs transition-all"
+            className="px-2 md:px-3 py-1 rounded-full text-xs transition-all min-h-10 md:min-h-0 shrink-0"
             style={kgView === m
               ? { backgroundColor: 'var(--accent-cyan, #22d3ee)', color: '#06121a', fontWeight: 700 }
               : { color: '#9fb4d8' }}
@@ -516,16 +598,42 @@ export default function KnowledgeGraph() {
         ))}
       </div>
 
-      {/* Top badge */}
-      <div className={`absolute top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-xs font-medium border z-10 transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'}`}
-        style={{ backgroundColor: 'rgba(255,255,255,.72)', backdropFilter: 'blur(12px)', borderColor: 'rgba(30,40,60,0.10)', color: '#5a6472' }}>
-        知识图谱 · {renderNodes.length} 节点 · {renderEdges.length} 连接
+      {/* 移动端工具栏：控制面板 / 节点详情 抽屉入口（桌面用常驻侧栏，故仅 <768px 渲染） */}
+      <div className="absolute top-3 right-2 z-20 flex items-center gap-1 md:hidden">
+        <button
+          type="button"
+          onClick={() => setMobileControlOpen(true)}
+          className="tap-target rounded-full border active:scale-95 transition-transform"
+          style={{ backgroundColor: 'rgba(10,13,20,.72)', backdropFilter: 'blur(12px)', borderColor: 'rgba(120,160,220,0.18)', color: '#9fb4d8' }}
+          aria-label="展开控制面板"
+          title="控制面板"
+        >
+          <SlidersHorizontal className="w-4 h-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileDetailOpen(true)}
+          disabled={!selectedNodeData}
+          className="tap-target rounded-full border active:scale-95 transition-transform disabled:opacity-40"
+          style={{ backgroundColor: 'rgba(10,13,20,.72)', backdropFilter: 'blur(12px)', borderColor: 'rgba(120,160,220,0.18)', color: '#9fb4d8' }}
+          aria-label={selectedNodeData ? '展开节点详情' : '节点详情（先在图谱中点选一个节点）'}
+          title="节点详情"
+        >
+          <Info className="w-4 h-4" />
+        </button>
       </div>
 
-      {/* Control Panel（全端可折叠：点按钮呼出/收起，点图区收起） */}
+      {/* Top badge（桌面显示节点/连线统计；移动端改显示画布手势提示，统计已在底部信息条） */}
+      <div className={`absolute top-16 md:top-4 left-1/2 -translate-x-1/2 px-3 md:px-4 py-1.5 rounded-full text-xs font-medium border z-10 transition-all duration-500 max-w-[calc(100vw-1.5rem)] ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'}`}
+        style={{ backgroundColor: 'rgba(255,255,255,.72)', backdropFilter: 'blur(12px)', borderColor: 'rgba(30,40,60,0.10)', color: '#5a6472' }}>
+        <span className="md:hidden whitespace-nowrap">双指缩放 · 单指拖动</span>
+        <span className="hidden md:inline">知识图谱 · {renderNodes.length} 节点 · {renderEdges.length} 连接</span>
+      </div>
+
+      {/* Control Panel（桌面常驻可折叠；<768px 收进右侧抽屉，见下方 MobileDrawer） */}
       <div
         ref={controlPanelRef}
-        className={`absolute left-2 sm:left-4 top-16 z-10 flex flex-col items-start transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-5'}`}
+        className={`hidden md:flex absolute left-2 sm:left-4 top-16 z-10 flex-col items-start transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-5'}`}
       >
         <button
           onClick={() => setControlPanelOpen((v) => !v)}
@@ -538,72 +646,25 @@ export default function KnowledgeGraph() {
           {controlPanelOpen ? '收起面板 ▴' : '控制面板 ▾'}
         </button>
         {/* 折叠区：三块内容一起收起（此前只收了第一块，大会员面板与背景图上传始终可见） */}
-        <div className={`max-h-[calc(100vh-10rem)] overflow-y-auto pb-1 ${controlPanelOpen ? 'block' : 'hidden'}`}>
-        <div className="panel-floating p-2 mb-3 w-[200px] max-w-[calc(100vw-2rem)]">
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="btn-primary flex-1 text-xs py-1.5 flex items-center justify-center gap-1"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              新建节点
-            </button>
-            <button
-              onClick={() => {
-                if (edgeMode) {
-                  setEdgeMode(false);
-                  setSelectedNodeId(null);
-                } else if (selectedNodeId) {
-                  setEdgeMode('source');
-                } else {
-                  addToast({ type: 'info', title: '请先选择一个节点' });
-                }
-              }}
-              className={`flex-1 text-xs py-1.5 flex items-center justify-center gap-1 ${edgeMode ? 'btn-danger' : 'btn-secondary'}`}
-            >
-              {edgeMode ? <X className="w-3.5 h-3.5" /> : <Link2 className="w-3.5 h-3.5" />}
-              {edgeMode ? '取消连线' : '连线'}
-            </button>
-          </div>
-          {edgeMode && (
-            <p className="text-[10px] mt-2" style={{ color: 'var(--accent-cyan)' }}>
-              点击目标节点完成连线
-            </p>
-          )}
-          <button
-            onClick={() => { setShowAutoLinkModal(true); setAutoLinkPreview(null); }}
-            className="btn-ghost w-full text-xs py-1.5 mt-2 flex items-center justify-center gap-1"
-            style={{ color: 'var(--accent-cyan)' }}
-          >
-            <Link2 className="w-3.5 h-3.5" />
-            一键自动建边
-          </button>
-        </div>
-        <GraphControlPanel
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          filteredCategories={filteredCategories}
-          onToggleCategory={toggleCategory}
-          gravityStrength={gravityStrength}
-          onGravityChange={setGravityStrength}
-          nodeSpacing={nodeSpacing}
-          onSpacingChange={setNodeSpacing}
-          categoryLabels={CATEGORY_LABELS}
-          categoryColors={CATEGORY_COLORS}
-          nodeCounts={Object.fromEntries(Object.keys(CATEGORY_COLORS).map((cat) => [cat, renderNodes.filter((n) => n.category === cat).length]))}
-          onFocusSelected={handleFocusSelected}
-          onResetView={handleResetView}
-          onExportGraph={handleExportGraph}
-        />
-        {/* Background Upload */}
-        <div className="mt-3 panel-floating p-3 w-[200px]">
-          <BgImageUpload />
-        </div>
+        <div className={`max-h-[calc(100dvh-10rem)] min-h-0 overflow-y-auto overscroll-contain pb-1 ${controlPanelOpen ? 'block' : 'hidden'}`}>
+          {controlPanelBody}
         </div>
       </div>
 
-      {/* Detail Panel */}
-      <div className={`absolute right-2 sm:right-4 top-16 bottom-16 sm:bottom-auto z-10 max-w-[calc(100vw-1rem)] transition-all duration-500 ${selectedNodeData ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-full pointer-events-none'}`}>
+      {/* 控制面板抽屉（移动端）：入口在顶部工具栏，遮罩/Esc 关闭 */}
+      <MobileDrawer
+        open={mobileControlOpen}
+        onClose={() => setMobileControlOpen(false)}
+        side="left"
+        title="控制面板"
+        widthClass="w-[86vw] max-w-[340px]"
+        ariaLabel="图谱控制面板"
+      >
+        <div className="p-3">{controlPanelBody}</div>
+      </MobileDrawer>
+
+      {/* Detail Panel（桌面常驻；<768px 收进右侧抽屉） */}
+      <div className={`hidden md:block absolute right-2 sm:right-4 top-16 bottom-16 sm:bottom-auto z-10 max-w-[calc(100vw-1rem)] transition-all duration-500 ${selectedNodeData ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-full pointer-events-none'}`}>
         {selectedNodeData && (
           <NodeDetailPanel
             node={selectedNodeData}
@@ -622,18 +683,47 @@ export default function KnowledgeGraph() {
         )}
       </div>
 
+      {/* 节点详情抽屉（移动端）：选中节点自动呼出，也可点工具栏「详情」再打开 */}
+      {selectedNodeData && (
+        <MobileDrawer
+          open={mobileDetailOpen}
+          onClose={() => setMobileDetailOpen(false)}
+          side="right"
+          title="节点详情"
+          widthClass="w-[92vw] max-w-[380px]"
+          ariaLabel="节点详情面板"
+        >
+          <div className="p-3">
+            <NodeDetailPanel
+              node={selectedNodeData}
+              connectedEdges={connectedEdges}
+              allNodes={renderNodes}
+              categoryColors={CATEGORY_COLORS}
+              onClose={() => { setSelectedNodeId(null); setMobileDetailOpen(false); }}
+              onDelete={handleDeleteNode}
+              onDeleteEdge={handleDeleteEdge}
+              onConnect={handleConnectStart}
+              onUpdate={handleUpdateNode}
+              startInEdit={editTriggerId === selectedNodeData.id}
+              onEditDone={() => setEditTriggerId(null)}
+              categoryLabels={CATEGORY_LABELS}
+            />
+          </div>
+        </MobileDrawer>
+      )}
+
       {/* Bottom Info Bar */}
-      <div className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-5'}`}>
+      <div className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 w-auto max-w-[calc(100vw-1rem)] transition-all duration-500 ${entranceDone ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-5'}`}>
         <BottomInfoBar nodeCount={renderNodes.length} edgeCount={renderEdges.length} onlineAgents={onlineCount} totalAgents={agents.length} lastSync="后端实时" />
       </div>
 
       {/* Create Node Modal */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
-          <div className="rounded-lg border p-4 sm:p-6 w-[420px] max-w-[calc(100vw-2rem)]" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+          <div className="rounded-lg border p-4 sm:p-6 w-[420px] max-w-[calc(100vw-2rem)] max-h-[90dvh] overflow-y-auto overscroll-contain" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>新建知识节点</h3>
-              <button onClick={() => setShowAddModal(false)} className="p-1 rounded hover:bg-white/5">
+              <button onClick={() => setShowAddModal(false)} className="p-1 rounded hover:bg-white/5 min-w-10 min-h-10 md:min-w-0 md:min-h-0" aria-label="关闭">
                 <X className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
               </button>
             </div>
@@ -680,7 +770,7 @@ export default function KnowledgeGraph() {
                   max={10}
                   value={newNode.importance}
                   onChange={(e) => setNewNode((p) => ({ ...p, importance: Number(e.target.value) }))}
-                  className="w-full h-1 rounded-full appearance-none cursor-pointer"
+                  className="w-full h-10 md:h-1 py-[18px] md:py-0 rounded-full appearance-none cursor-pointer bg-clip-content"
                   style={{ backgroundColor: 'var(--bg-tertiary)', accentColor: 'var(--accent-cyan)' }}
                 />
               </div>
@@ -696,8 +786,8 @@ export default function KnowledgeGraph() {
               </div>
             </div>
             <div className="flex justify-end gap-2 mt-6 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-              <button onClick={() => setShowAddModal(false)} className="btn-ghost text-xs py-2 px-4">取消</button>
-              <button onClick={handleAddNode} disabled={!newNode.title.trim()} className="btn-primary text-xs py-2 px-4">创建</button>
+              <button onClick={() => setShowAddModal(false)} className="btn-ghost text-xs py-2 min-h-10 md:min-h-0 px-4">取消</button>
+              <button onClick={handleAddNode} disabled={!newNode.title.trim()} className="btn-primary text-xs py-2 min-h-10 md:min-h-0 px-4 flex-1 sm:flex-none">创建</button>
             </div>
           </div>
         </div>
@@ -706,10 +796,10 @@ export default function KnowledgeGraph() {
       {/* Auto-Link Modal */}
       {showAutoLinkModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(30,40,60,0.35)' }}>
-          <div className="rounded-lg border p-4 sm:p-6 w-[480px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col" style={{ backgroundColor: '#12161f', borderColor: 'rgba(120,160,220,0.16)' }}>
+          <div className="rounded-lg border p-4 sm:p-6 w-[480px] max-w-[calc(100vw-2rem)] max-h-[85dvh] flex flex-col" style={{ backgroundColor: '#12161f', borderColor: 'rgba(120,160,220,0.16)' }}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold" style={{ color: '#e6edf7' }}>一键自动建边</h3>
-              <button onClick={() => setShowAutoLinkModal(false)} className="p-1 rounded hover:bg-black/5">
+              <button onClick={() => setShowAutoLinkModal(false)} className="p-1 rounded hover:bg-black/5 min-w-10 min-h-10 md:min-w-0 md:min-h-0" aria-label="关闭">
                 <X className="w-5 h-5" style={{ color: '#8a9099' }} />
               </button>
             </div>
@@ -725,16 +815,16 @@ export default function KnowledgeGraph() {
               <input
                 type="range" min={45} max={85} value={autoLinkThreshold}
                 onChange={(e) => { setAutoLinkThreshold(Number(e.target.value)); setAutoLinkPreview(null); }}
-                className="w-full h-1 rounded-full appearance-none cursor-pointer"
+                className="w-full h-10 md:h-1 py-[18px] md:py-0 rounded-full appearance-none cursor-pointer bg-clip-content"
                 style={{ backgroundColor: '#232a38', accentColor: 'var(--accent-cyan)' }}
               />
-              <div className="flex justify-between text-[10px] mt-1" style={{ color: '#8a9099' }}>
+              <div className="flex justify-between text-xs sm:text-[10px] mt-1" style={{ color: '#8a9099' }}>
                 <span>45% 多而宽</span><span>85% 少而准</span>
               </div>
             </div>
 
             {autoLinkPreview ? (
-              <div className="flex-1 overflow-y-auto mb-4">
+              <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain mb-4">
                 <p className="text-xs mb-2" style={{ color: '#cdd7e6' }}>
                   找到 <b style={{ color: 'var(--accent-cyan)' }}>{autoLinkPreview.totalCandidates}</b> 条候选边
                   {autoLinkPreview.isolated > 0 && <span style={{ color: '#8a9099' }}>（另有 {autoLinkPreview.isolated} 个完全孤立节点）</span>}
@@ -760,13 +850,13 @@ export default function KnowledgeGraph() {
             )}
 
             <div className="flex justify-end gap-2 pt-4" style={{ borderTop: '1px solid rgba(30,40,60,0.10)' }}>
-              <button onClick={() => setShowAutoLinkModal(false)} className="btn-ghost text-xs py-2 px-4">取消</button>
+              <button onClick={() => setShowAutoLinkModal(false)} className="btn-ghost text-xs py-2 min-h-10 md:min-h-0 px-4">取消</button>
               {!autoLinkPreview ? (
-                <button onClick={handleAutoLinkPreview} disabled={autoLinkBusy} className="btn-secondary text-xs py-2 px-4">
+                <button onClick={handleAutoLinkPreview} disabled={autoLinkBusy} className="btn-secondary text-xs py-2 min-h-10 md:min-h-0 px-4">
                   {autoLinkBusy ? '计算中…' : '预览候选'}
                 </button>
               ) : (
-                <button onClick={handleAutoLinkApply} disabled={autoLinkBusy || autoLinkPreview.totalCandidates === 0} className="btn-primary text-xs py-2 px-4">
+                <button onClick={handleAutoLinkApply} disabled={autoLinkBusy || autoLinkPreview.totalCandidates === 0} className="btn-primary text-xs py-2 min-h-10 md:min-h-0 px-4">
                   {autoLinkBusy ? '建边中…' : `确认建 ${autoLinkPreview.totalCandidates} 条边`}
                 </button>
               )}
@@ -788,7 +878,7 @@ export default function KnowledgeGraph() {
         >
           <button
             onClick={() => handleContextMenuView(contextMenu.nodeId)}
-            className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
+            className="w-full px-3 py-2 min-h-10 md:min-h-0 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
             style={{ color: 'var(--text-secondary)' }}
           >
             <ExternalLink className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
@@ -796,7 +886,7 @@ export default function KnowledgeGraph() {
           </button>
           <button
             onClick={() => handleContextMenuEdit(contextMenu.nodeId)}
-            className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
+            className="w-full px-3 py-2 min-h-10 md:min-h-0 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
             style={{ color: 'var(--text-secondary)' }}
           >
             <Edit3 className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
@@ -804,7 +894,7 @@ export default function KnowledgeGraph() {
           </button>
           <button
             onClick={() => handleContextMenuConnect(contextMenu.nodeId)}
-            className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
+            className="w-full px-3 py-2 min-h-10 md:min-h-0 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
             style={{ color: 'var(--text-secondary)' }}
           >
             <Link2 className="w-3.5 h-3.5" style={{ color: 'var(--accent-cyan)' }} />
@@ -813,7 +903,7 @@ export default function KnowledgeGraph() {
           <div style={{ borderTop: '1px solid var(--border-subtle)' }} className="my-1" />
           <button
             onClick={() => handleContextMenuDelete(contextMenu.nodeId)}
-            className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
+            className="w-full px-3 py-2 min-h-10 md:min-h-0 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
             style={{ color: 'var(--accent-rose)' }}
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -824,7 +914,7 @@ export default function KnowledgeGraph() {
               setContextMenu(null);
               addToast({ type: 'info', title: '节点禁用功能开发中' });
             }}
-            className="w-full px-3 py-2 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
+            className="w-full px-3 py-2 min-h-10 md:min-h-0 flex items-center gap-2 text-xs hover:bg-white/5 transition-colors"
             style={{ color: 'var(--text-secondary)' }}
           >
             <X className="w-3.5 h-3.5" />

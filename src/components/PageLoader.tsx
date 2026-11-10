@@ -11,7 +11,7 @@ export default function PageLoader() {
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        minHeight: '100vh',
+        minHeight: '100dvh',
         gap: '1.25rem',
         backgroundColor: 'var(--bg-primary)',
       }}

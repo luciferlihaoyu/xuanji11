@@ -3,6 +3,8 @@
  * 设计语言学 Jarvis UI：mono HUD、黑底青边信息卡、角落小地图、顶部搜索。
  */
 import { useEffect, useRef, useState } from 'react';
+import { Search, X } from 'lucide-react';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { ACCENT_DARK, ACCENT_LIGHT } from './presets';
 
 export interface MiniNode {
@@ -15,18 +17,27 @@ export function Hud({ nodeCount, linkCount, visibleCount, simStable, breadcrumb,
   nodeCount: number; linkCount: number; visibleCount: number;
   simStable: boolean; breadcrumb: string | null; isDark: boolean; lowSpec?: boolean;
 }) {
+  const isMobile = useIsMobile();
+  // ref 镜像：rAF 循环不需要因断点变化重启，故不改下方 effect 的依赖数组
+  const isMobileRef = useRef(isMobile);
+  isMobileRef.current = isMobile;
   const [fps, setFps] = useState(0);
   const timesRef = useRef<number[]>([]);
   const lastRef = useRef(performance.now());
   useEffect(() => {
     let raf: number;
+    let n = 0;
     const tick = () => {
       const now = performance.now();
       timesRef.current.push(now - lastRef.current);
       lastRef.current = now;
       if (timesRef.current.length > 60) timesRef.current.shift();
-      const avg = timesRef.current.reduce((a, b) => a + b, 1) / timesRef.current.length;
-      setFps(Math.round(1000 / avg));
+      n += 1;
+      // 移动端每 30 帧才推一次 state：逐帧 setState 会让整个 HUD 持续重渲染，纯耗电
+      if (!isMobileRef.current || n % 30 === 0) {
+        const avg = timesRef.current.reduce((a, b) => a + b, 1) / timesRef.current.length;
+        setFps(Math.round(1000 / avg));
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -35,14 +46,19 @@ export function Hud({ nodeCount, linkCount, visibleCount, simStable, breadcrumb,
   const accent = isDark ? ACCENT_DARK : ACCENT_LIGHT;
   return (
     <div style={{
-      position: 'absolute', top: 16, left: 18, zIndex: 10, pointerEvents: 'none', userSelect: 'none',
+      position: 'absolute', top: isMobile ? 104 : 16, left: isMobile ? 12 : 18, zIndex: 10,
+      pointerEvents: 'none', userSelect: 'none',
       fontFamily: '"Courier New", ui-monospace, monospace', fontSize: 12, lineHeight: 1.7,
       color: isDark ? '#00a8cc' : '#0e7a96', textShadow: isDark ? '0 0 8px #00a8cc44' : 'none',
+      maxWidth: isMobile ? 'calc(100vw - 80px)' : undefined,
     }}>
-      <div>NODES: {nodeCount}</div>
-      <div>VISIBLE: {visibleCount}</div>
-      <div>LINKS: {linkCount}</div>
-      <div>FPS: {fps}</div>
+      {/* 桌面竖排不变（display:block）；移动端收成一行 flex-wrap，别把画布挤掉（契约第 5 条） */}
+      <div style={{ display: isMobile ? 'flex' : 'block', flexWrap: 'wrap', columnGap: 8 }}>
+        <div>NODES: {nodeCount}</div>
+        <div>VISIBLE: {visibleCount}</div>
+        <div>LINKS: {linkCount}</div>
+        <div>FPS: {fps}</div>
+      </div>
       <div style={{ marginTop: 4, color: simStable ? accent : '#ff6b35' }}>
         {simStable ? '■ SIM STABLE' : '◌ SIMULATING'}
       </div>
@@ -56,6 +72,11 @@ export function Hud({ nodeCount, linkCount, visibleCount, simStable, breadcrumb,
           {breadcrumb}
         </div>
       )}
+      {isMobile && (
+        <div style={{ marginTop: 2, color: accent, fontSize: 10, letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+          单指拖动旋转，双指缩放
+        </div>
+      )}
     </div>
   );
 }
@@ -63,7 +84,9 @@ export function Hud({ nodeCount, linkCount, visibleCount, simStable, breadcrumb,
 /* ── 富信息卡 Tooltip ───────────────────────────────────────── */
 export interface TooltipData { name: string; catLabel: string; deg: number; color: string }
 export function TooltipCard({ data, x, y, isDark }: { data: TooltipData | null; x: number; y: number; isDark: boolean }) {
-  if (!data) return null;
+  const isMobile = useIsMobile();
+  // 移动端无 hover：悬浮卡由「点节点→节点详情面板」替代，避免手指抬起后残留一张幽灵卡
+  if (!data || isMobile) return null;
   const W = 240;
   let left = x + 14;
   let top = y + 14;
@@ -101,6 +124,7 @@ export function Minimap({ nodes, camPos, isDark, onNavigate }: {
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const boundsRef = useRef({ minX: 0, rangeX: 1, minZ: 0, rangeZ: 1 });
+  const isMobile = useIsMobile();
   useEffect(() => {
     const cv = ref.current;
     if (!cv || nodes.length === 0) return;
@@ -140,6 +164,8 @@ export function Minimap({ nodes, camPos, isDark, onNavigate }: {
       ref={ref}
       width={MM_W}
       height={MM_H}
+      role="button"
+      aria-label="小地图：点按定位视野"
       onClick={(e) => {
         const r = e.currentTarget.getBoundingClientRect();
         const { minX, rangeX, minZ, rangeZ } = boundsRef.current;
@@ -148,7 +174,8 @@ export function Minimap({ nodes, camPos, isDark, onNavigate }: {
         onNavigate(wx, wz);
       }}
       style={{
-        position: 'absolute', right: 18, bottom: 16, zIndex: 10, cursor: 'crosshair',
+        position: 'absolute', right: isMobile ? 10 : 18, bottom: isMobile ? 72 : 16, zIndex: 10, cursor: 'crosshair',
+        maxWidth: 'calc(100vw - 20px)', touchAction: 'manipulation',
         border: `1px solid ${isDark ? 'rgba(0,212,255,0.35)' : 'rgba(14,138,168,0.4)'}`,
         borderRadius: 4, boxShadow: isDark ? '0 0 10px #00d4ff22' : '0 2px 8px rgba(0,0,0,0.12)',
       }}
@@ -168,71 +195,107 @@ export function SearchBar({ nodes, cats, catFilter, onToggleCat, onPick, isDark 
 }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
+  // 移动端：整条搜索工具栏默认折叠成一个 40×40 图标按钮，点开才是顶部面板（契约第 9 条）
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const isMobile = useIsMobile();
   const matches = q.trim()
     ? nodes.filter(n => n.name.toLowerCase().includes(q.trim().toLowerCase())).slice(0, 8)
     : [];
   const accent = isDark ? ACCENT_DARK : ACCENT_LIGHT;
   const bg = isDark ? 'rgba(0,0,0,0.75)' : 'rgba(255,255,255,0.9)';
   const border = `1px solid ${isDark ? 'rgba(0,212,255,0.35)' : 'rgba(14,138,168,0.35)'}`;
+  const collapsed = isMobile && !mobileOpen;
   return (
-    <div style={{ position: 'absolute', top: 14, left: '50%', transform: 'translateX(-50%)', zIndex: 20, width: 340 }}>
-      <input
-        value={q}
-        onChange={(e) => { setQ(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && matches[0]) { onPick(matches[0]); setQ(''); } }}
-        placeholder="搜索节点，回车聚焦…"
-        style={{
-          width: '100%', boxSizing: 'border-box', padding: '7px 12px', fontSize: 12, outline: 'none',
-          fontFamily: '"Courier New", ui-monospace, monospace',
-          background: bg, border, borderRadius: 4,
-          color: isDark ? '#cdd6f4' : '#334155',
-          boxShadow: `0 0 10px ${accent}22`,
-        }}
-      />
-      {open && matches.length > 0 && (
-        <div style={{ marginTop: 4, background: bg, border, borderRadius: 4, overflow: 'hidden', backdropFilter: 'blur(6px)' }}>
-          {matches.map(m => (
-            <div
-              key={m.id}
-              onMouseDown={() => { onPick(m); setQ(''); }}
-              style={{
-                padding: '6px 12px', fontSize: 12, cursor: 'pointer',
-                color: isDark ? '#cdd6f4' : '#334155',
-                fontFamily: '"Courier New", ui-monospace, monospace',
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = `${accent}22`; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
-            >
-              {m.name}
-            </div>
-          ))}
-        </div>
+    <>
+      {/* 移动端呼出入口（桌面是顶部常驻搜索框，故 <768px 才渲染这条图标按钮） */}
+      {isMobile && (
+        <button
+          type="button"
+          onClick={() => setMobileOpen(o => !o)}
+          aria-label={mobileOpen ? '收起搜索面板' : '展开搜索面板'}
+          aria-expanded={mobileOpen}
+          className="tap-target absolute md:hidden rounded-lg"
+          style={{
+            right: 10, top: 60, zIndex: 20, background: bg, border,
+            color: accent, boxShadow: `0 0 10px ${accent}22`,
+          }}
+        >
+          {mobileOpen ? <X className="w-4 h-4" /> : <Search className="w-4 h-4" />}
+        </button>
       )}
-      <div style={{ display: 'flex', gap: 6, justifyContent: 'center', marginTop: 6, flexWrap: 'wrap' }}>
-        {cats.map(c => {
-          const on = catFilter.has(c.key);
-          return (
-            <button
-              key={c.key}
-              onClick={() => onToggleCat(c.key)}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer',
-                fontSize: 10, padding: '2px 8px', borderRadius: 10, fontFamily: '"Courier New", monospace',
-                background: on ? `${c.color}22` : 'transparent',
-                border: `1px solid ${on ? c.color : isDark ? '#45475a' : '#cbd5e1'}`,
-                color: on ? c.color : isDark ? '#7f849c' : '#94a3b8',
-                opacity: on ? 1 : 0.6,
-              }}
-            >
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.color }} />
-              {c.label}
-            </button>
-          );
-        })}
+      <div style={{
+        position: 'absolute', zIndex: 20,
+        top: isMobile ? 60 : 14,
+        left: isMobile ? 10 : '50%',
+        right: isMobile ? 56 : undefined,
+        transform: isMobile ? undefined : 'translateX(-50%)',
+        width: isMobile ? undefined : 340,
+        display: collapsed ? 'none' : undefined,
+      }}>
+        <input
+          value={q}
+          onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && matches[0]) { onPick(matches[0]); setQ(''); } }}
+          placeholder="搜索节点，回车聚焦…"
+          style={{
+            width: '100%', boxSizing: 'border-box', padding: isMobile ? '10px 12px' : '7px 12px', fontSize: 12, outline: 'none',
+            fontFamily: '"Courier New", ui-monospace, monospace',
+            background: bg, border, borderRadius: 4,
+            color: isDark ? '#cdd6f4' : '#334155',
+            boxShadow: `0 0 10px ${accent}22`,
+          }}
+        />
+        {open && matches.length > 0 && (
+          <div style={{ marginTop: 4, background: bg, border, borderRadius: 4, overflow: 'hidden', backdropFilter: 'blur(6px)' }}>
+            {matches.map(m => (
+              <div
+                key={m.id}
+                onPointerDown={() => { onPick(m); setQ(''); }}
+                style={{
+                  padding: isMobile ? '10px 12px' : '6px 12px', fontSize: 12, cursor: 'pointer',
+                  minHeight: isMobile ? 40 : undefined,
+                  display: isMobile ? 'flex' : 'block', alignItems: 'center',
+                  color: isDark ? '#cdd6f4' : '#334155',
+                  fontFamily: '"Courier New", ui-monospace, monospace',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = `${accent}22`; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+              >
+                {m.name}
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 6, justifyContent: 'center', marginTop: 6, flexWrap: 'wrap' }}>
+          {cats.map(c => {
+            const on = catFilter.has(c.key);
+            return (
+              <button
+                key={c.key}
+                onClick={() => onToggleCat(c.key)}
+                aria-label={`${on ? '隐藏' : '显示'}${c.label}类节点`}
+                aria-pressed={on}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer',
+                  fontSize: isMobile ? 12 : 10, padding: isMobile ? '8px 10px' : '2px 8px', borderRadius: 10,
+                  minHeight: isMobile ? 40 : undefined,
+                  fontFamily: '"Courier New", monospace',
+                  background: on ? `${c.color}22` : 'transparent',
+                  border: `1px solid ${on ? c.color : isDark ? '#45475a' : '#cbd5e1'}`,
+                  color: on ? c.color : isDark ? '#7f849c' : '#94a3b8',
+                  opacity: on ? 1 : 0.6,
+                }}
+              >
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.color }} />
+                {c.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
-    </div>
+    </>
   );
 }

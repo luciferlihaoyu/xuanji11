@@ -45,7 +45,7 @@ export default function AuthGuard() {
 
   if (checking && location.pathname !== LOGIN_PATH) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      <div className="min-h-dvh flex items-center justify-center" style={{ backgroundColor: 'var(--bg-primary)' }}>
         <div className="text-sm" style={{ color: 'var(--text-muted)' }}>加载中...</div>
       </div>
     );

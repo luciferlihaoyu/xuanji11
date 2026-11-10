@@ -86,7 +86,7 @@ export function McpServersPanel() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <div>
         <h3 className="text-lg font-semibold mb-1 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
           <Network className="w-5 h-5" />
@@ -119,7 +119,7 @@ export function McpServersPanel() {
             placeholder="https://api.dify.ai/mcp/server/{server_code}/mcp"
             className="input-base text-xs w-full font-mono"
           />
-          <p className="text-[10px] mt-1 leading-relaxed" style={{ color: 'var(--text-muted)' }}>{DIFY_HINT}</p>
+          <p className="text-xs sm:text-[10px] mt-1 leading-relaxed break-words" style={{ color: 'var(--text-muted)' }}>{DIFY_HINT}</p>
         </div>
         <div>
           <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>Bearer Token（可选）</label>
@@ -131,12 +131,12 @@ export function McpServersPanel() {
             className="input-base text-xs w-full"
           />
         </div>
-        <div className="flex items-center gap-3 pt-1">
-          <button onClick={() => void handleTest()} disabled={testingUrl} className="btn-secondary text-xs py-2 px-4 flex items-center gap-1.5">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 pt-1">
+          <button onClick={() => void handleTest()} disabled={testingUrl} className="btn-secondary text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0 flex items-center justify-center gap-1.5">
             {testingUrl ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
             测试连接
           </button>
-          <button onClick={() => void handleCreate()} disabled={createMutation.isPending} className="btn-primary text-xs py-2 px-4 flex items-center gap-1.5">
+          <button onClick={() => void handleCreate()} disabled={createMutation.isPending} className="btn-primary text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0 flex items-center justify-center gap-1.5">
             {createMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
             添加
           </button>
@@ -151,15 +151,15 @@ export function McpServersPanel() {
             <Loader2 className="w-3.5 h-3.5 animate-spin" /> 加载中...
           </div>
         ) : !serversQuery.data || serversQuery.data.length === 0 ? (
-          <div className="card-base p-6 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+          <div className="card-base p-4 sm:p-6 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
             尚未注册任何 MCP 服务器。可在上方添加 Dify 等外部服务器。
           </div>
         ) : (
           serversQuery.data.map((server) => (
             <div key={server.id} className="card-base p-4">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{server.name}</span>
                     <span
                       className="chip text-[10px] py-0.5 px-2"
@@ -171,12 +171,12 @@ export function McpServersPanel() {
                       <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Token ••••{server.authTokenLast4}</span>
                     )}
                   </div>
-                  <div className="text-xs font-mono truncate mt-0.5" style={{ color: 'var(--text-muted)' }}>{server.url}</div>
+                  <div className="text-xs font-mono break-all sm:truncate mt-0.5" style={{ color: 'var(--text-muted)' }}>{server.url}</div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
                   <button
                     onClick={() => void handleListTools(server.id)}
-                    className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1"
+                    className="btn-secondary text-xs py-2 sm:py-1.5 px-3 flex-1 sm:flex-none justify-center min-h-10 sm:min-h-0 flex items-center gap-1"
                     title="列出该服务器暴露的 MCP 工具"
                   >
                     <Wrench className="w-3.5 h-3.5" />
@@ -185,7 +185,7 @@ export function McpServersPanel() {
                   <button
                     onClick={() => void handleDelete(server.id, server.name)}
                     disabled={deleteMutation.isPending}
-                    className="btn-danger text-xs py-1.5 px-3 flex items-center gap-1"
+                    className="btn-danger text-xs py-2 sm:py-1.5 px-3 flex-1 sm:flex-none justify-center min-h-10 sm:min-h-0 flex items-center gap-1"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     删除
@@ -198,7 +198,7 @@ export function McpServersPanel() {
                     <div className="text-xs" style={{ color: 'var(--text-muted)' }}>该服务器未暴露任何工具</div>
                   ) : (
                     toolsPreview.tools.map((tool) => (
-                      <div key={tool.name} className="text-xs">
+                      <div key={tool.name} className="text-xs break-words">
                         <span className="font-mono font-medium" style={{ color: 'var(--accent-cyan)' }}>{tool.name}</span>
                         {tool.description && (
                           <span style={{ color: 'var(--text-muted)' }}> — {tool.description}</span>

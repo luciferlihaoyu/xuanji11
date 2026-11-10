@@ -93,12 +93,12 @@ export default function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
+      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] max-sm:top-12 max-sm:pt-2"
       onClick={() => setOpen(false)}
       style={{ backgroundColor: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }}
     >
       <div
-        className="w-full max-w-lg rounded-xl overflow-hidden shadow-2xl border"
+        className="w-full max-w-lg rounded-xl overflow-hidden shadow-2xl border max-sm:flex max-sm:max-h-[calc(100dvh-56px)] max-sm:flex-col"
         onClick={(e) => e.stopPropagation()}
         style={{
           backgroundColor: 'var(--bg-secondary, #1a1a2e)',
@@ -122,7 +122,7 @@ export default function CommandPalette() {
           />
           <button
             onClick={() => setOpen(false)}
-            className="p-1 rounded hover:bg-white/5"
+            className="p-1 rounded hover:bg-white/5 max-sm:p-3"
             style={{ color: 'var(--text-muted, #666)' }}
           >
             <X className="w-4 h-4" />
@@ -130,7 +130,7 @@ export default function CommandPalette() {
         </div>
 
         {/* Results */}
-        <div className="max-h-72 overflow-y-auto p-2">
+        <div className="max-h-72 overflow-y-auto overscroll-contain p-2 max-sm:max-h-none max-sm:min-h-0 max-sm:flex-1">
           {filtered.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-muted, #666)' }}>
               无匹配结果
@@ -140,7 +140,7 @@ export default function CommandPalette() {
               <button
                 key={cmd.id}
                 onClick={() => handleSelect(cmd)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors max-sm:min-h-11 ${
                   i === activeIndex ? 'bg-white/10' : 'hover:bg-white/5'
                 }`}
               >

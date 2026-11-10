@@ -60,8 +60,8 @@ export default function BackupTargetConfig({
     <div className="space-y-3 pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
       {isAlist ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div>
-            <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>
+          <div className="min-w-0">
+            <label className="text-xs font-medium block mb-1 break-words" style={{ color: 'var(--text-primary)' }}>
               URL <span style={{ color: 'var(--text-muted)' }}>(站点地址，可带子目录作为备份落点)</span>
             </label>
             <input
@@ -73,7 +73,7 @@ export default function BackupTargetConfig({
               required
             />
           </div>
-          <div>
+          <div className="min-w-0">
             <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>用户名</label>
             <input
               type="text"
@@ -83,7 +83,7 @@ export default function BackupTargetConfig({
               className="input-base text-xs w-full"
             />
           </div>
-          <div>
+          <div className="min-w-0">
             <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>密码</label>
             <input
               type="password"
@@ -96,8 +96,8 @@ export default function BackupTargetConfig({
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div>
-            <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>
+          <div className="min-w-0">
+            <label className="text-xs font-medium block mb-1 break-words" style={{ color: 'var(--text-primary)' }}>
               Access Token {target === '115' ? '(或 Refresh Token)' : ''}
             </label>
             <input
@@ -109,8 +109,8 @@ export default function BackupTargetConfig({
               required={!fields.refreshToken}
             />
           </div>
-          <div>
-            <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>
+          <div className="min-w-0">
+            <label className="text-xs font-medium block mb-1 break-words" style={{ color: 'var(--text-primary)' }}>
               Refresh Token <span style={{ color: 'var(--text-muted)' }}>(推荐，用于自动刷新)</span>
             </label>
             <input
@@ -125,18 +125,18 @@ export default function BackupTargetConfig({
       )}
 
       {isAlist && (
-        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+        <p className="text-xs break-words" style={{ color: 'var(--text-muted)' }}>
           AList (WebDAV) 备份需先在服务端配置环境密钥 <code>BACKUP_ENCRYPTION_KEY</code>（备份内容加密存储），未配置时创建备份会被拒绝。
         </p>
       )}
 
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
         {!isAlist && (
           <button
             type="button"
             onClick={onRefresh}
             disabled={refreshing || !fields.refreshToken}
-            className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50"
+            className="btn-ghost text-xs py-1.5 px-3 flex items-center justify-center gap-1.5 w-full sm:w-auto min-h-[44px] sm:min-h-0 disabled:opacity-50"
           >
             {refreshing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
             刷新 Token
@@ -146,7 +146,7 @@ export default function BackupTargetConfig({
           type="button"
           onClick={onSave}
           disabled={saving || saveDisabled}
-          className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50"
+          className="btn-ghost text-xs py-1.5 px-3 flex items-center justify-center gap-1.5 w-full sm:w-auto min-h-[44px] sm:min-h-0 disabled:opacity-50"
         >
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
           保存配置
@@ -155,7 +155,7 @@ export default function BackupTargetConfig({
           type="button"
           onClick={onTest}
           disabled={testing || testDisabled}
-          className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50"
+          className="btn-ghost text-xs py-1.5 px-3 flex items-center justify-center gap-1.5 w-full sm:w-auto min-h-[44px] sm:min-h-0 disabled:opacity-50"
         >
           {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}
           测试连接
@@ -163,8 +163,8 @@ export default function BackupTargetConfig({
       </div>
 
       {connectionStatus.result && (
-        <div className={`flex items-center gap-1.5 text-[10px] ${connectionStatus.result.success ? 'text-emerald-400' : 'text-rose-400'}`}>
-          {connectionStatus.result.success ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+        <div className={`flex flex-wrap items-center gap-1.5 text-xs break-words ${connectionStatus.result.success ? 'text-emerald-400' : 'text-rose-400'}`}>
+          {connectionStatus.result.success ? <Wifi className="w-3 h-3 shrink-0" /> : <WifiOff className="w-3 h-3 shrink-0" />}
           {connectionStatus.result.message}
         </div>
       )}

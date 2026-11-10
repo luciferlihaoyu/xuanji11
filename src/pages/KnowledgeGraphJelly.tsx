@@ -10,7 +10,9 @@
  * 六类别水母椭圆环绕混沌核心，叶子按黄金角叶序螺旋绕所属水母——确定性、免 O(n²)。
  */
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { List, Minus, Plus, X } from 'lucide-react';
 import { trpc } from '@/providers/trpc';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 const TAU = Math.PI * 2;
 const GOLDEN = 2.399963229728653; // 黄金角
@@ -133,6 +135,9 @@ export default function KnowledgeGraphJelly() {
   const [selected, setSelected] = useState<Leaf | null>(null);
   const [hoverInfo, setHoverInfo] = useState<string | null>(null);
   const [fps, setFps] = useState(0);
+  const isMobile = useIsMobile();
+  // 移动端：右上图例默认折叠成 40×40 图标按钮（契约第 9 条）
+  const [legendOpen, setLegendOpen] = useState(false);
   const stateRef = useRef<{
     hubs: Hub[]; leaves: Leaf[]; links: Link[];
     cam: { x: number; y: number; k: number };
@@ -144,6 +149,13 @@ export default function KnowledgeGraphJelly() {
   const select = useCallback((l: Leaf | null) => {
     setSelected(l);
     if (stateRef.current) stateRef.current.sel = l;
+  }, []);
+
+  /* 移动端缩放替代入口（画布 touch-action:none，没有滚轮，按钮是「非手势」保底路径） */
+  const zoomBy = useCallback((f: number) => {
+    const st = stateRef.current;
+    if (!st) return;
+    st.cam.k = Math.min(6, Math.max(0.3, st.cam.k * f));
   }, []);
 
   /* ── 数据装配 + 布局 ── */
@@ -221,12 +233,14 @@ export default function KnowledgeGraphJelly() {
     const ctx = cv.getContext('2d');
     if (!ctx) return;
     let W = 0, H = 0, raf = 0, alive = true;
-    const dust = Array.from({ length: 150 }, (_, i) => ({
+    // 尘埃星点是纯装饰：移动端按 0.4 降到 60 颗（节点/连线数不变）
+    const dust = Array.from({ length: isMobile ? 60 : 150 }, (_, i) => ({
       x: ((i * 733) % 1600) / 1600, y: ((i * 1021) % 1000) / 1000,
       r: 0.4 + ((i * 37) % 10) / 12, ph: i * 0.77, sp: 0.5 + ((i * 13) % 10) / 14,
     }));
     const fit = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      // 像素比：桌面上限 2；移动端封顶 1.5（390px 屏点密度收益不抵填充率开销）
+      const dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1.5 : 2);
       W = wrap.clientWidth; H = wrap.clientHeight;
       cv.width = W * dpr; cv.height = H * dpr;
       cv.style.width = W + 'px'; cv.style.height = H + 'px';
@@ -309,12 +323,14 @@ export default function KnowledgeGraphJelly() {
         const px = iu * iu * A.x + 2 * iu * u * cx2 + u * u * B.x;
         const py = iu * iu * A.y + 2 * iu * u * cy2 + u * u * B.y;
         drawGlow(ctx, COLORS[lk.a.cat] || COLORS.tag, px, py, hit && dimAll ? 5.5 : 3, Math.min(1, baseA * 7));
-        // 第二颗粒子错半相位，流光更密
-        const u2 = (u + 0.5) % 1, iu2 = 1 - u2;
-        drawGlow(ctx, COLORS[lk.b.cat] || COLORS.tag,
-          iu2 * iu2 * A.x + 2 * iu2 * u2 * cx2 + u2 * u2 * B.x,
-          iu2 * iu2 * A.y + 2 * iu2 * u2 * cy2 + u2 * u2 * B.y,
-          hit && dimAll ? 4 : 2.4, Math.min(1, baseA * 6));
+        // 第二颗粒子错半相位，流光更密（纯装饰：移动端只留一颗，逐帧绘制量减半）
+        if (!isMobile) {
+          const u2 = (u + 0.5) % 1, iu2 = 1 - u2;
+          drawGlow(ctx, COLORS[lk.b.cat] || COLORS.tag,
+            iu2 * iu2 * A.x + 2 * iu2 * u2 * cx2 + u2 * u2 * B.x,
+            iu2 * iu2 * A.y + 2 * iu2 * u2 * cy2 + u2 * u2 * B.y,
+            hit && dimAll ? 4 : 2.4, Math.min(1, baseA * 6));
+        }
       }
 
       // 叶子
@@ -398,9 +414,28 @@ export default function KnowledgeGraphJelly() {
       }
       return { hub, leaf };
     };
+    // 移动端双指捏合缩放：画布是 touch-action:none，浏览器不再接管手势，得自己算
+    const pts = new Map<number, { x: number; y: number }>();
+    let pinch: { d: number; k: number } | null = null;
+    let pinched = false;
     const onMove = (e: PointerEvent) => {
       const st = stateRef.current;
       if (!st) return;
+      if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && pts.size >= 2) {
+        const [p1, p2] = [...pts.values()];
+        const d = Math.hypot(p1.x - p2.x, p1.y - p2.y) || 1;
+        const rect = cv.getBoundingClientRect();
+        const mx = (p1.x + p2.x) / 2 - rect.left - rect.width / 2;
+        const my = (p1.y + p2.y) / 2 - rect.top - rect.height / 2;
+        const k0 = st.cam.k;
+        const k1 = Math.min(6, Math.max(0.3, pinch.k * (d / pinch.d)));
+        // 以捏合中点为锚缩放（等价于滚轮锚定光标的算法）
+        st.cam.x += (mx / k0 - mx / k1);
+        st.cam.y += (my / k0 - my / k1);
+        st.cam.k = k1;
+        return;
+      }
       if (st.drag) {
         const dx = e.clientX - st.drag.x, dy = e.clientY - st.drag.y;
         if (Math.abs(dx) + Math.abs(dy) > 3) st.drag.moved = true;
@@ -416,12 +451,30 @@ export default function KnowledgeGraphJelly() {
     const onDown = (e: PointerEvent) => {
       const st = stateRef.current;
       if (!st) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size === 2) {
+        // 第二指落下：结束拖动，转入手势缩放
+        const [p1, p2] = [...pts.values()];
+        st.drag = null;
+        pinched = true;
+        pinch = { d: Math.hypot(p1.x - p2.x, p1.y - p2.y) || 1, k: st.cam.k };
+        return;
+      }
       st.drag = { x: e.clientX, y: e.clientY, cx: st.cam.x, cy: st.cam.y, moved: false };
       cv.setPointerCapture(e.pointerId);
     };
     const onUp = (e: PointerEvent) => {
       const st = stateRef.current;
       if (!st) return;
+      const wasPinch = pinched;
+      pts.delete(e.pointerId);
+      if (pts.size < 2) pinch = null;
+      if (pts.size === 0) pinched = false;
+      if (wasPinch) {
+        // 捏合手势收尾不当作「点击选中」
+        st.drag = null;
+        return;
+      }
       const wasDrag = st.drag?.moved;
       st.drag = null;
       if (!wasDrag) {
@@ -450,14 +503,24 @@ export default function KnowledgeGraphJelly() {
       st.cam.y += (my / k0 - my / k1);
       st.cam.k = k1;
     };
+    // 手势被系统打断时清理指针状态，避免下一次单指拖动被 pinch 残留卡住
+    const onCancel = (e: PointerEvent) => {
+      pts.delete(e.pointerId);
+      if (pts.size < 2) pinch = null;
+      if (pts.size === 0) pinched = false;
+      const st = stateRef.current;
+      if (st) st.drag = null;
+    };
     cv.addEventListener('pointermove', onMove);
     cv.addEventListener('pointerdown', onDown);
     cv.addEventListener('pointerup', onUp);
+    cv.addEventListener('pointercancel', onCancel);
     cv.addEventListener('wheel', onWheel, { passive: false });
     return () => {
       cv.removeEventListener('pointermove', onMove);
       cv.removeEventListener('pointerdown', onDown);
       cv.removeEventListener('pointerup', onUp);
+      cv.removeEventListener('pointercancel', onCancel);
       cv.removeEventListener('wheel', onWheel);
     };
   }, [select]);
@@ -469,22 +532,47 @@ export default function KnowledgeGraphJelly() {
 
   return (
     <div ref={wrapRef} style={{ position: 'fixed', inset: 0, top: 48, background: '#05060a' }}>
-      <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, touchAction: 'none' }} />
+      <canvas ref={canvasRef} className="touch-pan-canvas" style={{ position: 'absolute', inset: 0, touchAction: 'none' }} />
       {/* HUD */}
       <div style={{
-        position: 'absolute', top: 14, left: 18, zIndex: 10, pointerEvents: 'none', userSelect: 'none',
+        position: 'absolute', top: isMobile ? 10 : 14, left: isMobile ? 12 : 18, zIndex: 10,
+        pointerEvents: 'none', userSelect: 'none',
         fontFamily: '"Courier New", ui-monospace, monospace', fontSize: 12, lineHeight: 1.7,
         color: '#00a8cc', textShadow: '0 0 8px #00a8cc44',
+        maxWidth: isMobile ? 'calc(100vw - 80px)' : undefined,
       }}>
-        <div>NODES: {st?.leaves.length ?? 0}</div>
-        <div>LINKS: {st?.links.length ?? 0}</div>
-        <div>FPS: {fps}</div>
+        {/* 桌面竖排不变（display:block）；移动端收成一行 flex-wrap，别把画面挤掉 */}
+        <div style={{ display: isMobile ? 'flex' : 'block', flexWrap: 'wrap', columnGap: 8 }}>
+          <div>NODES: {st?.leaves.length ?? 0}</div>
+          <div>LINKS: {st?.links.length ?? 0}</div>
+          <div>FPS: {fps}</div>
+        </div>
         {hoverInfo && <div style={{ marginTop: 4, color: '#00d4ff', fontSize: 10, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{hoverInfo}</div>}
+        {isMobile && (
+          <div style={{ marginTop: 2, color: '#5a6a80', fontSize: 10, whiteSpace: 'nowrap' }}>
+            单指拖动平移 · 双指缩放
+          </div>
+        )}
       </div>
-      {/* 图例 */}
+      {/* 图例：桌面右上常驻；移动端折叠为 40×40 图标按钮 → 点开为 ≤320px 面板 */}
+      {isMobile && (
+        <button
+          type="button"
+          onClick={() => setLegendOpen(o => !o)}
+          aria-label={legendOpen ? '关闭图例' : '展开图例'}
+          aria-expanded={legendOpen}
+          className="tap-target absolute rounded-lg"
+          style={{ right: 10, top: 56, zIndex: 20, color: '#9fb4d8', background: 'rgba(5,8,15,0.78)', border: '1px solid rgba(0,212,255,0.35)' }}
+        >
+          {legendOpen ? <X className="w-4 h-4" /> : <List className="w-4 h-4" />}
+        </button>
+      )}
       <div style={{
-        position: 'absolute', top: 14, right: 18, zIndex: 10, fontSize: 11, lineHeight: '20px',
+        position: 'absolute', top: isMobile ? 104 : 14, right: isMobile ? 10 : 18, zIndex: 10,
+        fontSize: 11, lineHeight: '20px',
         color: '#9fb4d8', fontFamily: '"Courier New", monospace', textAlign: 'right', pointerEvents: 'none',
+        maxWidth: isMobile ? 'min(86vw, 320px)' : undefined,
+        display: isMobile && !legendOpen ? 'none' : undefined,
       }}>
         {HUBS.map(h => (
           <div key={h}>
@@ -492,23 +580,52 @@ export default function KnowledgeGraphJelly() {
             {LABELS[h]}
           </div>
         ))}
-        <div style={{ marginTop: 6, color: '#5a6a80', fontSize: 10 }}>拖动平移 · 滚轮缩放 · 点击节点</div>
+        <div style={{ marginTop: 6, color: '#5a6a80', fontSize: 10 }}>
+          <span className="md:hidden">点节点看详情</span>
+          <span className="hidden md:inline">拖动平移 · 滚轮缩放 · 点击节点</span>
+        </div>
       </div>
+      {/* 移动端缩放按钮：没有滚轮，给一对非手势保底入口（≥40×40） */}
+      {isMobile && (
+        <div className="absolute z-20 flex flex-col gap-2" style={{ right: 10, bottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
+          <button
+            type="button"
+            onClick={() => zoomBy(1.3)}
+            aria-label="放大"
+            className="tap-target rounded-full"
+            style={{ background: 'rgba(5,8,15,0.78)', border: '1px solid rgba(0,212,255,0.35)', color: '#00d4ff' }}
+          >
+            <Plus className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => zoomBy(1 / 1.3)}
+            aria-label="缩小"
+            className="tap-target rounded-full"
+            style={{ background: 'rgba(5,8,15,0.78)', border: '1px solid rgba(0,212,255,0.35)', color: '#00d4ff' }}
+          >
+            <Minus className="w-4 h-4" />
+          </button>
+        </div>
+      )}
       {/* 选中节点信息卡 */}
       {selected && (
         <div style={{
-          position: 'absolute', top: 0, right: 0, bottom: 0, width: 320, zIndex: 20,
+          position: 'absolute', top: 0, right: 0, bottom: 0,
+          // 移动端：86vw / 上限 320px（原 320px 在 390px 屏上会把画布压没）
+          width: isMobile ? '86vw' : 320, maxWidth: isMobile ? 320 : undefined, zIndex: 20,
           background: 'rgba(5,8,15,0.92)', borderLeft: '1px solid rgba(0,212,255,0.3)',
-          backdropFilter: 'blur(8px)', padding: '16px', overflowY: 'auto',
+          backdropFilter: 'blur(8px)', padding: '16px', overflowY: 'auto', overscrollBehavior: 'contain',
+          paddingBottom: isMobile ? 'max(16px, env(safe-area-inset-bottom))' : 16,
         }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
             <div style={{ flex: 1, fontSize: 15, fontWeight: 700, color: '#e6edf7', fontFamily: '"Courier New", monospace', lineHeight: 1.4, wordBreak: 'break-all' }}>
               {selected.name}
             </div>
-            <button onClick={() => select(null)} style={{
+            <button onClick={() => select(null)} aria-label="关闭节点详情" style={{
               background: 'transparent', border: '1px solid #00d4ff55', borderRadius: 4, cursor: 'pointer',
               color: '#00d4ff', fontSize: 12, padding: '2px 8px', fontFamily: '"Courier New", monospace',
-            }}>✕</button>
+            }} className="min-w-10 min-h-10 md:min-w-0 md:min-h-0 shrink-0">✕</button>
           </div>
           <div style={{ marginTop: 6, fontSize: 11, color: '#7f849c', fontFamily: '"Courier New", monospace' }}>
             {LABELS[selected.cat]} · 连接 ×{selected.deg}
@@ -520,7 +637,9 @@ export default function KnowledgeGraphJelly() {
               </div>
               {selNeighbors.map(n => (
                 <div key={n.id} onClick={() => select(n)} style={{
-                  padding: '5px 8px', fontSize: 12, cursor: 'pointer', borderRadius: 4, color: '#9fb4d8',
+                  padding: isMobile ? '10px 8px' : '5px 8px', minHeight: isMobile ? 40 : undefined,
+                  display: isMobile ? 'flex' : 'block', alignItems: 'center',
+                  fontSize: 12, cursor: 'pointer', borderRadius: 4, color: '#9fb4d8',
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}
                   onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = '#00d4ff18'; }}

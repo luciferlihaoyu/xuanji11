@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { User, BookOpen, Bot, HardDrive, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug, Network, Cpu, Users, Menu, X } from 'lucide-react';
+import { User, BookOpen, Bot, HardDrive, Shield, Palette, Info, Eye, EyeOff, Check, Sun, Moon, Loader2, LogOut, KeyRound, Plug, Network, Cpu, Users, Menu } from 'lucide-react';
+import MobileDrawer from '@/components/MobileDrawer';
 import { useAppStore } from '@/store/useAppStore';
 import {
   useSettings,
@@ -69,15 +70,15 @@ function EgressPolicyCard() {
         默认拒绝服务器向私网地址发起请求（防 SSRF）。若你已在内网（如 NAS）部署 AList 或 LLM，
         需打开下方开关放行私网出站；公网部署请保持关闭。
       </p>
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
           <div className="text-sm" style={{ color: 'var(--text-primary)' }}>允许私网出站</div>
           <div className="text-xs" style={{ color: 'var(--text-muted)' }}>10.x / 192.168.x / 172.16-31.x / 169.254 / 环回</div>
         </div>
         <button
           onClick={() => setMany.mutate([{ key: 'egress_allow_private_net', value: String(!enabled), category: 'security' }])}
           disabled={isLoading || setMany.isPending}
-          className="relative w-9 h-5 rounded-full transition-colors duration-200"
+          className="relative w-9 h-5 shrink-0 rounded-full transition-colors duration-200 before:absolute before:-inset-x-2 before:-inset-y-3 before:content-[''] md:before:hidden"
           style={{ backgroundColor: enabled ? 'var(--accent-cyan)' : 'var(--bg-tertiary)' }}
         >
           <div
@@ -167,15 +168,15 @@ function ConnectorCard({ connector }: ConnectorCardProps) {
               />
             </div>
           ))}
-          <div className="flex items-center gap-3 pt-2">
-            <button onClick={handleTest} disabled={isTesting} className="btn-secondary text-xs py-2 px-4">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 pt-2">
+            <button onClick={handleTest} disabled={isTesting} className="btn-secondary text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0">
               {isTesting ? (
                 <span className="flex items-center gap-1">
                   <Loader2 className="w-3.5 h-3.5 animate-spin" /> 测试中...
                 </span>
               ) : '测试连接'}
             </button>
-            <button onClick={handleSave} disabled={isSaving} className="btn-primary text-xs py-2 px-4">
+            <button onClick={handleSave} disabled={isSaving} className="btn-primary text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0">
               {isSaving ? (
                 <span className="flex items-center gap-1">
                   <Loader2 className="w-3.5 h-3.5 animate-spin" /> 保存中...
@@ -185,7 +186,7 @@ function ConnectorCard({ connector }: ConnectorCardProps) {
             {connector.status === 'connected' && (
               <button
                 onClick={() => setShowBrowser((v) => !v)}
-                className="btn-ghost text-xs py-2 px-4"
+                className="btn-ghost text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0"
               >
                 {showBrowser ? '收起文件' : '浏览文件'}
               </button>
@@ -204,7 +205,7 @@ function ConnectorSettings() {
   const { data: connectors, isLoading } = trpc.connector.listConnectors.useQuery();
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>连接器</h3>
       <div className="max-w-lg space-y-4">
         {isLoading ? (
@@ -604,7 +605,7 @@ export default function Settings() {
   const ToggleSwitch = ({ checked, onChange }: { checked: boolean; onChange: () => void }) => (
     <button
       onClick={onChange}
-      className="relative w-9 h-5 rounded-full transition-colors duration-200"
+      className="relative w-9 h-5 shrink-0 rounded-full transition-colors duration-200 before:absolute before:-inset-x-2 before:-inset-y-3 before:content-[''] md:before:hidden"
       style={{ backgroundColor: checked ? 'var(--accent-cyan)' : 'var(--bg-tertiary)' }}
     >
       <div
@@ -618,7 +619,7 @@ export default function Settings() {
     switch (category) {
       case 'personal':
         return (
-          <div className="space-y-6">
+          <div className="space-y-4 sm:space-y-6">
             <div>
               <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>个人设置</h3>
               <div className="space-y-4 max-w-lg">
@@ -670,8 +671,8 @@ export default function Settings() {
                     <option value="ja-JP">日本語</option>
                   </select>
                 </div>
-                <div className="flex items-center gap-3 pt-2">
-                  <button onClick={savePersonalSettings} disabled={isSetting} className="btn-primary text-xs py-2 px-4">
+                <div className="pt-2">
+                  <button onClick={savePersonalSettings} disabled={isSetting} className="btn-primary text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0">
                     {isSetting ? (
                       <span className="flex items-center gap-1">
                         <Loader2 className="w-3.5 h-3.5 animate-spin" /> 保存中...
@@ -693,7 +694,7 @@ export default function Settings() {
 
       case 'agent':
         return (
-          <div className="space-y-6">
+          <div className="space-y-4 sm:space-y-6">
             <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Agent 配置</h3>
             <div className="space-y-4 max-w-lg">
               <div>
@@ -715,7 +716,7 @@ export default function Settings() {
                       onChange={(e) => setAgentForm((prev) => ({ ...prev, token: e.target.value }))}
                       className="input-base text-sm pr-10"
                     />
-                    <button onClick={() => setShowAgentToken(!showAgentToken)} className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }}>
+                    <button onClick={() => setShowAgentToken(!showAgentToken)} className="absolute right-0 top-1/2 -translate-y-1/2 flex min-h-10 min-w-10 items-center justify-center rounded md:right-2 md:min-h-0 md:min-w-0" style={{ color: 'var(--text-muted)' }}>
                       {showAgentToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
@@ -730,8 +731,8 @@ export default function Settings() {
                   className="input-base text-sm max-w-[120px]"
                 />
               </div>
-              <div className="flex items-center justify-between py-2">
-                <div>
+              <div className="flex items-center justify-between gap-3 py-2 min-h-10 md:min-h-0">
+                <div className="min-w-0">
                   <div className="text-sm" style={{ color: 'var(--text-primary)' }}>自动重连</div>
                   <div className="text-xs" style={{ color: 'var(--text-muted)' }}>连接断开时自动尝试重连</div>
                 </div>
@@ -740,8 +741,8 @@ export default function Settings() {
                   onChange={() => setAgentForm((prev) => ({ ...prev, autoReconnect: !prev.autoReconnect }))}
                 />
               </div>
-              <div className="flex items-center gap-3 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                <button onClick={testAgentConnection} disabled={testLoading} className="btn-secondary text-xs py-2 px-4">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                <button onClick={testAgentConnection} disabled={testLoading} className="btn-secondary text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0">
                   {testLoading ? (
                     <span className="flex items-center gap-1">
                       <Loader2 className="w-3.5 h-3.5 animate-spin" /> 测试中...
@@ -756,7 +757,7 @@ export default function Settings() {
                     </span>
                   ) : '测试连接'}
                 </button>
-                <button onClick={saveAgentSettings} disabled={isSetting} className="btn-primary text-xs py-2 px-4">
+                <button onClick={saveAgentSettings} disabled={isSetting} className="btn-primary text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0">
                   {isSetting ? (
                     <span className="flex items-center gap-1">
                       <Loader2 className="w-3.5 h-3.5 animate-spin" /> 保存中...
@@ -771,10 +772,10 @@ export default function Settings() {
       case 'models':
       case 'vectorization': // 旧链接兼容：向量化设置已并入模型中心
         return (
-          <div className="space-y-8">
+          <div className="space-y-6 sm:space-y-8">
             <ModelsPanel />
             <div style={{ borderTop: '1px solid var(--border-subtle)' }} />
-            <div className="space-y-6">
+            <div className="space-y-4 sm:space-y-6">
             <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>向量化模型设置</h3>
             <div className="space-y-4 max-w-lg">
               <div>
@@ -819,7 +820,7 @@ export default function Settings() {
                     onChange={(e) => setVectorForm((prev) => ({ ...prev, apiKey: e.target.value }))}
                     className="input-base text-sm pr-10"
                   />
-                  <button onClick={() => setShowApiKey(!showApiKey)} className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }}>
+                  <button onClick={() => setShowApiKey(!showApiKey)} className="absolute right-0 top-1/2 -translate-y-1/2 flex min-h-10 min-w-10 items-center justify-center rounded md:right-2 md:min-h-0 md:min-w-0" style={{ color: 'var(--text-muted)' }}>
                     {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
@@ -845,13 +846,13 @@ export default function Settings() {
               </div>
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>索引更新模式</label>
-                <div className="flex gap-3">
+                <div className="flex flex-wrap gap-3">
                   {[
                     { label: '实时', value: 'realtime' },
                     { label: '定时', value: 'scheduled' },
                     { label: '手动', value: 'manual' },
                   ].map((m) => (
-                    <label key={m.value} className="flex items-center gap-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                    <label key={m.value} className="flex items-center gap-1.5 text-sm min-h-10 md:min-h-0" style={{ color: 'var(--text-secondary)' }}>
                       <input
                         type="radio"
                         name="indexMode"
@@ -867,21 +868,21 @@ export default function Settings() {
               </div>
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>相似度阈值</label>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 min-h-10 md:min-h-0">
                   <input
                     type="range"
                     min={0}
                     max={100}
                     value={similarityThreshold}
                     onChange={(e) => setSimilarityThreshold(Number(e.target.value))}
-                    className="flex-1"
+                    className="flex-1 min-w-0"
                     style={{ accentColor: 'var(--accent-cyan)' }}
                   />
-                  <span className="text-xs w-12" style={{ color: 'var(--accent-cyan)' }}>{(similarityThreshold / 100).toFixed(2)}</span>
+                  <span className="text-xs w-12 shrink-0" style={{ color: 'var(--accent-cyan)' }}>{(similarityThreshold / 100).toFixed(2)}</span>
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-3 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                <button onClick={testConnection} disabled={testLoading} className="btn-secondary text-xs py-2 px-4">
+              <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 sm:gap-3 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                <button onClick={testConnection} disabled={testLoading} className="btn-secondary text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0">
                   {testLoading ? (
                     <span className="flex items-center gap-1">
                       <Loader2 className="w-3.5 h-3.5 animate-spin" /> 测试中...
@@ -899,7 +900,7 @@ export default function Settings() {
                 <button
                   onClick={() => handleSaveTemplate(false)}
                   disabled={saveTemplate.isPending}
-                  className="btn-secondary text-xs py-2 px-4"
+                  className="btn-secondary text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0"
                 >
                   {saveTemplate.isPending ? (
                     <span className="flex items-center gap-1">
@@ -910,7 +911,7 @@ export default function Settings() {
                 <button
                   onClick={() => handleSaveTemplate(true)}
                   disabled={saveTemplate.isPending || selectTemplate.isPending}
-                  className="btn-primary text-xs py-2 px-4"
+                  className="btn-primary text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0"
                 >
                   {saveTemplate.isPending || selectTemplate.isPending ? (
                     <span className="flex items-center gap-1">
@@ -918,7 +919,7 @@ export default function Settings() {
                     </span>
                   ) : '保存并激活'}
                 </button>
-                <button onClick={saveVectorSettings} disabled={isSetting} className="btn-primary text-xs py-2 px-4">
+                <button onClick={saveVectorSettings} disabled={isSetting} className="btn-primary text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0">
                   {isSetting ? (
                     <span className="flex items-center gap-1">
                       <Loader2 className="w-3.5 h-3.5 animate-spin" /> 保存中...
@@ -933,9 +934,9 @@ export default function Settings() {
             </div>
 
             <div className="card-base p-4 max-w-lg">
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center justify-between gap-2 mb-3">
                 <h4 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>已保存的模板</h4>
-                <button onClick={handleNewTemplate} className="btn-secondary text-xs py-1.5 px-3">新建模板</button>
+                <button onClick={handleNewTemplate} className="btn-secondary text-xs py-1.5 px-3 shrink-0 min-h-10 sm:min-h-0">新建模板</button>
               </div>
               {templatesLoading ? (
                 <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -948,7 +949,7 @@ export default function Settings() {
                   {templates?.map((template) => (
                     <div
                       key={template.id}
-                      className="flex items-center justify-between p-2 rounded-md"
+                      className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between p-2 rounded-md"
                       style={{ backgroundColor: 'var(--bg-secondary)' }}
                     >
                       <div className="min-w-0 mr-2">
@@ -966,20 +967,20 @@ export default function Settings() {
                           {template.model}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button onClick={() => handleEditTemplate(template.id)} className="btn-secondary text-[10px] py-1 px-2">编辑</button>
-                        <button onClick={() => handleTestTemplate(template.id)} disabled={testLoading} className="btn-secondary text-[10px] py-1 px-2">测试</button>
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <button onClick={() => handleEditTemplate(template.id)} className="btn-secondary text-xs sm:text-[10px] py-1.5 sm:py-1 px-2 min-h-10 sm:min-h-0">编辑</button>
+                        <button onClick={() => handleTestTemplate(template.id)} disabled={testLoading} className="btn-secondary text-xs sm:text-[10px] py-1.5 sm:py-1 px-2 min-h-10 sm:min-h-0">测试</button>
                         <button
                           onClick={() => handleSelectTemplate(template.id)}
                           disabled={selectTemplate.isPending || template.isActive}
-                          className="btn-primary text-[10px] py-1 px-2"
+                          className="btn-primary text-xs sm:text-[10px] py-1.5 sm:py-1 px-2 min-h-10 sm:min-h-0"
                         >
                           {template.isActive ? '已激活' : '激活'}
                         </button>
                         <button
                           onClick={() => handleDeleteTemplate(template.id)}
                           disabled={deleteTemplate.isPending}
-                          className="btn-danger text-[10px] py-1 px-2"
+                          className="btn-danger text-xs sm:text-[10px] py-1.5 sm:py-1 px-2 min-h-10 sm:min-h-0"
                         >
                           删除
                         </button>
@@ -1000,9 +1001,9 @@ export default function Settings() {
 
       case 'storage':
         return (
-          <div className="space-y-6">
+          <div className="space-y-4 sm:space-y-6">
             <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>存储管理</h3>
-            <div className="max-w-lg space-y-6">
+            <div className="max-w-lg space-y-4 sm:space-y-6">
               {/* Usage Pie */}
               <div className="card-base p-4">
                 <h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>存储使用</h4>
@@ -1020,8 +1021,8 @@ export default function Settings() {
                   const CIRC = 2 * Math.PI * 40; // 周长（r=40）
                   let acc = 0;
                   return (
-                    <div className="flex items-center gap-6">
-                      <svg viewBox="0 0 100 100" className="w-24 h-24">
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6">
+                      <svg viewBox="0 0 100 100" className="w-24 h-24 shrink-0">
                         <circle cx="50" cy="50" r="40" fill="none" stroke="var(--bg-tertiary)" strokeWidth="12" />
                         {segments.map((seg) => {
                           const dashLen = (seg.pct / 100) * CIRC;
@@ -1033,10 +1034,10 @@ export default function Settings() {
                           );
                         })}
                       </svg>
-                      <div className="space-y-1.5">
+                      <div className="space-y-1.5 min-w-0">
                         {segments.map((item) => (
-                          <div key={item.key} className="flex items-center gap-2 text-xs">
-                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colors[item.key] }} />
+                          <div key={item.key} className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: colors[item.key] }} />
                             <span style={{ color: 'var(--text-secondary)' }}>{item.label}</span>
                             <span style={{ color: 'var(--text-muted)' }}>{item.value}</span>
                             <span style={{ color: 'var(--text-muted)' }}>{item.pct}%</span>
@@ -1052,8 +1053,8 @@ export default function Settings() {
               <div className="card-base p-4">
                 <h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>自动清理</h4>
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
+                  <div className="flex items-center justify-between gap-3 min-h-10 md:min-h-0">
+                    <div className="min-w-0">
                       <div className="text-sm" style={{ color: 'var(--text-primary)' }}>删除回收站文件</div>
                       <div className="text-xs" style={{ color: 'var(--text-muted)' }}>超过 30 天自动删除</div>
                     </div>
@@ -1065,8 +1066,8 @@ export default function Settings() {
                       }}
                     />
                   </div>
-                  <div className="flex items-center justify-between">
-                    <div>
+                  <div className="flex items-center justify-between gap-3 min-h-10 md:min-h-0">
+                    <div className="min-w-0">
                       <div className="text-sm" style={{ color: 'var(--text-primary)' }}>压缩大文件</div>
                       <div className="text-xs" style={{ color: 'var(--text-muted)' }}>90 天未访问的文件自动压缩</div>
                     </div>
@@ -1083,7 +1084,7 @@ export default function Settings() {
 
               <button
                 onClick={() => addToast({ type: 'info', title: '缓存清理功能尚未实现', description: '当前可通过备份管理页面执行数据清理。' })}
-                className="btn-danger text-xs py-2 px-4"
+                className="btn-danger text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0"
               >
                 立即清理缓存
               </button>
@@ -1101,18 +1102,18 @@ export default function Settings() {
         return <AccountsPanel />;
       case 'security':
         return (
-          <div className="space-y-6">
+          <div className="space-y-4 sm:space-y-6">
             <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>安全设置</h3>
-            <div className="max-w-lg space-y-6">
+            <div className="max-w-lg space-y-4 sm:space-y-6">
               {/* 当前登录信息 */}
               <div className="card-base p-4">
                 <h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>当前登录</h4>
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>用户名</span>
                     <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{user?.name ?? '—'}</span>
                   </div>
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>角色</span>
                     <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{user?.role ?? '—'}</span>
                   </div>
@@ -1120,7 +1121,7 @@ export default function Settings() {
                 <div className="mt-4 pt-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>
                   <button
                     onClick={logout}
-                    className="btn-danger text-xs py-2 px-4 flex items-center gap-2"
+                    className="btn-danger text-xs py-2 px-4 flex items-center gap-2 w-full sm:w-auto min-h-10 sm:min-h-0"
                   >
                     <LogOut className="w-3.5 h-3.5" />
                     登出
@@ -1147,7 +1148,7 @@ export default function Settings() {
                       />
                       <button
                         onClick={() => setShowCurrentPassword(!showCurrentPassword)}
-                        className="absolute right-2 top-1/2 -translate-y-1/2"
+                        className="absolute right-0 top-1/2 -translate-y-1/2 flex min-h-10 min-w-10 items-center justify-center rounded md:right-2 md:min-h-0 md:min-w-0"
                         style={{ color: 'var(--text-muted)' }}
                       >
                         {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -1166,7 +1167,7 @@ export default function Settings() {
                       />
                       <button
                         onClick={() => setShowNewPassword(!showNewPassword)}
-                        className="absolute right-2 top-1/2 -translate-y-1/2"
+                        className="absolute right-0 top-1/2 -translate-y-1/2 flex min-h-10 min-w-10 items-center justify-center rounded md:right-2 md:min-h-0 md:min-w-0"
                         style={{ color: 'var(--text-muted)' }}
                       >
                         {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -1185,7 +1186,7 @@ export default function Settings() {
                       />
                       <button
                         onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                        className="absolute right-2 top-1/2 -translate-y-1/2"
+                        className="absolute right-0 top-1/2 -translate-y-1/2 flex min-h-10 min-w-10 items-center justify-center rounded md:right-2 md:min-h-0 md:min-w-0"
                         style={{ color: 'var(--text-muted)' }}
                       >
                         {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -1260,7 +1261,7 @@ export default function Settings() {
                       }
                     }}
                     disabled={changePwdLoading}
-                    className="btn-primary text-xs py-2 px-4"
+                    className="btn-primary text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0"
                   >
                     {changePwdLoading ? (
                       <span className="flex items-center gap-1">
@@ -1279,9 +1280,9 @@ export default function Settings() {
 
       case 'appearance':
         return (
-          <div className="space-y-6">
+          <div className="space-y-4 sm:space-y-6">
             <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>外观设置</h3>
-            <div className="max-w-lg space-y-6">
+            <div className="max-w-lg space-y-4 sm:space-y-6">
               {/* Theme Switcher - Sci-fi styled */}
               <div>
                 <label className="text-xs font-medium block mb-3" style={{ color: 'var(--text-primary)' }}>主题模式</label>
@@ -1298,7 +1299,7 @@ export default function Settings() {
                       <Moon className="w-5 h-5" style={{ color: '#00e5ff' }} />
                     </div>
                     <div className="text-sm font-medium mb-0.5" style={{ color: theme === 'dark' ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}>深空模式</div>
-                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>深色 · 科幻青</div>
+                    <div className="text-xs sm:text-[10px]" style={{ color: 'var(--text-muted)' }}>深色 · 科幻青</div>
                   </button>
                   <button
                     onClick={() => setTheme('light')}
@@ -1312,7 +1313,7 @@ export default function Settings() {
                       <Sun className="w-5 h-5" style={{ color: '#0088cc' }} />
                     </div>
                     <div className="text-sm font-medium mb-0.5" style={{ color: theme === 'light' ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}>昼白模式</div>
-                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>浅色 · 科技白</div>
+                    <div className="text-xs sm:text-[10px]" style={{ color: 'var(--text-muted)' }}>浅色 · 科技白</div>
                   </button>
                 </div>
               </div>
@@ -1324,7 +1325,7 @@ export default function Settings() {
                   <div className="text-sm font-medium" style={{ color: 'var(--accent-cyan)' }}>
                     当前主题：{theme === 'dark' ? '深空模式' : '昼白模式'}
                   </div>
-                  <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                  <div className="text-xs sm:text-[10px]" style={{ color: 'var(--text-muted)' }}>
                     全站界面将立即应用此主题
                   </div>
                 </div>
@@ -1332,18 +1333,18 @@ export default function Settings() {
 
               <div>
                 <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>界面字体大小</label>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>A</span>
+                <div className="flex items-center gap-2 min-h-10 md:min-h-0">
+                  <span className="text-xs shrink-0" style={{ color: 'var(--text-muted)' }}>A</span>
                   <input
                     type="range"
                     min={12}
                     max={18}
                     value={appearanceForm.fontSize}
                     onChange={(e) => setAppearanceForm((prev) => ({ ...prev, fontSize: e.target.value }))}
-                    className="flex-1"
+                    className="flex-1 min-w-0"
                     style={{ accentColor: 'var(--accent-cyan)' }}
                   />
-                  <span className="text-lg" style={{ color: 'var(--text-muted)' }}>A</span>
+                  <span className="text-lg shrink-0" style={{ color: 'var(--text-muted)' }}>A</span>
                 </div>
                 <div className="text-xs mt-1" style={{ color: 'var(--accent-cyan)' }}>{appearanceForm.fontSize}px</div>
               </div>
@@ -1360,8 +1361,8 @@ export default function Settings() {
                   <option>Consolas</option>
                 </select>
               </div>
-              <div className="flex items-center gap-3 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                <button onClick={saveAppearanceSettings} disabled={isSetting} className="btn-primary text-xs py-2 px-4">
+              <div className="pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                <button onClick={saveAppearanceSettings} disabled={isSetting} className="btn-primary text-xs py-2 px-4 w-full sm:w-auto min-h-10 sm:min-h-0">
                   {isSetting ? (
                     <span className="flex items-center gap-1">
                       <Loader2 className="w-3.5 h-3.5 animate-spin" /> 保存中...
@@ -1379,10 +1380,10 @@ export default function Settings() {
 
       case 'about':
         return (
-          <div className="space-y-6">
+          <div className="space-y-4 sm:space-y-6">
             <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>关于 璇玑智脑</h3>
             <div className="max-w-lg space-y-4">
-              <div className="card-base p-6 text-center">
+              <div className="card-base p-4 sm:p-6 text-center">
                 <h1 className="text-3xl font-bold text-gradient-cyan mb-2">璇玑智脑</h1>
                 <p className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>智能知识库系统</p>
                 <p className="text-xs" style={{ color: 'var(--text-muted)' }}>版本 {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev'}</p>
@@ -1414,64 +1415,71 @@ export default function Settings() {
     }
   };
 
+  const navList = (
+    <div className="p-3">
+      {SETTINGS_NAV.map((item) => {
+        const isActive = category === item.key;
+        return (
+          <Link
+            key={item.key}
+            to={`/settings/${item.key}`}
+            className="flex items-center gap-2.5 px-3 py-2.5 md:py-2 rounded text-sm transition-colors min-h-[44px] md:min-h-0"
+            style={{
+              backgroundColor: isActive ? 'rgba(34,211,238,0.1)' : 'transparent',
+              color: isActive ? 'var(--accent-cyan)' : 'var(--text-secondary)',
+              borderLeft: isActive ? '3px solid var(--accent-cyan)' : '3px solid transparent',
+            }}
+            onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
+            onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
+            onClick={() => setNavOpen(false)}
+          >
+            <item.icon className="w-4 h-4" />
+            <span>{item.label}</span>
+          </Link>
+        );
+      })}
+    </div>
+  );
+
   return (
-    <div className="flex flex-col md:flex-row h-[calc(100vh-48px)]" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      {/* 移动端：当前栏目 + 呼出按钮 */}
-      <div className="md:hidden flex items-center gap-2 px-3 py-2 border-b shrink-0" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+    <div className="flex flex-col md:flex-row h-app" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      {/* 移动端：当前栏目 + 呼出栏目抽屉 */}
+      <div className="md:hidden flex items-center justify-between gap-2 px-3 py-2 border-b shrink-0" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+        <div className="min-w-0 text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
+          {SETTINGS_NAV.find((n) => n.key === category)?.label ?? '设置项'}
+        </div>
         <button
           onClick={() => setNavOpen(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded text-sm"
+          className="tap-target gap-1.5 px-2.5 rounded text-xs shrink-0"
           style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent-cyan)' }}
+          aria-label="切换设置栏目"
         >
           <Menu className="w-4 h-4" />
-          {SETTINGS_NAV.find((n) => n.key === category)?.label ?? '设置项'}
+          <span>切换栏目</span>
         </button>
-        <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>点击切换栏目</span>
       </div>
 
-      {/* 移动端抽屉遮罩 */}
-      {navOpen && (
-        <div className="fixed inset-0 top-12 bg-black/40 z-40 md:hidden" onClick={() => setNavOpen(false)} />
-      )}
+      {/* 移动端栏目抽屉（Esc 关闭 / 遮罩关闭 / body 滚动锁 由 MobileDrawer 提供） */}
+      <MobileDrawer
+        open={navOpen}
+        onClose={() => setNavOpen(false)}
+        side="left"
+        title="设置栏目"
+        ariaLabel="设置栏目导航"
+      >
+        {navList}
+      </MobileDrawer>
 
-      {/* Left Nav（移动端抽屉 / 桌面常驻） */}
+      {/* Left Nav（桌面常驻） */}
       <div
-        className={`${navOpen ? 'absolute z-50 h-[calc(100%-44px)] top-11 flex' : 'hidden'} md:relative md:top-0 md:h-auto md:flex md:z-auto w-[240px] shrink-0 border-r overflow-y-auto flex-col`}
+        className="hidden md:flex md:relative md:z-auto w-[240px] shrink-0 border-r overflow-y-auto flex-col"
         style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
       >
-        <div className="md:hidden flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
-          <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>设置栏目</span>
-          <button onClick={() => setNavOpen(false)} className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }} title="关闭">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        <div className="p-3">
-          {SETTINGS_NAV.map((item) => {
-            const isActive = category === item.key;
-            return (
-              <Link
-                key={item.key}
-                to={`/settings/${item.key}`}
-                className="flex items-center gap-2.5 px-3 py-2 rounded text-sm transition-colors"
-                style={{
-                  backgroundColor: isActive ? 'rgba(34,211,238,0.1)' : 'transparent',
-                  color: isActive ? 'var(--accent-cyan)' : 'var(--text-secondary)',
-                  borderLeft: isActive ? '3px solid var(--accent-cyan)' : '3px solid transparent',
-                }}
-                onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
-                onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                onClick={() => setNavOpen(false)}
-              >
-                <item.icon className="w-4 h-4" />
-                <span>{item.label}</span>
-              </Link>
-            );
-          })}
-        </div>
+        {navList}
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6 animate-fade-in">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 pb-[calc(0.75rem_+_env(safe-area-inset-bottom))] sm:p-5 lg:p-6 animate-fade-in">
         {renderContent()}
       </div>
     </div>
@@ -1495,7 +1503,7 @@ function KnowledgeStatusPanel() {
   ] : [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>知识库状态</h3>
       {isLoading ? (
         <div className="text-xs" style={{ color: 'var(--text-muted)' }}>加载中…</div>
@@ -1554,7 +1562,7 @@ function AccountsPanel() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>账户管理</h3>
       <div className="max-w-2xl space-y-4">
         {/* 创建账户 */}
@@ -1572,19 +1580,19 @@ function AccountsPanel() {
                 className="input-base text-sm" placeholder="至少 8 位" />
             </div>
           </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-primary)' }}>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+            <label className="flex items-center gap-2 text-xs min-h-10 md:min-h-0" style={{ color: 'var(--text-primary)' }}>
               <input type="radio" checked={form.role === 'viewer'} onChange={() => setForm({ ...form, role: 'viewer' })} className="accent-cyan-400" />
               只读（浏览/搜索/问答）
             </label>
-            <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-primary)' }}>
+            <label className="flex items-center gap-2 text-xs min-h-10 md:min-h-0" style={{ color: 'var(--text-primary)' }}>
               <input type="radio" checked={form.role === 'admin'} onChange={() => setForm({ ...form, role: 'admin' })} className="accent-cyan-400" />
               管理员（全部权限）
             </label>
             <button
               onClick={() => createMutation.mutate(form)}
               disabled={form.username.length < 2 || form.password.length < 8 || createMutation.isPending}
-              className="btn-primary text-xs py-2 px-4 ml-auto disabled:opacity-40"
+              className="btn-primary text-xs py-2 px-4 w-full sm:w-auto sm:ml-auto min-h-10 sm:min-h-0 disabled:opacity-40"
             >{createMutation.isPending ? '创建中…' : '创建'}</button>
           </div>
         </div>
@@ -1603,42 +1611,44 @@ function AccountsPanel() {
           ) : (
             <div className="space-y-2">
               {(accounts ?? []).map((acc) => (
-                <div key={acc.id} className="flex items-center gap-3 px-3 py-2 rounded border" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
+                <div key={acc.id} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 px-3 py-2 rounded border" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{acc.username}</div>
                     <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
                       {acc.lastSignInAt ? `最近登录 ${new Date(acc.lastSignInAt).toLocaleString()}` : '从未登录'}
                     </div>
                   </div>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
-                    style={{
-                      backgroundColor: acc.role === 'admin' ? 'rgba(251,191,36,0.15)' : 'rgba(34,211,238,0.1)',
-                      color: acc.role === 'admin' ? '#fbbf24' : 'var(--accent-cyan)',
-                    }}>
-                    {acc.role === 'admin' ? '管理员' : '只读'}
-                  </span>
-                  {resetId === acc.id ? (
-                    <div className="flex items-center gap-1 shrink-0">
-                      <input type="password" value={resetPw} onChange={(e) => setResetPw(e.target.value)}
-                        placeholder="新密码≥8位" className="input-base text-[11px] py-1 w-28" />
-                      <button onClick={() => resetMutation.mutate({ id: acc.id, password: resetPw })}
-                        disabled={resetPw.length < 8 || resetMutation.isPending}
-                        className="text-[10px] px-2 py-1 rounded disabled:opacity-40"
-                        style={{ backgroundColor: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>确定</button>
-                      <button onClick={() => { setResetId(null); setResetPw(''); }}
-                        className="text-[10px] px-2 py-1 rounded" style={{ color: 'var(--text-muted)' }}>取消</button>
-                    </div>
-                  ) : (
-                    <>
-                      <button onClick={() => setResetId(acc.id)}
-                        className="text-[10px] px-2 py-1 rounded shrink-0"
-                        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>重置密码</button>
-                      <button
-                        onClick={() => { if (window.confirm(`删除账户「${acc.username}」？`)) deleteMutation.mutate({ id: acc.id }); }}
-                        className="text-[10px] px-2 py-1 rounded shrink-0"
-                        style={{ backgroundColor: 'rgba(239,68,68,0.15)', color: '#ef4444' }}>删除</button>
-                    </>
-                  )}
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                      style={{
+                        backgroundColor: acc.role === 'admin' ? 'rgba(251,191,36,0.15)' : 'rgba(34,211,238,0.1)',
+                        color: acc.role === 'admin' ? '#fbbf24' : 'var(--accent-cyan)',
+                      }}>
+                      {acc.role === 'admin' ? '管理员' : '只读'}
+                    </span>
+                    {resetId === acc.id ? (
+                      <div className="flex flex-wrap items-center gap-1 shrink-0">
+                        <input type="password" value={resetPw} onChange={(e) => setResetPw(e.target.value)}
+                          placeholder="新密码≥8位" className="input-base text-[11px] py-1 w-full sm:w-28" />
+                        <button onClick={() => resetMutation.mutate({ id: acc.id, password: resetPw })}
+                          disabled={resetPw.length < 8 || resetMutation.isPending}
+                          className="text-xs sm:text-[10px] px-2 py-1.5 sm:py-1 min-h-10 sm:min-h-0 rounded disabled:opacity-40"
+                          style={{ backgroundColor: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>确定</button>
+                        <button onClick={() => { setResetId(null); setResetPw(''); }}
+                          className="text-xs sm:text-[10px] px-2 py-1.5 sm:py-1 min-h-10 sm:min-h-0 rounded" style={{ color: 'var(--text-muted)' }}>取消</button>
+                      </div>
+                    ) : (
+                      <>
+                        <button onClick={() => setResetId(acc.id)}
+                          className="text-xs sm:text-[10px] px-2 py-1.5 sm:py-1 min-h-10 sm:min-h-0 rounded shrink-0"
+                          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>重置密码</button>
+                        <button
+                          onClick={() => { if (window.confirm(`删除账户「${acc.username}」？`)) deleteMutation.mutate({ id: acc.id }); }}
+                          className="text-xs sm:text-[10px] px-2 py-1.5 sm:py-1 min-h-10 sm:min-h-0 rounded shrink-0"
+                          style={{ backgroundColor: 'rgba(239,68,68,0.15)', color: '#ef4444' }}>删除</button>
+                      </>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

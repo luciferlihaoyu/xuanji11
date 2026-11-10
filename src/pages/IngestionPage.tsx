@@ -102,9 +102,9 @@ export default function IngestionPage() {
   };
 
   return (
-    <div className="p-6 max-w-6xl mx-auto" style={{ backgroundColor: 'var(--bg-primary)', minHeight: 'calc(100vh - 48px)' }}>
-      <div className="flex items-center justify-between mb-6">
-        <div>
+    <div className="p-3 sm:p-5 lg:p-6 max-w-6xl mx-auto min-h-app" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4 sm:mb-6">
+        <div className="min-w-0">
           <h1 className="text-xl font-bold mb-1" style={{ color: 'var(--text-primary)' }}>入库监控</h1>
           <p className="text-xs" style={{ color: 'var(--text-muted)' }}>追踪上传、数据源同步和备份的入库进度</p>
         </div>
@@ -113,37 +113,37 @@ export default function IngestionPage() {
             refetch();
             addToast({ type: 'success', title: '已刷新' });
           }}
-          className="btn-secondary text-xs py-2 px-3 flex items-center gap-1.5"
+          className="btn-secondary text-xs py-2 px-3 flex items-center justify-center gap-1.5 shrink-0 min-h-[44px] sm:min-h-0"
         >
           <RefreshCw className="w-3.5 h-3.5" />刷新
         </button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <div className="card-base p-4">
-          <div className="text-[10px] mb-1" style={{ color: 'var(--text-muted)' }}>总任务</div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-4 sm:mb-6">
+        <div className="card-base p-4 min-w-0">
+          <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>总任务</div>
           <div className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{stats.total}</div>
         </div>
-        <div className="card-base p-4">
-          <div className="text-[10px] mb-1" style={{ color: 'var(--text-muted)' }}>运行中</div>
+        <div className="card-base p-4 min-w-0">
+          <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>运行中</div>
           <div className="text-xl font-bold text-cyan-400">{stats.running}</div>
         </div>
-        <div className="card-base p-4">
-          <div className="text-[10px] mb-1" style={{ color: 'var(--text-muted)' }}>已完成</div>
+        <div className="card-base p-4 min-w-0">
+          <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>已完成</div>
           <div className="text-xl font-bold text-emerald-400">{stats.completed}</div>
         </div>
-        <div className="card-base p-4">
-          <div className="text-[10px] mb-1" style={{ color: 'var(--text-muted)' }}>失败</div>
+        <div className="card-base p-4 min-w-0">
+          <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>失败</div>
           <div className="text-xl font-bold text-rose-400">{stats.failed}</div>
         </div>
       </div>
 
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex flex-wrap items-center gap-2 mb-4">
         {(['all', 'upload', 'datasource', 'backup', 'manual'] as const).map((key) => (
           <button
             key={key}
             onClick={() => setFilter(key)}
-            className={`text-xs px-3 py-1.5 rounded transition-colors ${filter === key ? 'bg-[var(--accent-cyan-dim)] text-[var(--accent-cyan)]' : 'hover:bg-white/5'}`}
+            className={`text-xs px-3 py-1.5 rounded transition-colors min-h-[44px] sm:min-h-0 ${filter === key ? 'bg-[var(--accent-cyan-dim)] text-[var(--accent-cyan)]' : 'hover:bg-white/5'}`}
             style={{ color: filter === key ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
           >
             {key === 'all' ? '全部' : SOURCE_LABELS[key]}
@@ -156,7 +156,7 @@ export default function IngestionPage() {
           <Loader2 className="w-5 h-5 animate-spin mr-2" /> 加载中...
         </div>
       ) : filteredJobs.length === 0 ? (
-        <div className="card-base p-8 text-center">
+        <div className="card-base p-6 sm:p-8 text-center">
           <Activity className="w-10 h-10 mx-auto mb-3" style={{ color: 'var(--text-muted)' }} />
           <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>暂无入库任务</p>
         </div>
@@ -177,14 +177,14 @@ export default function IngestionPage() {
             const progress = isTerminal ? 100 : total > 0 ? Math.round(((processed + failed) / total) * 100) : 0;
             return (
               <div key={job.id} className="card-base p-4">
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <Icon className="w-4 h-4" style={{ color: 'var(--accent-cyan)' }} />
-                    <div>
+                <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Icon className="w-4 h-4 shrink-0" style={{ color: 'var(--accent-cyan)' }} />
+                    <div className="min-w-0">
                       <div className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>
                         {SOURCE_LABELS[job.sourceType]}任务 #{job.id}
                       </div>
-                      <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      <div className="text-xs break-all" style={{ color: 'var(--text-muted)' }}>
                         source: {job.sourceId || '-'}
                       </div>
                     </div>
@@ -194,18 +194,18 @@ export default function IngestionPage() {
 
                 <div className="mb-2">{progressBar(progress, job.status)}</div>
 
-                <div className="flex items-center gap-3 text-[10px] mb-2" style={{ color: 'var(--text-muted)' }}>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
                   <span>项目: {processed}/{total}</span>
                   {failed > 0 && <span className="text-rose-400">失败 {failed}</span>}
                   <span>重试: {job.retryCount ?? 0}</span>
                   <span>{formatTime(job.createdAt)}</span>
                 </div>
 
-                {job.error && <div className="text-[10px] mb-2" style={{ color: 'var(--accent-rose)' }}>{job.error}</div>}
+                {job.error && <div className="text-xs break-all mb-2" style={{ color: 'var(--accent-rose)' }}>{job.error}</div>}
 
                 <button
                   onClick={() => setSelectedJobId(selectedJobId === job.id ? null : job.id)}
-                  className="text-[10px] flex items-center gap-1 px-2 py-1 rounded hover:bg-white/5"
+                  className="text-xs flex items-center justify-center gap-1 px-2 py-1 rounded hover:bg-white/5 w-full sm:w-auto min-h-[44px] sm:min-h-0"
                   style={{ color: 'var(--text-secondary)' }}
                 >
                   {selectedJobId === job.id ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
@@ -214,23 +214,23 @@ export default function IngestionPage() {
 
                 {selectedJobId === job.id && selectedJob && (
                   <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                    <div className="flex items-center justify-between mb-2">
-                      <h4 className="text-[10px] font-bold" style={{ color: 'var(--text-primary)' }}>入库项目</h4>
-                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>共 {items?.length ?? 0} 项</span>
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                      <h4 className="text-xs font-bold" style={{ color: 'var(--text-primary)' }}>入库项目</h4>
+                      <span className="text-xs" style={{ color: 'var(--text-muted)' }}>共 {items?.length ?? 0} 项</span>
                     </div>
                     {!items ? (
                       <div className="flex items-center justify-center py-4" style={{ color: 'var(--text-muted)' }}>
                         <Loader2 className="w-4 h-4 animate-spin mr-2" />加载中...
                       </div>
                     ) : items.length === 0 ? (
-                      <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>暂无项目</p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>暂无项目</p>
                     ) : (
-                      <div className="max-h-64 overflow-y-auto space-y-1">
+                      <div className="max-h-64 min-h-0 overflow-y-auto overscroll-contain space-y-1">
                         {items.map((item) => (
-                          <div key={item.id} className="flex items-center justify-between py-1.5 px-2 rounded text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+                          <div key={item.id} className="flex items-center justify-between gap-2 py-1.5 px-2 rounded text-xs" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
                             <div className="flex items-center gap-2 min-w-0">
                               <FileText className="w-3 h-3 shrink-0" style={{ color: 'var(--text-muted)' }} />
-                              <span className="truncate" style={{ color: 'var(--text-secondary)' }}>{item.name}</span>
+                              <span className="truncate min-w-0" style={{ color: 'var(--text-secondary)' }}>{item.name}</span>
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
                               <span style={{ color: 'var(--text-muted)' }}>{formatBytes(item.size)}</span>

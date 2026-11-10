@@ -21,7 +21,7 @@ export default function AppLayout() {
       style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
     >
       <TopNavbar />
-      <main className="pt-[48px]">
+      <main className="pt-[48px] min-h-app">
         <Outlet />
       </main>
       <ToastContainer />

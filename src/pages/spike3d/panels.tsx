@@ -3,7 +3,9 @@
  * 侧栏：Jarvis 式 380px 可拖宽、邻居可点跳转；设置：滑杆 + 预设 + 持久化。
  */
 import { useRef, useState } from 'react';
+import { SlidersHorizontal, X } from 'lucide-react';
 import { trpc } from '@/providers/trpc';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { ACCENT_DARK, ACCENT_LIGHT, PRESETS, type SpikeSettings } from './presets';
 import type { MiniNode } from './widgets';
 
@@ -15,6 +17,7 @@ export function NodeSidebar({ node, neighbors, onClose, onNavigate, isDark }: {
   onNavigate: (n: MiniNode) => void;
   isDark: boolean;
 }) {
+  const isMobile = useIsMobile();
   const [width, setWidth] = useState(380);
   const dragRef = useRef<{ startX: number; startW: number } | null>(null);
   const detailQuery = trpc.knowledge.getNode.useQuery(
@@ -43,16 +46,20 @@ export function NodeSidebar({ node, neighbors, onClose, onNavigate, isDark }: {
 
   return (
     <div style={{
-      position: 'absolute', top: 0, right: 0, bottom: 0, width, zIndex: 25,
+      position: 'absolute', top: 0, right: 0, bottom: 0,
+      // 移动端：固定 86vw / 上限 320px，桌面仍用可拖宽的 width
+      width: isMobile ? '86vw' : width, maxWidth: isMobile ? 320 : undefined, zIndex: 25,
       background: isDark ? 'rgba(5,8,15,0.92)' : 'rgba(255,255,255,0.95)',
       borderLeft: `1px solid ${isDark ? 'rgba(0,212,255,0.3)' : 'rgba(14,138,168,0.3)'}`,
       backdropFilter: 'blur(8px)', display: 'flex', flexDirection: 'column',
     }}>
-      {/* 拖宽把手 */}
-      <div
-        onMouseDown={startDrag}
-        style={{ position: 'absolute', left: -3, top: 0, bottom: 0, width: 6, cursor: 'ew-resize', zIndex: 26 }}
-      />
+      {/* 拖宽把手（鼠标专用；移动端无 hover/拖拽等价入口，故不渲染） */}
+      {!isMobile && (
+        <div
+          onMouseDown={startDrag}
+          style={{ position: 'absolute', left: -3, top: 0, bottom: 0, width: 6, cursor: 'ew-resize', zIndex: 26 }}
+        />
+      )}
       {/* 头部 */}
       <div style={{ padding: '14px 16px 10px', borderBottom: `1px solid ${isDark ? '#1e2433' : '#e2e8f0'}` }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
@@ -64,6 +71,8 @@ export function NodeSidebar({ node, neighbors, onClose, onNavigate, isDark }: {
           </div>
           <button
             onClick={onClose}
+            aria-label="关闭节点详情"
+            className="min-w-10 min-h-10 md:min-w-0 md:min-h-0 shrink-0"
             style={{
               background: 'transparent', border: `1px solid ${accent}55`, borderRadius: 4, cursor: 'pointer',
               color: accent, fontSize: 12, padding: '2px 8px', fontFamily: '"Courier New", monospace',
@@ -78,7 +87,10 @@ export function NodeSidebar({ node, neighbors, onClose, onNavigate, isDark }: {
         </div>
       </div>
       {/* 正文 */}
-      <div className="spike3d-scroll" style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
+      <div className="spike3d-scroll overscroll-contain" style={{
+        flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 16px',
+        paddingBottom: isMobile ? 'max(0.75rem, env(safe-area-inset-bottom))' : undefined,
+      }}>
         {detailQuery.isLoading && (
           <div style={{ fontSize: 12, color: isDark ? '#7f849c' : '#94a3b8' }}>载入内容…</div>
         )}
@@ -106,7 +118,9 @@ export function NodeSidebar({ node, neighbors, onClose, onNavigate, isDark }: {
                 key={n.id}
                 onClick={() => onNavigate(n)}
                 style={{
-                  padding: '5px 8px', fontSize: 12, cursor: 'pointer', borderRadius: 4,
+                  padding: isMobile ? '10px 8px' : '5px 8px', minHeight: isMobile ? 40 : undefined,
+                  display: isMobile ? 'flex' : 'block', alignItems: 'center',
+                  fontSize: 12, cursor: 'pointer', borderRadius: 4,
                   color: isDark ? '#9fb4d8' : '#475569',
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}
@@ -156,9 +170,105 @@ export function SettingsPanel({ settings, onChange, isDark }: {
   onChange: (s: SpikeSettings) => void;
   isDark: boolean;
 }) {
+  const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const accent = isDark ? ACCENT_DARK : ACCENT_LIGHT;
   const set = <K extends keyof SpikeSettings>(k: K, v: SpikeSettings[K]) => onChange({ ...settings, [k]: v });
+
+  // 设置项正文：桌面弹层与移动端底部面板共用一份，避免两份重复 JSX
+  const body = (
+    <>
+      {/* 预设 */}
+      <div style={{ fontSize: 11, letterSpacing: '0.08em', color: accent, marginBottom: 8, fontFamily: '"Courier New", monospace' }}>
+        PRESETS
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 14 }}>
+        {PRESETS.map(p => (
+          <button
+            key={p.name}
+            onClick={() => onChange({ ...settings, ...p.settings })}
+            title={p.desc}
+            style={{
+              padding: isMobile ? '10px 4px' : '6px 4px', minHeight: isMobile ? 40 : undefined,
+              fontSize: 11, cursor: 'pointer', borderRadius: 4,
+              background: `${accent}14`, border: `1px solid ${accent}44`, color: accent,
+              fontFamily: '"Courier New", monospace',
+            }}
+          >
+            {p.name}
+          </button>
+        ))}
+      </div>
+      {/* 滑杆 */}
+      <Slider label="连线距离" value={settings.linkDist} min={5} max={28} step={1} isDark={isDark} onChange={v => set('linkDist', v)} />
+      <Slider label="斥力强度" value={settings.charge} min={4} max={24} step={1} isDark={isDark} onChange={v => set('charge', v)} />
+      <Slider label="节点大小" value={settings.nodeSize} min={0.5} max={2} step={0.1} isDark={isDark} onChange={v => set('nodeSize', v)} fmt={v => `×${v.toFixed(1)}`} />
+      <Slider label="标签常显" value={settings.labelPct} min={5} max={50} step={5} isDark={isDark} onChange={v => set('labelPct', v)} fmt={v => `前${v}%`} />
+      <Slider label="连线弧度" value={settings.curvature} min={0} max={0.4} step={0.02} isDark={isDark} onChange={v => set('curvature', v)} />
+      <Slider label="银河旋涡" value={settings.swirl} min={0} max={1} step={0.05} isDark={isDark} onChange={v => set('swirl', v)} />
+      <Slider label="自动旋转" value={settings.autoRotate} min={0} max={2} step={0.1} isDark={isDark} onChange={v => set('autoRotate', v)} />
+      {isDark && (
+        <label style={{
+          display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, cursor: 'pointer',
+          minHeight: isMobile ? 40 : undefined,
+          color: isDark ? '#9fb4d8' : '#475569', fontFamily: '"Courier New", monospace',
+        }}>
+          <input type="checkbox" checked={settings.scanlines} onChange={e => set('scanlines', e.target.checked)} />
+          CRT 扫描线
+        </label>
+      )}
+    </>
+  );
+
+  // 移动端（契约第 9 条）：折叠成 40×40 图标按钮 → 点开为底部面板（≤55dvh 可滚 + 明确关闭按钮）
+  if (isMobile) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-label="展开图谱设置"
+          aria-expanded={open}
+          className="tap-target absolute md:hidden rounded-lg"
+          style={{
+            right: 10, top: 108, zIndex: 20,
+            background: isDark ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.85)',
+            border: `1px solid ${accent}55`, color: accent,
+            boxShadow: `0 0 8px ${accent}22`,
+          }}
+        >
+          <SlidersHorizontal className="w-4 h-4" />
+        </button>
+        {open && (
+          <div
+            role="dialog"
+            aria-label="图谱设置"
+            className="fixed inset-x-0 bottom-0 z-40 rounded-t-xl max-h-[55dvh] overflow-y-auto overscroll-contain pb-safe"
+            style={{
+              background: isDark ? 'rgba(5,8,15,0.96)' : 'rgba(255,255,255,0.97)',
+              borderTop: `1px solid ${accent}44`, backdropFilter: 'blur(8px)',
+            }}
+          >
+            <div className="flex items-center justify-between gap-2 px-4 pt-3">
+              <span style={{ fontSize: 12, letterSpacing: '0.08em', color: accent, fontFamily: '"Courier New", monospace' }}>
+                图谱设置
+              </span>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                aria-label="关闭设置面板"
+                className="tap-target rounded shrink-0"
+                style={{ background: 'transparent', border: 'none', color: accent }}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div style={{ padding: '0 16px 4px' }}>{body}</div>
+          </div>
+        )}
+      </>
+    );
+  }
 
   return (
     <div style={{ position: 'absolute', left: 18, top: 150, zIndex: 20 }}>
@@ -180,43 +290,7 @@ export function SettingsPanel({ settings, onChange, isDark }: {
           background: isDark ? 'rgba(5,8,15,0.92)' : 'rgba(255,255,255,0.95)',
           border: `1px solid ${accent}44`, borderRadius: 6, backdropFilter: 'blur(8px)',
         }}>
-          {/* 预设 */}
-          <div style={{ fontSize: 11, letterSpacing: '0.08em', color: accent, marginBottom: 8, fontFamily: '"Courier New", monospace' }}>
-            PRESETS
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 14 }}>
-            {PRESETS.map(p => (
-              <button
-                key={p.name}
-                onClick={() => onChange({ ...settings, ...p.settings })}
-                title={p.desc}
-                style={{
-                  padding: '6px 4px', fontSize: 11, cursor: 'pointer', borderRadius: 4,
-                  background: `${accent}14`, border: `1px solid ${accent}44`, color: accent,
-                  fontFamily: '"Courier New", monospace',
-                }}
-              >
-                {p.name}
-              </button>
-            ))}
-          </div>
-          {/* 滑杆 */}
-          <Slider label="连线距离" value={settings.linkDist} min={5} max={28} step={1} isDark={isDark} onChange={v => set('linkDist', v)} />
-          <Slider label="斥力强度" value={settings.charge} min={4} max={24} step={1} isDark={isDark} onChange={v => set('charge', v)} />
-          <Slider label="节点大小" value={settings.nodeSize} min={0.5} max={2} step={0.1} isDark={isDark} onChange={v => set('nodeSize', v)} fmt={v => `×${v.toFixed(1)}`} />
-          <Slider label="标签常显" value={settings.labelPct} min={5} max={50} step={5} isDark={isDark} onChange={v => set('labelPct', v)} fmt={v => `前${v}%`} />
-          <Slider label="连线弧度" value={settings.curvature} min={0} max={0.4} step={0.02} isDark={isDark} onChange={v => set('curvature', v)} />
-          <Slider label="银河旋涡" value={settings.swirl} min={0} max={1} step={0.05} isDark={isDark} onChange={v => set('swirl', v)} />
-          <Slider label="自动旋转" value={settings.autoRotate} min={0} max={2} step={0.1} isDark={isDark} onChange={v => set('autoRotate', v)} />
-          {isDark && (
-            <label style={{
-              display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, cursor: 'pointer',
-              color: isDark ? '#9fb4d8' : '#475569', fontFamily: '"Courier New", monospace',
-            }}>
-              <input type="checkbox" checked={settings.scanlines} onChange={e => set('scanlines', e.target.checked)} />
-              CRT 扫描线
-            </label>
-          )}
+          {body}
         </div>
       )}
     </div>

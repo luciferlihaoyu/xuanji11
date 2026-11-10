@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Search, Bell, Settings, Command, Menu, X, Orbit, LogOut } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
@@ -31,6 +31,20 @@ export default function TopNavbar() {
   const { data: user } = trpc.auth.me.useQuery();
   const { logout } = useAuth();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  // 移动端菜单：路由变化后自动收起，避免遮挡新页面
+  useEffect(() => {
+    setMobileMenuOpen(false);
+    setUserMenuOpen(false);
+  }, [location.pathname, location.search]);
+
+  // 移动端菜单展开时锁住 body 滚动
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, [mobileMenuOpen]);
 
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return;
@@ -141,7 +155,7 @@ export default function TopNavbar() {
         <ThemeSwitch />
 
         <button
-          className="relative p-2 rounded-md transition-colors duration-200"
+          className="relative tap-target rounded-md transition-colors duration-200"
           style={{ color: 'var(--text-muted)' }}
           onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--accent-cyan)')}
           onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
@@ -165,7 +179,7 @@ export default function TopNavbar() {
         <div className="relative">
           <button
             onClick={() => setUserMenuOpen(!userMenuOpen)}
-            className="w-7 h-7 rounded-full border flex items-center justify-center text-xs font-bold cursor-pointer transition-transform hover:scale-105"
+            className="w-9 h-9 sm:w-7 sm:h-7 rounded-full border flex items-center justify-center text-xs font-bold cursor-pointer transition-transform hover:scale-105 shrink-0"
             style={{
               borderColor: 'var(--accent-cyan)',
               background: 'linear-gradient(135deg, rgba(0,229,255,0.2), rgba(167,139,250,0.2))',
@@ -198,23 +212,91 @@ export default function TopNavbar() {
           )}
         </div>
 
-        <button className="lg:hidden p-2 rounded-md ml-1" style={{ color: 'var(--text-muted)' }} onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
+        <button
+          className="lg:hidden tap-target rounded-md ml-1"
+          style={{ color: 'var(--text-muted)' }}
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          aria-label={mobileMenuOpen ? '关闭导航菜单' : '打开导航菜单'}
+          aria-expanded={mobileMenuOpen}
+        >
           {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
         </button>
       </div>
 
       {/* Mobile menu */}
       {mobileMenuOpen && (
-        <div className="absolute top-12 left-0 right-0 border-b lg:hidden animate-fade-in" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.path || location.pathname.startsWith(item.path + '/');
-            return (
-              <Link key={item.path} to={item.path} className="block px-4 py-2.5 text-sm font-medium" style={{ color: isActive ? 'var(--accent-cyan)' : 'var(--text-secondary)' }} onClick={() => setMobileMenuOpen(false)}>
-                {item.label}
+        <>
+          {/* 遮罩：点空白处收起 */}
+          <div
+            className="fixed inset-0 top-12 bg-black/50 z-40 lg:hidden animate-fade-in"
+            onClick={() => setMobileMenuOpen(false)}
+            aria-hidden="true"
+          />
+          <div
+            className="absolute top-12 left-0 right-0 z-50 border-b lg:hidden animate-fade-in max-h-[calc(100dvh-48px)] overflow-y-auto overscroll-contain no-scrollbar"
+            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)', paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
+          >
+            {/* 移动端搜索（桌面搜索框在 <768px 隐藏） */}
+            <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div
+                className="flex items-center h-10 px-3 rounded-md border"
+                style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: searchFocus ? 'var(--accent-cyan)' : 'var(--border-subtle)' }}
+              >
+                <Search className="w-4 h-4 mr-2 shrink-0" style={{ color: 'var(--text-muted)' }} />
+                <input
+                  type="text"
+                  placeholder="搜索知识、文件、Agent..."
+                  className="flex-1 min-w-0 bg-transparent text-sm outline-none"
+                  style={{ color: 'var(--text-primary)' }}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onFocus={() => setSearchFocus(true)}
+                  onBlur={() => setSearchFocus(false)}
+                  onKeyDown={(e) => {
+                    handleSearchKeyDown(e);
+                    if (e.key === 'Enter') setMobileMenuOpen(false);
+                  }}
+                  aria-label="站内搜索"
+                />
+              </div>
+            </div>
+
+            <nav className="py-1">
+              {navItems.map((item) => {
+                const isActive = item.path === '/'
+                  ? location.pathname === '/'
+                  : location.pathname === item.path || location.pathname.startsWith(item.path + '/');
+                return (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    className="flex items-center min-h-[44px] px-4 text-sm font-medium"
+                    style={{
+                      color: isActive ? 'var(--accent-cyan)' : 'var(--text-secondary)',
+                      backgroundColor: isActive ? 'var(--accent-cyan-dim)' : 'transparent',
+                      borderLeft: isActive ? '3px solid var(--accent-cyan)' : '3px solid transparent',
+                    }}
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </nav>
+
+            <div className="mt-1 pt-1 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+              <Link
+                to="/settings/appearance"
+                className="flex items-center gap-2 min-h-[44px] px-4 text-sm"
+                style={{ color: location.pathname.startsWith('/settings') ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                <Settings className="w-4 h-4" />
+                设置
               </Link>
-            );
-          })}
-        </div>
+            </div>
+          </div>
+        </>
       )}
     </nav>
   );

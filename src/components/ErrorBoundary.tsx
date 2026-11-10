@@ -26,14 +26,14 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex items-center justify-center min-h-screen bg-background text-foreground">
-          <div className="text-center space-y-4 p-8">
-            <h1 className="text-2xl font-bold">😵 页面出错了</h1>
+        <div className="flex items-center justify-center min-h-dvh bg-background text-foreground">
+          <div className="text-center space-y-4 p-6 sm:p-8">
+            <h1 className="text-xl font-bold sm:text-2xl">😵 页面出错了</h1>
             <p className="text-muted-foreground">
               {this.state.error?.message || "未知错误"}
             </p>
             <button
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+              className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 max-sm:min-h-10"
               onClick={() => {
                 this.setState({ hasError: false, error: null });
                 window.location.href = "/";

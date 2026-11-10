@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { useWorkflows, useWorkflow, useWorkflowRuns, useWorkflowRun, useRunWorkflow } from '@/hooks/useWorkflows';
 import { trpc } from '@/providers/trpc';
-import { Play, ZoomIn, ZoomOut, Maximize2, Undo2, Redo2, Save, ChevronDown, Copy, Trash2, Power, Plus, X, Check, GripVertical, Loader2, History, ArrowLeft, Clock, AlertCircle, Timer, Minus } from 'lucide-react';
+import { Play, ZoomIn, ZoomOut, Maximize2, Undo2, Redo2, Save, ChevronDown, Copy, Trash2, Power, Plus, X, Check, GripVertical, Loader2, History, ArrowLeft, Clock, AlertCircle, Timer, Minus, LayoutGrid, SlidersHorizontal } from 'lucide-react';
 
 interface WFNode {
   id: string;
@@ -171,7 +171,8 @@ export default function WorkflowBuilder() {
   const { data: activeRun } = useWorkflowRun(activeRunId);
 
   const [nodes, setNodes] = useState<WFNode[]>([]);
-  const [paletteOpen, setPaletteOpen] = useState(false);
+  // 移动端（<768px）抽屉：palette 左滑入，其余右滑入；桌面 md+ 走常驻侧栏，两者互不干扰
+  const [mobilePanel, setMobilePanel] = useState<'palette' | 'config' | 'runs' | 'triggers' | null>(null);
   const [edges, setEdges] = useState<WFEdge[]>([]);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -195,6 +196,8 @@ export default function WorkflowBuilder() {
   const [webhookUrl, setWebhookUrl] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
+  // 双指缩放手势的起始快照（画布 touch-action:none 后手势由本组件接管）
+  const pinchRef = useRef<{ dist: number; zoom: number; worldX: number; worldY: number } | null>(null);
 
   const isLoading = listLoading || (workflowId !== null && wfLoading);
 
@@ -362,6 +365,51 @@ export default function WorkflowBuilder() {
     const newY = (t.clientY - dragOffset.y - pan.y) / zoom;
     setNodes((prev) => prev.map((n) => n.id === draggingNode ? { ...n, x: newX, y: newY } : n));
   }, [draggingNode, dragOffset, zoom, pan]);
+
+  // 双指缩放（契约 §9）：画布 touch-action:none 后浏览器不再接管手势。
+  // 以双指中点为锚点缩放，保证指下的画布内容不跑掉。
+  const beginPinch = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length !== 2) return false;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const a = e.touches[0];
+    const b = e.touches[1];
+    const midX = (a.clientX + b.clientX) / 2 - (rect?.left ?? 0);
+    const midY = (a.clientY + b.clientY) / 2 - (rect?.top ?? 0);
+    pinchRef.current = {
+      dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1,
+      zoom,
+      worldX: (midX - pan.x) / zoom,
+      worldY: (midY - pan.y) / zoom,
+    };
+    setDraggingNode(null);
+    return true;
+  }, [pan, zoom]);
+
+  const handleCanvasTouchStart = useCallback((e: React.TouchEvent) => {
+    beginPinch(e);
+  }, [beginPinch]);
+
+  const handleCanvasTouchMove = useCallback((e: React.TouchEvent) => {
+    const pinch = pinchRef.current;
+    if (pinch && e.touches.length === 2) {
+      const a = e.touches[0];
+      const b = e.touches[1];
+      const rect = canvasRef.current?.getBoundingClientRect();
+      const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1;
+      const nextZoom = Math.min(2, Math.max(0.25, pinch.zoom * (dist / pinch.dist)));
+      const midX = (a.clientX + b.clientX) / 2 - (rect?.left ?? 0);
+      const midY = (a.clientY + b.clientY) / 2 - (rect?.top ?? 0);
+      setZoom(nextZoom);
+      setPan({ x: midX - nextZoom * pinch.worldX, y: midY - nextZoom * pinch.worldY });
+      return;
+    }
+    handleTouchMove(e); // 单指：沿用既有节点拖拽
+  }, [handleTouchMove]);
+
+  const handleCanvasTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length < 2) pinchRef.current = null;
+    if (e.touches.length === 0) handleMouseUp();
+  }, [handleMouseUp]);
 
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
@@ -586,6 +634,26 @@ export default function WorkflowBuilder() {
     setArgumentsDraft(null);
   }, [selectedNode]);
 
+  // 移动端抽屉通用行为（契约 §4）：Esc 关闭 + 打开期间锁 body 滚动
+  useEffect(() => {
+    if (!mobilePanel) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMobilePanel(null);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [mobilePanel]);
+
+  // 取消选中（删除 / 关闭按钮）时同步收起属性抽屉
+  useEffect(() => {
+    if (!selectedNode) setMobilePanel((p) => (p === 'config' ? null : p));
+  }, [selectedNode]);
+
   const getEdgePath = (edge: WFEdge) => {
     const s = nodes.find((n) => n.id === edge.source);
     const t = nodes.find((n) => n.id === edge.target);
@@ -598,19 +666,38 @@ export default function WorkflowBuilder() {
   const runs = runsData ?? [];
 
   return (
-    <div className="flex" style={{ height: 'calc(100vh - 48px)', backgroundColor: 'var(--bg-primary)' }}>
-      {/* Left Palette */}
-      <div className={`absolute md:relative z-30 h-full w-[220px] shrink-0 border-r flex-col overflow-hidden ${paletteOpen ? 'flex' : 'hidden md:flex'}`} style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
-        <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+    <div className="relative flex h-app" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      {/* 移动端抽屉遮罩（点击关闭） */}
+      {mobilePanel && (
+        <div
+          className="fixed inset-0 top-12 z-40 bg-black/50 animate-fade-in md:hidden"
+          onClick={() => setMobilePanel(null)}
+          aria-hidden="true"
+        />
+      )}
+      {/* Left Palette：桌面（md+）常驻左栏；<768px 收为左侧抽屉 */}
+      <div
+        className={`${mobilePanel === 'palette' ? 'flex' : 'hidden'} md:flex fixed md:static top-12 bottom-0 left-0 z-50 md:z-30 w-[86vw] max-w-[300px] md:w-[220px] md:max-w-none max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] shrink-0 border-r flex-col overflow-hidden`}
+        style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
+      >
+        <div className="flex items-center justify-between gap-2 p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
           <span className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--accent-cyan)' }}>组件库</span>
+          <button
+            onClick={() => setMobilePanel(null)}
+            className="flex min-h-10 min-w-10 items-center justify-center rounded hover:bg-white/5 md:hidden"
+            style={{ color: 'var(--text-muted)' }}
+            aria-label="关闭组件库面板"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
           {COMPONENT_LIBRARY.map((group) => {
             const catInfo = NODE_CATEGORIES[group.category] ?? NODE_CATEGORIES.processing;
             const expanded = expandedCategories.has(group.category);
             return (
               <div key={group.category}>
-                <button className="flex items-center gap-2 w-full px-3 py-2 text-xs font-medium" style={{ color: 'var(--text-secondary)' }} onClick={() => toggleCategory(group.category)}>
+                <button className="flex items-center gap-2 w-full px-3 py-2 min-h-10 md:min-h-0 text-xs font-medium" style={{ color: 'var(--text-secondary)' }} onClick={() => toggleCategory(group.category)}>
                   <ChevronDown className={`w-3 h-3 transition-transform ${expanded ? '' : '-rotate-90'}`} style={{ color: 'var(--text-muted)' }} />
                   <span style={{ color: catInfo.color }}>◆</span>
                   <span>{catInfo.label}</span>
@@ -624,10 +711,10 @@ export default function WorkflowBuilder() {
                         onDragEnd={item.disabled ? undefined : () => setDragType(null)}
                         onClick={item.disabled ? undefined : () => addNode(item.type)}
                         title={item.disabled ? '该节点尚未实现（执行会 skipped），暂不可添加' : undefined}
-                        className={`flex items-center gap-2 px-3 py-1.5 mx-2 rounded text-xs transition-colors ${item.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-white/5'}`}
+                        className={`flex items-center gap-2 px-3 py-2.5 md:py-1.5 mx-2 rounded text-xs transition-colors ${item.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-white/5'}`}
                         style={{ color: 'var(--text-secondary)' }}>
                         <Plus className="w-3 h-3 shrink-0" style={{ color: catInfo.color }} />
-                        <div><div className="font-medium" style={{ color: 'var(--text-primary)' }}>{item.label}</div><div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{item.desc}</div></div>
+                        <div className="min-w-0"><div className="font-medium break-words" style={{ color: 'var(--text-primary)' }}>{item.label}</div><div className="text-xs md:text-[10px] break-words" style={{ color: 'var(--text-muted)' }}>{item.desc}</div></div>
                       </div>
                     ))}
                   </div>
@@ -640,21 +727,29 @@ export default function WorkflowBuilder() {
 
       {/* Canvas */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-        {/* Toolbar */}
-        <div className="flex items-center justify-between px-4 py-2 border-b shrink-0 h-11" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
-          <div className="flex items-center gap-2 min-w-0">
-            <Link to="/workflows" className="p-1.5 rounded hover:bg-white/5 shrink-0" style={{ color: 'var(--text-muted)' }} title="返回列表"><ArrowLeft className="w-4 h-4" /></Link>
-            <button onClick={() => setPaletteOpen(!paletteOpen)} className="md:hidden p-1.5 rounded hover:bg-white/5 shrink-0 text-[11px]" style={{ color: 'var(--accent-cyan)' }} title="组件库">组件库</button>
+        {/* Toolbar：桌面（md+）三组单行 md:h-11 与改前一致；<768px 允许换行并追加移动操作条 */}
+        <div className="flex flex-wrap md:flex-nowrap items-center justify-between gap-2 px-3 sm:px-4 py-2 border-b shrink-0 md:h-11" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+          <div className="flex flex-wrap md:flex-nowrap items-center gap-1 sm:gap-2 min-w-0 flex-1 md:flex-initial">
+            <Link to="/workflows" className="flex min-h-10 min-w-10 md:min-h-0 md:min-w-0 items-center justify-center p-1.5 rounded hover:bg-white/5 shrink-0" style={{ color: 'var(--text-muted)' }} title="返回列表" aria-label="返回工作流列表"><ArrowLeft className="w-4 h-4" /></Link>
+            <button
+              onClick={() => setMobilePanel((p) => (p === 'palette' ? null : 'palette'))}
+              className="flex min-h-10 min-w-10 items-center justify-center rounded hover:bg-white/5 shrink-0 md:hidden"
+              style={{ color: 'var(--accent-cyan)' }}
+              aria-label="打开组件库面板"
+              title="组件库"
+            >
+              <LayoutGrid className="w-4 h-4" />
+            </button>
             <input
               type="text"
               value={workflowName}
               onChange={(e) => setWorkflowName(e.target.value)}
               placeholder="工作流名称"
-              className="bg-transparent text-sm font-semibold outline-none sci-corner px-2 py-0.5 min-w-[120px] max-w-[240px]"
+              className="bg-transparent text-sm font-semibold outline-none sci-corner px-2 py-0.5 min-h-10 md:min-h-0 min-w-0 flex-1 sm:flex-none sm:min-w-[120px] sm:max-w-[240px]"
               style={{ color: 'var(--text-primary)' }}
             />
-            <span className="chip chip-amber text-[10px] py-0.5 px-2 shrink-0">{workflowId ? '草稿' : '未保存'}</span>
-            <div className="relative shrink-0">
+            <span className="chip chip-amber text-[10px] py-0.5 px-2 shrink-0 hidden sm:inline-flex">{workflowId ? '草稿' : '未保存'}</span>
+            <div className="relative shrink-0 max-md:max-w-[45vw]">
               <select
                 value={workflowId ?? 'new'}
                 onChange={(e) => {
@@ -662,7 +757,7 @@ export default function WorkflowBuilder() {
                   if (val === 'new') navigate('/workflows');
                   else navigate(`/workflows/${val}`);
                 }}
-                className="bg-transparent text-xs outline-none sci-corner px-2 py-1 cursor-pointer"
+                className="bg-transparent text-xs outline-none sci-corner px-2 py-1 cursor-pointer max-md:max-w-full"
                 style={{ color: 'var(--text-secondary)' }}
                 disabled={listLoading}
               >
@@ -673,7 +768,7 @@ export default function WorkflowBuilder() {
               </select>
             </div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="hidden md:flex items-center gap-1">
             <button onClick={handleUndo} disabled={undoStack.length === 0} className="p-1.5 rounded hover:bg-white/5 disabled:opacity-40" style={{ color: 'var(--text-secondary)' }} title="撤销"><Undo2 className="w-4 h-4" /></button>
             <button onClick={handleRedo} disabled={redoStack.length === 0} className="p-1.5 rounded hover:bg-white/5 disabled:opacity-40" style={{ color: 'var(--text-secondary)' }} title="重做"><Redo2 className="w-4 h-4" /></button>
             <div className="w-px h-5 mx-1" style={{ backgroundColor: 'var(--border-subtle)' }} />
@@ -682,7 +777,7 @@ export default function WorkflowBuilder() {
             <button className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-secondary)' }} onClick={() => setZoom((z) => Math.min(2, z + 0.1))}><ZoomIn className="w-4 h-4" /></button>
             <button onClick={handleFullscreen} className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-secondary)' }}><Maximize2 className="w-4 h-4" /></button>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="hidden md:flex items-center gap-2">
             <button
               onClick={() => setShowTriggers((s) => !s)}
               className={`btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 ${showTriggers ? 'bg-white/10' : ''}`}
@@ -702,14 +797,54 @@ export default function WorkflowBuilder() {
               {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}{isSaving ? '保存中' : '保存'}
             </button>
           </div>
+          {/* 移动端操作条（md 以下）：撤销/重做 + 抽屉入口 + 主操作，全部 ≥40×40 且带 aria-label */}
+          <div className="flex w-full items-center gap-1 md:hidden">
+            <button onClick={handleUndo} disabled={undoStack.length === 0} className="flex min-h-10 min-w-10 items-center justify-center rounded hover:bg-white/5 disabled:opacity-40" style={{ color: 'var(--text-secondary)' }} aria-label="撤销" title="撤销"><Undo2 className="w-4 h-4" /></button>
+            <button onClick={handleRedo} disabled={redoStack.length === 0} className="flex min-h-10 min-w-10 items-center justify-center rounded hover:bg-white/5 disabled:opacity-40" style={{ color: 'var(--text-secondary)' }} aria-label="重做" title="重做"><Redo2 className="w-4 h-4" /></button>
+            <span className="flex-1" />
+            <button
+              onClick={() => setMobilePanel((p) => (p === 'config' ? null : 'config'))}
+              className={`flex min-h-10 min-w-10 items-center justify-center rounded hover:bg-white/5 ${mobilePanel === 'config' ? 'bg-white/10' : ''}`}
+              style={{ color: 'var(--text-primary)' }}
+              aria-label="打开属性面板"
+              title="节点属性"
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setMobilePanel((p) => (p === 'triggers' ? null : 'triggers'))}
+              className={`flex min-h-10 min-w-10 items-center justify-center rounded hover:bg-white/5 ${mobilePanel === 'triggers' ? 'bg-white/10' : ''}`}
+              style={{ color: 'var(--text-secondary)' }}
+              aria-label="打开触发器配置面板"
+              title="触发器"
+            >
+              <Timer className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setMobilePanel((p) => (p === 'runs' ? null : 'runs'))}
+              className={`flex min-h-10 min-w-10 items-center justify-center rounded hover:bg-white/5 ${mobilePanel === 'runs' ? 'bg-white/10' : ''}`}
+              style={{ color: 'var(--text-secondary)' }}
+              aria-label="打开运行记录面板"
+              title="运行记录"
+            >
+              <History className="w-4 h-4" />
+            </button>
+            <button onClick={runWorkflow} disabled={isRunning} className="btn-secondary flex min-h-10 min-w-10 items-center justify-center py-1.5 px-2 disabled:opacity-50" aria-label="调试运行" title="调试运行">
+              {isRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+            </button>
+            <button onClick={saveWorkflow} disabled={isSaving} className="btn-primary flex min-h-10 min-w-10 items-center justify-center py-1.5 px-2 disabled:opacity-50" aria-label="保存工作流" title="保存">
+              {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            </button>
+          </div>
         </div>
 
-        {/* Canvas Area */}
-        <div ref={canvasRef} className="flex-1 relative overflow-hidden cursor-grab active:cursor-grabbing"
+        {/* Canvas Area：touch-pan-canvas 接管手势（单指拖节点 / 双指缩放） */}
+        <div ref={canvasRef} className="flex-1 min-h-0 relative overflow-hidden cursor-grab active:cursor-grabbing touch-pan-canvas"
           style={{ backgroundColor: 'var(--bg-primary)' }}
           onDragOver={(e) => e.preventDefault()} onDrop={handleCanvasDrop}
           onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseDown={handleCanvasMouseDown}
-          onTouchMove={handleTouchMove} onTouchEnd={handleMouseUp}>
+          onTouchStart={handleCanvasTouchStart}
+          onTouchMove={handleCanvasTouchMove} onTouchEnd={handleCanvasTouchEnd} onTouchCancel={handleCanvasTouchEnd}>
           {/* Grid */}
           <div className="absolute inset-0 opacity-30 bg-grid" style={{ backgroundSize: `${20 * zoom}px ${20 * zoom}px`, transform: `translate(${pan.x % (20 * zoom)}px, ${pan.y % (20 * zoom)}px)` }} />
 
@@ -750,7 +885,15 @@ export default function WorkflowBuilder() {
               return (
                 <div key={node.id} className="absolute select-none" style={{ left: node.x, top: node.y, transform: 'translate(-50%, -50%)', cursor: draggingNode === node.id ? 'grabbing' : 'grab', zIndex: isSelected ? 10 : 1 }}
                   onMouseDown={(e) => handleMouseDown(e, node.id)}
-                  onTouchStart={(e) => handleTouchStartNode(e, node.id)}>
+                  onTouchStart={(e) => {
+                    // 双指落在节点上时也进入画布缩放手势，而不是拖节点
+                    if (e.touches.length === 2) {
+                      e.stopPropagation();
+                      beginPinch(e);
+                      return;
+                    }
+                    handleTouchStartNode(e, node.id);
+                  }}>
                   <div className="min-w-[150px] rounded-lg overflow-hidden transition-all duration-200 sci-corner" style={{ backgroundColor: 'var(--bg-panel)', border: `1.5px solid ${isSelected || isConnecting ? catInfo.color : `${catInfo.color}40`}`, boxShadow: isSelected ? `0 0 20px ${catInfo.bg}, 0 4px 12px rgba(0,0,0,0.4)` : `0 2px 8px rgba(0,0,0,0.3)` }}>
                     <div className="h-[3px]" style={{ backgroundColor: catInfo.color }} />
                     <div className="px-2.5 py-1.5">
@@ -762,11 +905,11 @@ export default function WorkflowBuilder() {
                         {node.status === 'error' && <AlertCircle className="w-3 h-3 ml-auto" style={{ color: 'var(--accent-rose)' }} />}
                         {node.status === 'skipped' && <Minus className="w-3 h-3 ml-auto" style={{ color: 'var(--text-muted)' }} />}
                       </div>
-                      <p className="text-[9px] mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>{node.description}</p>
+                      <p className="text-[10px] md:text-[9px] mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>{node.description}</p>
                     </div>
                     <div className="relative h-4">
-                      <button onClick={(e) => { e.stopPropagation(); handlePortClick(node.id, false); }} className="absolute left-1 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 transition-all hover:scale-125" style={{ borderColor: catInfo.color, backgroundColor: connectingFrom && connectingFrom !== node.id ? `${catInfo.color}40` : 'var(--bg-panel)' }} title="输入" />
-                      <button onClick={(e) => { e.stopPropagation(); handlePortClick(node.id, true); }} className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 transition-all hover:scale-125" style={{ borderColor: catInfo.color, backgroundColor: isConnecting ? catInfo.color : 'var(--bg-panel)', boxShadow: isConnecting ? `0 0 6px ${catInfo.color}` : 'none' }} title="输出" />
+                      <button onClick={(e) => { e.stopPropagation(); handlePortClick(node.id, false); }} className="absolute left-1 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 transition-all hover:scale-125 after:content-[''] after:absolute after:left-1/2 after:top-1/2 after:h-6 after:w-10 after:-translate-x-1/2 after:-translate-y-1/2" style={{ borderColor: catInfo.color, backgroundColor: connectingFrom && connectingFrom !== node.id ? `${catInfo.color}40` : 'var(--bg-panel)' }} title="输入" aria-label={`「${node.label}」输入端口`} />
+                      <button onClick={(e) => { e.stopPropagation(); handlePortClick(node.id, true); }} className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 transition-all hover:scale-125 after:content-[''] after:absolute after:left-1/2 after:top-1/2 after:h-6 after:w-10 after:-translate-x-1/2 after:-translate-y-1/2" style={{ borderColor: catInfo.color, backgroundColor: isConnecting ? catInfo.color : 'var(--bg-panel)', boxShadow: isConnecting ? `0 0 6px ${catInfo.color}` : 'none' }} title="输出" aria-label={`「${node.label}」输出端口`} />
                     </div>
                   </div>
                 </div>
@@ -779,23 +922,34 @@ export default function WorkflowBuilder() {
               点击目标节点的输入端口完成连线，按 ESC 取消
             </div>
           )}
+
+          {/* 移动端操作提示（契约 §9） */}
+          {!connectingFrom && (
+            <div className="pointer-events-none absolute top-2 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-xs md:hidden" style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
+              单指拖动节点，双指缩放画布
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Right Config Panel */}
-      {selectedNodeData && !showRuns && (
-        <div className="w-[300px] shrink-0 border-l overflow-y-auto" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+      {/* Right Config Panel：桌面（md+）常驻右栏；<768px 收为右侧抽屉（同一份 DOM，避免双份表单） */}
+      {((selectedNodeData && !showRuns) || mobilePanel === 'config') && (
+        <div
+          className={`${mobilePanel === 'config' ? 'flex' : 'hidden'} md:block fixed md:static top-12 bottom-0 right-0 z-50 md:z-auto w-[86vw] max-w-[300px] md:w-[300px] md:max-w-none max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] shrink-0 border-l overflow-y-auto overscroll-contain`}
+          style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
+        >
+          {selectedNodeData ? (
           <div className="p-4">
             <div className="flex items-center gap-2 mb-4">
               <span style={{ color: (NODE_CATEGORIES[selectedNodeData.category] ?? NODE_CATEGORIES.processing).color, fontSize: '14px' }}>◆</span>
-              <h3 className="text-sm font-bold flex-1" style={{ color: 'var(--text-primary)' }}>{selectedNodeData.label}</h3>
+              <h3 className="text-sm font-bold flex-1 min-w-0 break-words" style={{ color: 'var(--text-primary)' }}>{selectedNodeData.label}</h3>
               <div className="flex gap-1">
-                <button onClick={() => duplicateNode(selectedNodeData)} className="p-1.5 rounded hover:bg-white/5" title="复制" style={{ color: 'var(--text-muted)' }}><Copy className="w-3.5 h-3.5" /></button>
-                <button onClick={() => { deleteNode(selectedNodeData.id); }} className="p-1.5 rounded hover:bg-white/5" title="删除" style={{ color: 'var(--accent-rose)' }}><Trash2 className="w-3.5 h-3.5" /></button>
-                <button onClick={() => setSelectedNode(null)} className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+                <button onClick={() => duplicateNode(selectedNodeData)} className="flex min-h-10 min-w-10 md:min-h-0 md:min-w-0 items-center justify-center p-1.5 rounded hover:bg-white/5" title="复制" aria-label="复制节点" style={{ color: 'var(--text-muted)' }}><Copy className="w-3.5 h-3.5" /></button>
+                <button onClick={() => { deleteNode(selectedNodeData.id); }} className="flex min-h-10 min-w-10 md:min-h-0 md:min-w-0 items-center justify-center p-1.5 rounded hover:bg-white/5" title="删除" aria-label="删除节点" style={{ color: 'var(--accent-rose)' }}><Trash2 className="w-3.5 h-3.5" /></button>
+                <button onClick={() => { setSelectedNode(null); setMobilePanel((p) => (p === 'config' ? null : p)); }} className="flex min-h-10 min-w-10 md:min-h-0 md:min-w-0 items-center justify-center p-1.5 rounded hover:bg-white/5" title="关闭" aria-label="关闭属性面板" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
               </div>
             </div>
-            <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>{selectedNodeData.description}</p>
+            <p className="text-xs mb-4 break-words" style={{ color: 'var(--text-secondary)' }}>{selectedNodeData.description}</p>
             <div className="space-y-3">
               <div>
                 <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>节点名称</label>
@@ -839,11 +993,11 @@ export default function WorkflowBuilder() {
                       </optgroup>
                     </select>
                     {tianshuModelsQuery.isError || (tianshuModelsQuery.data && !tianshuModelsQuery.data.ok) ? (
-                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                      <p className="text-xs md:text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
                         天枢未配置或拉取失败，仅显示常用模型（兜底）。
                       </p>
                     ) : tianshuModels.length > 0 ? (
-                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                      <p className="text-xs md:text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
                         已接入天枢 {tianshuModels.length} 个模型。
                       </p>
                     ) : null}
@@ -875,7 +1029,7 @@ export default function WorkflowBuilder() {
                         <option key={s.id} value={s.id}>{s.name}</option>
                       ))}
                     </select>
-                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                    <p className="text-xs md:text-[10px] mt-1 break-words" style={{ color: 'var(--text-muted)' }}>
                       未注册可在 设置 → MCP 服务器 中添加（支持 Dify 等）。也可留空并在节点配置中填写 serverUrl。
                     </p>
                   </div>
@@ -890,12 +1044,12 @@ export default function WorkflowBuilder() {
                     />
                   </div>
                   <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>工具名称（toolName）</label>
+                    <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
+                      <label className="text-xs font-medium break-words" style={{ color: 'var(--text-primary)' }}>工具名称（toolName）</label>
                       {Number(selectedNodeData.config.serverId) > 0 && (
                         <button
                           onClick={() => void fetchRemoteTools(Number(selectedNodeData.config.serverId))}
-                          className="text-[10px]"
+                          className="flex min-h-10 md:min-h-0 items-center px-1 text-xs md:text-[10px]"
                           style={{ color: 'var(--accent-cyan)' }}
                         >
                           拉取该服务器工具列表 →
@@ -912,12 +1066,12 @@ export default function WorkflowBuilder() {
                     {remoteTools && remoteTools.serverId === Number(selectedNodeData.config.serverId) && (
                       <div className="mt-1.5 space-y-1">
                         {remoteTools.tools.length === 0 ? (
-                          <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>该服务器未暴露工具</div>
+                          <div className="text-xs md:text-[10px]" style={{ color: 'var(--text-muted)' }}>该服务器未暴露工具</div>
                         ) : remoteTools.tools.map((t) => (
                           <button
                             key={t.name}
                             onClick={() => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, toolName: t.name } }))}
-                            className="block w-full text-left text-[10px] font-mono rounded px-2 py-1"
+                            className="block w-full text-left text-xs md:text-[10px] font-mono rounded px-2 py-2.5 md:py-1 break-all"
                             style={{ color: 'var(--accent-cyan)', background: 'rgba(0,229,255,0.06)' }}
                             title={t.description}
                           >
@@ -1035,16 +1189,24 @@ export default function WorkflowBuilder() {
               </div>
             </div>
           </div>
+          ) : (
+            <div className="p-4">
+              <p className="text-xs break-words" style={{ color: 'var(--text-muted)' }}>点击画布中的节点后，可在此编辑节点属性</p>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Runs Panel */}
-      {showRuns && (
-        <div className="w-[320px] shrink-0 border-l overflow-y-auto" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+      {/* Runs Panel：桌面（md+）常驻右栏；<768px 收为右侧抽屉 */}
+      {(showRuns || mobilePanel === 'runs') && (
+        <div
+          className={`${mobilePanel === 'runs' ? 'flex' : 'hidden'} md:block fixed md:static top-12 bottom-0 right-0 z-50 md:z-auto w-[86vw] max-w-[320px] md:w-[320px] md:max-w-none max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] shrink-0 border-l overflow-y-auto overscroll-contain`}
+          style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
+        >
           <div className="p-4">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>运行记录</h3>
-              <button onClick={() => setShowRuns(false)} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+              <button onClick={() => { setShowRuns(false); setMobilePanel((p) => (p === 'runs' ? null : p)); }} className="flex min-h-10 min-w-10 md:min-h-0 md:min-w-0 items-center justify-center p-1 rounded hover:bg-white/5" aria-label="关闭运行记录面板" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
             </div>
             {runs.length === 0 ? (
               <div className="text-center py-8 rounded-lg border border-dashed" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -1103,13 +1265,16 @@ export default function WorkflowBuilder() {
         </div>
       )}
 
-      {/* Triggers Panel */}
-      {showTriggers && (
-        <div className="w-[320px] shrink-0 border-l overflow-y-auto" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+      {/* Triggers Panel：桌面（md+）常驻右栏；<768px 收为右侧抽屉 */}
+      {(showTriggers || mobilePanel === 'triggers') && (
+        <div
+          className={`${mobilePanel === 'triggers' ? 'flex' : 'hidden'} md:block fixed md:static top-12 bottom-0 right-0 z-50 md:z-auto w-[86vw] max-w-[320px] md:w-[320px] md:max-w-none max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] shrink-0 border-l overflow-y-auto overscroll-contain`}
+          style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
+        >
           <div className="p-4">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>触发器配置</h3>
-              <button onClick={() => setShowTriggers(false)} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+              <button onClick={() => { setShowTriggers(false); setMobilePanel((p) => (p === 'triggers' ? null : p)); }} className="flex min-h-10 min-w-10 md:min-h-0 md:min-w-0 items-center justify-center p-1 rounded hover:bg-white/5" aria-label="关闭触发器配置面板" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
             </div>
 
             <div className="space-y-4">
@@ -1125,7 +1290,7 @@ export default function WorkflowBuilder() {
                   <option value="paused">已暂停</option>
                   <option value="archived">已归档</option>
                 </select>
-                <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>只有「已激活」状态才会响应 cron 和 webhook 触发</p>
+                <p className="text-xs md:text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>只有「已激活」状态才会响应 cron 和 webhook 触发</p>
               </div>
 
               <div className="pt-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>
@@ -1137,31 +1302,35 @@ export default function WorkflowBuilder() {
                   placeholder="*/5 * * * *"
                   className="input-base text-xs w-full"
                 />
-                <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>分钟 小时 日期 月份 星期，留空表示不启用</p>
+                <p className="text-xs md:text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>分钟 小时 日期 月份 星期，留空表示不启用</p>
               </div>
 
               <div className="pt-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-2">
                   <label className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>Webhook 触发</label>
                   <button
                     onClick={() => setWebhookEnabled((v) => !v)}
-                    className={`w-9 h-5 rounded-full relative transition-colors ${webhookEnabled ? 'bg-[var(--accent-cyan)]' : 'bg-[var(--bg-tertiary)]'}`}
+                    className={`w-9 h-5 rounded-full relative transition-colors shrink-0 ${webhookEnabled ? 'bg-[var(--accent-cyan)]' : 'bg-[var(--bg-tertiary)]'}`}
+                    aria-label={webhookEnabled ? '关闭 Webhook 触发' : '开启 Webhook 触发'}
+                    aria-pressed={webhookEnabled}
                   >
+                    {/* 移动端把 36×20 的开关热区补到 ≥40×40 */}
+                    <span className="absolute -inset-2.5 md:hidden" aria-hidden="true" />
                     <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${webhookEnabled ? 'translate-x-4' : ''}`} />
                   </button>
                 </div>
                 {webhookEnabled && workflowId && (
                   <div className="space-y-1">
-                    <div className="p-2 rounded text-[10px] break-all" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+                    <div className="p-2 rounded text-xs md:text-[10px] break-all" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
                       {webhookUrl || '保存后生成 URL'}
                     </div>
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    <p className="text-xs md:text-[10px] break-words" style={{ color: 'var(--text-muted)' }}>
                       建议在外部系统用 <code className="px-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)' }}>X-Webhook-Token</code> header 传 token，避免 token 进入代理日志 / Referer / 浏览器历史记录。改工作流会自动换 token。
                     </p>
                   </div>
                 )}
                 {webhookEnabled && !workflowId && (
-                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>保存工作流后生成 webhook URL</p>
+                  <p className="text-xs md:text-[10px]" style={{ color: 'var(--text-muted)' }}>保存工作流后生成 webhook URL</p>
                 )}
               </div>
             </div>

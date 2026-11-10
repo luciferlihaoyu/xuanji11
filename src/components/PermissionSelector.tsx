@@ -41,7 +41,7 @@ export default function PermissionSelector({ permissions, onChange, showPresets 
               <button
                 key={preset.key}
                 onClick={() => applyPreset(preset.key)}
-                className="chip text-xs py-1 px-3 transition-all"
+                className="chip text-xs py-1 px-3 transition-all max-sm:min-h-10"
                 style={{
                   opacity: Object.entries(preset.permissions).every(
                     ([k, v]) => permissions[k as keyof AgentPermission] === v
@@ -82,7 +82,7 @@ export default function PermissionSelector({ permissions, onChange, showPresets 
               </div>
               <button
                 onClick={() => toggle(perm.key)}
-                className="relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0"
+                className="relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0 max-sm:before:absolute max-sm:before:-inset-x-2 max-sm:before:-inset-y-2.5 max-sm:before:content-['']"
                 style={{ backgroundColor: isOn ? 'var(--accent-cyan)' : 'var(--bg-tertiary)' }}
               >
                 <div

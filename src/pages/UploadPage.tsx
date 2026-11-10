@@ -224,10 +224,10 @@ export default function UploadPage() {
   const failedTasks = tasks.filter((t) => t.status === 'failed');
 
   return (
-    <div className="p-6 max-w-5xl mx-auto" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="p-3 sm:p-5 lg:p-6 max-w-5xl mx-auto" style={{ backgroundColor: 'var(--bg-primary)' }}>
       {/* Upload Zone */}
       <div
-        className="mb-6 rounded-xl border-2 border-dashed transition-all duration-200 flex flex-col items-center justify-center min-h-[240px]"
+        className="mb-4 sm:mb-6 p-4 rounded-xl border-2 border-dashed transition-all duration-200 flex flex-col items-center justify-center min-h-[200px] sm:min-h-[240px]"
         style={{
           backgroundColor: dragActive ? 'rgba(100,180,255,0.08)' : 'var(--bg-secondary)',
           borderColor: dragActive ? 'var(--accent)' : 'var(--border-subtle)',
@@ -238,21 +238,23 @@ export default function UploadPage() {
         onDrop={handleDrop}
       >
         <Upload className="w-12 h-12 mb-4" style={{ color: dragActive ? 'var(--accent)' : 'var(--text-muted)' }} />
-        <h3 className="text-xl font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>
+        <h3 className="text-xl font-semibold mb-2 text-center break-words" style={{ color: 'var(--text-primary)' }}>
           拖拽文件到此处上传
         </h3>
-        <p className="text-sm mb-1" style={{ color: 'var(--text-secondary)' }}>或点击选择文件</p>
-        <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
+        <p className="text-sm mb-1 text-center" style={{ color: 'var(--text-secondary)' }}>或点击选择文件</p>
+        <p className="text-xs mb-4 text-center break-words" style={{ color: 'var(--text-muted)' }}>
           支持 PDF、Word、图片、视频、代码等所有格式，最大 50MB/文件
         </p>
-        <label className="btn-primary text-sm py-2 px-6 cursor-pointer flex items-center gap-2">
-          <Upload className="w-4 h-4" />
+        {/* 触屏等价入口：整宽可点（≥44px 高），input 用 sr-only 保留可点与键盘可达 */}
+        <label className="btn-primary text-sm py-2 px-6 cursor-pointer flex items-center justify-center gap-2 w-full sm:w-auto min-h-[44px] sm:min-h-0">
+          <Upload className="w-4 h-4 shrink-0" />
           {uploading ? '上传中...' : '选择文件'}
           <input
             type="file"
             multiple
-            className="hidden"
+            className="sr-only"
             disabled={uploading}
+            aria-label="选择文件上传"
             onChange={(e) => {
               if (e.target.files?.length) {
                 handleFiles(Array.from(e.target.files));
@@ -265,7 +267,7 @@ export default function UploadPage() {
 
       {/* Active Uploads */}
       {activeTasks.length > 0 && (
-        <div className="mb-6">
+        <div className="mb-4 sm:mb-6">
           <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
             正在上传 ({activeTasks.length})
           </h3>
@@ -273,13 +275,13 @@ export default function UploadPage() {
             {activeTasks.map((task, i) => {
               const { icon: Icon, color } = getFileIcon(task.fileName);
               return (
-                <div key={`active-${i}`} className="flex items-center gap-3 p-3 rounded-md border" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+                <div key={`active-${i}`} className="flex items-center gap-3 p-3 rounded-md border min-h-[44px]" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
                   <div className="w-8 h-8 rounded flex items-center justify-center shrink-0" style={{ backgroundColor: `${color}20` }}>
                     <Icon className="w-4 h-4" style={{ color }} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{task.fileName}</span>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span className="text-sm truncate min-w-0" style={{ color: 'var(--text-primary)' }}>{task.fileName}</span>
                       <span className="text-xs shrink-0 ml-2" style={{ color: 'var(--text-muted)' }}>{task.fileSize}</span>
                     </div>
                     <div className="flex items-center gap-3">
@@ -299,10 +301,10 @@ export default function UploadPage() {
 
       {/* Completed */}
       {completedTasks.length > 0 && (
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-3">
+        <div className="mb-4 sm:mb-6">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>已上传 ({completedTasks.length})</h3>
-            <button onClick={() => setTasks((prev) => prev.filter((t) => t.status !== 'completed'))} className="btn-ghost text-xs py-1 px-2">
+            <button onClick={() => setTasks((prev) => prev.filter((t) => t.status !== 'completed'))} className="btn-ghost text-xs py-1 px-2 min-h-[44px] sm:min-h-0">
               清空已完成
             </button>
           </div>
@@ -310,19 +312,20 @@ export default function UploadPage() {
             {completedTasks.map((task, i) => {
               const { icon: Icon, color } = getFileIcon(task.fileName);
               return (
-                <div key={`done-${task.id || i}`} className="flex items-center gap-3 px-3 py-2.5 rounded-md group hover:bg-white/5 transition-colors">
+                <div key={`done-${task.id || i}`} className="flex flex-wrap items-center gap-2 sm:gap-3 px-2 sm:px-3 py-2.5 min-h-[44px] rounded-md group hover:bg-white/5 transition-colors">
                   <div className="w-8 h-8 rounded flex items-center justify-center shrink-0" style={{ backgroundColor: `${color}20` }}>
                     <Icon className="w-4 h-4" style={{ color }} />
                   </div>
-                  <span className="text-sm flex-1 truncate" style={{ color: 'var(--text-secondary)' }}>{task.fileName}</span>
+                  <span className="text-sm flex-1 min-w-0 truncate" style={{ color: 'var(--text-secondary)' }}>{task.fileName}</span>
                   <span className="text-xs shrink-0" style={{ color: 'var(--text-muted)' }}>{task.fileSize}</span>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {/* 触屏无 hover：移动端常显，桌面保持 hover 现形 */}
+                  <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                     {task.url && (
-                      <a href={task.url} target="_blank" rel="noopener noreferrer" className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--accent)' }} title="查看">
+                      <a href={task.url} target="_blank" rel="noopener noreferrer" className="p-1.5 rounded hover:bg-white/5 inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0" style={{ color: 'var(--accent)' }} title="查看" aria-label="查看文件">
                         <Eye className="w-3.5 h-3.5" />
                       </a>
                     )}
-                    <button onClick={() => removeTask(task)} className="p-1.5 rounded hover:bg-red-500/10" style={{ color: '#ef4444' }} title="删除">
+                    <button onClick={() => removeTask(task)} className="p-1.5 rounded hover:bg-red-500/10 inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0" style={{ color: '#ef4444' }} title="删除" aria-label="删除文件">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -348,14 +351,14 @@ export default function UploadPage() {
 
       {/* Failed */}
       {failedTasks.length > 0 && (
-        <div className="mb-6">
+        <div className="mb-4 sm:mb-6">
           <h3 className="text-sm font-semibold mb-3" style={{ color: '#ef4444' }}>上传失败 ({failedTasks.length})</h3>
           <div className="space-y-1">
             {failedTasks.map((task, i) => (
-              <div key={`fail-${i}`} className="flex items-center gap-3 px-3 py-2 rounded-md" style={{ backgroundColor: 'rgba(239,68,68,0.05)' }}>
-                <X className="w-4 h-4" style={{ color: '#ef4444' }} />
-                <span className="text-sm flex-1" style={{ color: 'var(--text-secondary)' }}>{task.fileName}</span>
-                <button onClick={() => removeTask(task)} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}>
+              <div key={`fail-${i}`} className="flex items-center gap-2 sm:gap-3 px-2 sm:px-3 py-2 min-h-[44px] rounded-md" style={{ backgroundColor: 'rgba(239,68,68,0.05)' }}>
+                <X className="w-4 h-4 shrink-0" style={{ color: '#ef4444' }} />
+                <span className="text-sm flex-1 min-w-0 truncate" style={{ color: 'var(--text-secondary)' }}>{task.fileName}</span>
+                <button onClick={() => removeTask(task)} className="p-1 rounded hover:bg-white/5 inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0" style={{ color: 'var(--text-muted)' }} aria-label="移除失败记录">
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>

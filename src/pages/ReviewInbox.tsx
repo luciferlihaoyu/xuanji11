@@ -52,37 +52,37 @@ export default function ReviewInbox() {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* 头部 */}
-      <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0"
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3 px-3 sm:px-5 py-3 border-b shrink-0"
         style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
-        <Inbox className="w-5 h-5" style={{ color: 'var(--accent-cyan)' }} />
+        <Inbox className="w-5 h-5 shrink-0" style={{ color: 'var(--accent-cyan)' }} />
         <h1 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
           审核收件箱
         </h1>
         {pendingCount > 0 && (
-          <span className="text-xs px-2 py-0.5 rounded-full"
+          <span className="text-xs px-2 py-0.5 rounded-full shrink-0"
             style={{ backgroundColor: 'rgba(239,68,68,0.15)', color: '#ef4444' }}>
             {pendingCount} 待处理
           </span>
         )}
-        <div className="flex items-center gap-2 ml-auto">
+        <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto sm:shrink-0">
           <select value={kindFilter} onChange={(e) => setKindFilter(e.target.value)}
-            className="h-8 px-3 rounded border text-xs outline-none"
+            className="h-10 sm:h-8 flex-1 min-w-0 px-2 sm:px-3 rounded border text-xs outline-none"
             style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
             <option value="">全部类型</option>
             {Object.entries(KIND_LABEL).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
-            className="h-8 px-3 rounded border text-xs outline-none"
+            className="h-10 sm:h-8 flex-1 min-w-0 px-2 sm:px-3 rounded border text-xs outline-none"
             style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
             {Object.entries(STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
           <button onClick={() => setShowFeedback(!showFeedback)}
-            className="text-xs px-2.5 py-1.5 rounded transition-colors"
+            className="text-xs px-2.5 py-1.5 rounded transition-colors shrink-0 min-h-[40px] sm:min-h-0"
             style={{ backgroundColor: showFeedback ? 'rgba(167,139,250,0.15)' : 'var(--bg-tertiary)', color: showFeedback ? '#a78bfa' : 'var(--text-muted)' }}>
             反馈报告
           </button>
           <button onClick={() => listQuery.refetch()}
-            className="p-2 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }} title="刷新">
+            className="inline-flex items-center justify-center rounded hover:bg-white/5 shrink-0 min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0" style={{ color: 'var(--text-muted)' }} title="刷新" aria-label="刷新列表">
             <RefreshCw className="w-4 h-4" />
           </button>
         </div>
@@ -90,7 +90,7 @@ export default function ReviewInbox() {
 
       {/* 反馈评估报告 */}
       {showFeedback && feedbackQuery.data && (
-        <div className="mx-2 sm:mx-4 mt-3 rounded-lg border p-4 shrink-0"
+        <div className="mx-2 sm:mx-4 mt-3 rounded-lg border p-3 sm:p-4 shrink-0"
           style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'rgba(167,139,250,0.3)' }}>
           <div className="text-xs font-semibold mb-3" style={{ color: '#a78bfa' }}>反馈评估报告</div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
@@ -126,7 +126,7 @@ export default function ReviewInbox() {
             </div>
           </div>
           {feedbackQuery.data.searchStats && (
-            <div className="mt-3 pt-3 border-t text-xs" style={{ borderColor: 'var(--border-subtle)' }}>
+            <div className="mt-3 pt-3 border-t text-xs break-words" style={{ borderColor: 'var(--border-subtle)' }}>
               <span style={{ color: 'var(--text-muted)' }}>近 30 天搜索行为：</span>
               <span style={{ color: 'var(--text-primary)' }}> 点击 {feedbackQuery.data.searchStats.clicks} · 问答 {feedbackQuery.data.searchStats.asks}</span>
               {feedbackQuery.data.searchStats.topQueries.length > 0 && (
@@ -136,14 +136,14 @@ export default function ReviewInbox() {
               )}
             </div>
           )}
-          <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+          <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
             删除率 &gt;20% 说明自动建边阈值偏低；分拣准确率 &lt;70% 说明置信度阈值需调高。
           </div>
         </div>
       )}
 
       {/* 列表 */}
-      <div className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-2">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-2 sm:p-4 space-y-2">
         {listQuery.isLoading && (
           <div className="text-center text-xs py-10" style={{ color: 'var(--text-muted)' }}>加载中…</div>
         )}
@@ -160,7 +160,7 @@ export default function ReviewInbox() {
           return (
             <div key={item.id} className="rounded-lg border p-3"
               style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
-              <div className="flex items-start gap-3">
+              <div className="flex flex-wrap items-start gap-2 sm:gap-3">
                 <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0 mt-0.5"
                   style={{ backgroundColor: `${kind.color}22`, color: kind.color }}>
                   {kind.label}
@@ -169,7 +169,7 @@ export default function ReviewInbox() {
                   <div className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>
                     {item.title}
                   </div>
-                  <div className="flex items-center gap-3 mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
                     {item.confidence !== null && (
                       <span>置信度 {(item.confidence * 100).toFixed(0)}%</span>
                     )}
@@ -194,26 +194,26 @@ export default function ReviewInbox() {
                   )}
                 </div>
                 {item.status === 'pending' && (
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex w-full items-center justify-end gap-2 sm:w-auto sm:shrink-0">
                     <button
                       onClick={() => resolveMutation.mutate({ id: item.id, action: 'approved' })}
                       disabled={resolveMutation.isPending}
-                      className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs transition-colors hover:bg-green-500/15"
+                      className="flex items-center justify-center gap-1 px-3 py-1.5 rounded text-xs transition-colors hover:bg-green-500/15 min-h-[44px] sm:min-h-0"
                       style={{ color: '#22c55e' }} title="通过（执行建议动作）">
                       <CheckCircle2 className="w-3.5 h-3.5" />通过
                     </button>
                     <button
                       onClick={() => resolveMutation.mutate({ id: item.id, action: 'rejected' })}
                       disabled={resolveMutation.isPending}
-                      className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs transition-colors hover:bg-red-500/15"
+                      className="flex items-center justify-center gap-1 px-3 py-1.5 rounded text-xs transition-colors hover:bg-red-500/15 min-h-[44px] sm:min-h-0"
                       style={{ color: '#ef4444' }} title="驳回">
                       <XCircle className="w-3.5 h-3.5" />驳回
                     </button>
                     <button
                       onClick={() => resolveMutation.mutate({ id: item.id, action: 'ignored' })}
                       disabled={resolveMutation.isPending}
-                      className="p-1.5 rounded transition-colors hover:bg-white/5"
-                      style={{ color: 'var(--text-muted)' }} title="忽略">
+                      className="inline-flex items-center justify-center rounded transition-colors hover:bg-white/5 p-1.5 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0"
+                      style={{ color: 'var(--text-muted)' }} title="忽略" aria-label="忽略">
                       <EyeOff className="w-3.5 h-3.5" />
                     </button>
                   </div>

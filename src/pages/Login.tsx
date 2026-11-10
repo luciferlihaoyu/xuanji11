@@ -37,14 +37,14 @@ export default function Login() {
 
   return (
     <div
-      className="min-h-screen flex items-center justify-center"
+      className="min-h-[100dvh] flex items-start sm:items-center justify-center pt-16 sm:pt-0"
       style={{
-        background: `radial-gradient(ellipse at center, var(--bg-deep) 0%, var(--bg-base) 100%)`,
+        background: `radial-gradient(ellipse at center, var(--bg-secondary) 0%, var(--bg-primary) 100%)`,
       }}
     >
       <Card
-        className="w-full max-w-sm border border-[var(--border-c)]"
-        style={{ background: "var(--card-bg)", backdropFilter: "blur(10px)" }}
+        className="w-full min-w-0 max-w-sm mx-4 sm:mx-0 border border-[var(--border-subtle)]"
+        style={{ background: "var(--bg-panel)", backdropFilter: "blur(10px)" }}
       >
         <CardHeader className="text-center space-y-3">
           {/* Logo */}
@@ -54,7 +54,7 @@ export default function Login() {
               height="28"
               viewBox="0 0 24 24"
               fill="none"
-              stroke="var(--accent)"
+              stroke="var(--accent-cyan)"
               strokeWidth="2"
             >
               <circle cx="12" cy="12" r="3" />
@@ -63,7 +63,7 @@ export default function Login() {
             </svg>
             <span
               className="text-lg font-bold tracking-widest"
-              style={{ color: "var(--accent)" }}
+              style={{ color: "var(--accent-cyan)" }}
             >
               璇玑智脑
             </span>
@@ -84,8 +84,8 @@ export default function Login() {
                 placeholder="请输入管理员账号"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="border-[var(--border-c)]"
-                style={{ background: "var(--input-bg)", color: "var(--text-primary)" }}
+                className="border-[var(--border-subtle)] h-11 sm:h-9"
+                style={{ background: "var(--bg-tertiary)", color: "var(--text-primary)" }}
                 autoComplete="username"
               />
             </div>
@@ -99,8 +99,8 @@ export default function Login() {
                 placeholder="请输入密码"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="border-[var(--border-c)]"
-                style={{ background: "var(--input-bg)", color: "var(--text-primary)" }}
+                className="border-[var(--border-subtle)] h-11 sm:h-9"
+                style={{ background: "var(--bg-tertiary)", color: "var(--text-primary)" }}
                 autoComplete="current-password"
               />
             </div>
@@ -120,11 +120,11 @@ export default function Login() {
 
             <Button
               type="submit"
-              className="w-full font-medium"
+              className="w-full h-12 sm:h-10 font-medium"
               size="lg"
               disabled={loading}
               style={{
-                background: "var(--accent)",
+                background: "var(--accent-cyan)",
                 color: "#fff",
               }}
             >

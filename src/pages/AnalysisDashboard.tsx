@@ -15,8 +15,8 @@ export default function AnalysisDashboard() {
   if (isLoading) {
     return (
       <div
-        className="p-6 flex items-center justify-center"
-        style={{ backgroundColor: 'var(--bg-primary)', minHeight: 'calc(100vh - 48px)' }}
+        className="p-3 sm:p-5 lg:p-6 flex items-center justify-center min-h-app"
+        style={{ backgroundColor: 'var(--bg-primary)' }}
       >
         <div className="flex items-center gap-2" style={{ color: 'var(--text-muted)' }}>
           <Loader2 className="w-5 h-5 animate-spin" />
@@ -29,8 +29,8 @@ export default function AnalysisDashboard() {
   if (error) {
     return (
       <div
-        className="p-6 flex items-center justify-center"
-        style={{ backgroundColor: 'var(--bg-primary)', minHeight: 'calc(100vh - 48px)' }}
+        className="p-3 sm:p-5 lg:p-6 flex items-center justify-center min-h-app"
+        style={{ backgroundColor: 'var(--bg-primary)' }}
       >
         <div className="flex items-center gap-2" style={{ color: 'var(--accent-rose)' }}>
           <AlertCircle className="w-5 h-5" />
@@ -45,10 +45,10 @@ export default function AnalysisDashboard() {
 
   return (
     <div
-      className="p-6 max-w-7xl mx-auto"
-      style={{ backgroundColor: 'var(--bg-primary)', minHeight: 'calc(100vh - 48px)' }}
+      className="p-3 sm:p-5 lg:p-6 max-w-7xl mx-auto min-h-app"
+      style={{ backgroundColor: 'var(--bg-primary)' }}
     >
-      <div className="mb-6">
+      <div className="mb-4 sm:mb-6">
         <div className="flex items-center gap-2 mb-1">
           <BarChart3 className="w-5 h-5" style={{ color: 'var(--accent-cyan)' }} />
           <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>
@@ -62,11 +62,11 @@ export default function AnalysisDashboard() {
 
       <AnalysisCards totals={analytics?.totals} />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-        <div className="card-base">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-6 mt-4 sm:mt-6">
+        <div className="card-base min-w-0">
           <div className="flex items-center gap-2 mb-4">
-            <Tag className="w-4 h-4" style={{ color: 'var(--accent-cyan)' }} />
-            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+            <Tag className="w-4 h-4 shrink-0" style={{ color: 'var(--accent-cyan)' }} />
+            <h2 className="text-base sm:text-lg lg:text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
               热门标签 TOP 10
             </h2>
           </div>
@@ -77,14 +77,14 @@ export default function AnalysisDashboard() {
               {analytics?.topTags.map((tag, index) => {
                 const percent = maxTagCount > 0 ? (tag.count / maxTagCount) * 100 : 0;
                 return (
-                  <div key={tag.tag} className="flex items-center gap-3">
-                    <span className="w-5 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
+                  <div key={tag.tag} className="flex items-center gap-2 sm:gap-3">
+                    <span className="w-5 shrink-0 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
                       {index + 1}
                     </span>
-                    <span className="w-24 text-xs truncate" style={{ color: 'var(--text-secondary)' }}>
+                    <span className="w-20 sm:w-24 shrink-0 text-xs truncate" style={{ color: 'var(--text-secondary)' }}>
                       {tag.tag}
                     </span>
-                    <div className="flex-1 h-2 rounded-full" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+                    <div className="flex-1 min-w-0 h-2 rounded-full" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
                       <div
                         className="h-2 rounded-full"
                         style={{
@@ -93,7 +93,7 @@ export default function AnalysisDashboard() {
                         }}
                       />
                     </div>
-                    <span className="w-8 text-xs text-right font-mono" style={{ color: 'var(--accent-cyan)' }}>
+                    <span className="w-8 shrink-0 text-xs text-right font-mono" style={{ color: 'var(--accent-cyan)' }}>
                       {tag.count}
                     </span>
                   </div>
@@ -103,25 +103,25 @@ export default function AnalysisDashboard() {
           )}
         </div>
 
-        <div className="card-base">
+        <div className="card-base min-w-0">
           <div className="flex items-center gap-2 mb-4">
-            <Clock className="w-4 h-4" style={{ color: 'var(--accent-cyan)' }} />
-            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+            <Clock className="w-4 h-4 shrink-0" style={{ color: 'var(--accent-cyan)' }} />
+            <h2 className="text-base sm:text-lg lg:text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
               最近活动
             </h2>
           </div>
-          <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+          <div className="space-y-2 min-h-0 max-h-[45dvh] sm:max-h-[320px] overflow-y-auto overscroll-contain pr-1">
             {analytics?.recentNodes.map((node) => (
               <Link
                 key={node.id}
                 to={`/kb/${node.id}`}
-                className="flex items-center gap-3 p-2 rounded transition-colors hover:bg-white/5"
+                className="flex items-center gap-2 sm:gap-3 p-2 min-h-11 rounded transition-colors hover:bg-white/5"
               >
-                <span className="chip text-[10px] py-0 px-1.5">{node.type}</span>
-                <span className="flex-1 text-sm truncate" style={{ color: 'var(--text-primary)' }}>
+                <span className="chip text-[10px] py-0 px-1.5 shrink-0">{node.type}</span>
+                <span className="flex-1 min-w-0 text-sm truncate" style={{ color: 'var(--text-primary)' }}>
                   {node.title}
                 </span>
-                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                <span className="text-xs shrink-0 whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>
                   {formatDate(node.updatedAt)}
                 </span>
               </Link>
@@ -130,13 +130,13 @@ export default function AnalysisDashboard() {
         </div>
       </div>
 
-      <div className="card-base mt-6">
+      <div className="card-base min-w-0 mt-4 sm:mt-6">
         <div className="flex items-center gap-2 mb-4">
-          <Unlink className="w-4 h-4" style={{ color: 'var(--accent-rose)' }} />
-          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+          <Unlink className="w-4 h-4 shrink-0" style={{ color: 'var(--accent-rose)' }} />
+          <h2 className="text-base sm:text-lg lg:text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
             知识孤岛
           </h2>
-          <span className="ml-auto chip text-[10px] py-0 px-1.5">
+          <span className="ml-auto chip text-[10px] py-0 px-1.5 shrink-0 whitespace-nowrap">
             {analytics?.orphanNodes.length ?? 0} 个节点
           </span>
         </div>
@@ -148,11 +148,11 @@ export default function AnalysisDashboard() {
               <Link
                 key={node.id}
                 to={`/kb/${node.id}`}
-                className="flex items-center gap-2 p-3 rounded transition-colors hover:border-[var(--accent-cyan)]"
+                className="flex items-center gap-2 p-3 min-w-0 rounded transition-colors hover:border-[var(--accent-cyan)]"
                 style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}
               >
-                <span className="chip text-[10px] py-0 px-1.5">{node.type}</span>
-                <span className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>
+                <span className="chip text-[10px] py-0 px-1.5 shrink-0">{node.type}</span>
+                <span className="flex-1 min-w-0 text-sm truncate" style={{ color: 'var(--text-primary)' }}>
                   {node.title}
                 </span>
               </Link>

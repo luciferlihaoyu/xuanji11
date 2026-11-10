@@ -1,7 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Copy, Check, Send, Lock, Globe, Key, ChevronDown, BookOpen, Loader2, Trash2, Plus } from 'lucide-react';
+import { Copy, Check, Send, Lock, Globe, Key, ChevronDown, BookOpen, Loader2, Trash2, Plus, Menu } from 'lucide-react';
 import { useAgents, type ApiKey, type GeneratedApiKey } from '@/hooks/useAgents';
 import { useAppStore } from '@/store/useAppStore';
+import MobileDrawer from '@/components/MobileDrawer';
+
+/** 图标/小按钮触控热区：<768px ≥40×40，≥768px 回落桌面原尺寸（移动端契约第 6 条） */
+const TAP_TARGET = 'min-w-[40px] min-h-[40px] inline-flex items-center justify-center md:min-w-0 md:min-h-0';
 
 interface Endpoint {
   id: string;
@@ -145,6 +149,7 @@ export default function APICenter() {
   ]);
   const [debugBody, setDebugBody] = useState<string>('');
 
+  const [navOpen, setNavOpen] = useState(false);
   const [tokenModalOpen, setTokenModalOpen] = useState(false);
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [apiKeysLoading, setApiKeysLoading] = useState(false);
@@ -326,78 +331,104 @@ export default function APICenter() {
     }
   };
 
-  return (
-    <div className="flex h-[calc(100vh-48px)]" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      {/* Left Nav */}
-      <div className="w-[280px] shrink-0 border-r flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
-        <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
-          <div className="flex items-center gap-2 mb-2">
-            <Globe className="w-4 h-4" style={{ color: 'var(--accent-cyan)' }} />
-            <code className="text-xs" style={{ color: 'var(--text-primary)' }}>{baseUrl}</code>
-            <button onClick={() => handleCopy(baseUrl)} className="p-1 rounded hover:bg-white/5">
-              {copied ? <Check className="w-3 h-3" style={{ color: 'var(--accent-emerald)' }} /> : <Copy className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />}
-            </button>
-          </div>
-          <button onClick={() => setTokenModalOpen(true)} className="btn-secondary w-full text-xs py-1.5 flex items-center justify-center gap-1.5">
-            <Key className="w-3.5 h-3.5" />
-            管理 Token
+  // 接口目录内容（桌面左侧常驻栏与移动端抽屉共用同一份）
+  const navBody = (
+    <div className="flex flex-col h-full min-h-0">
+      <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+        <div className="flex items-center gap-2 mb-2">
+          <Globe className="w-4 h-4" style={{ color: 'var(--accent-cyan)' }} />
+          <code className="text-xs truncate min-w-0" style={{ color: 'var(--text-primary)' }}>{baseUrl}</code>
+          <button onClick={() => handleCopy(baseUrl)} className={`${TAP_TARGET} p-1 rounded hover:bg-white/5 shrink-0`} aria-label="复制 API 根地址">
+            {copied ? <Check className="w-3 h-3" style={{ color: 'var(--accent-emerald)' }} /> : <Copy className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />}
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto">
-          {CATEGORIES.map((cat) => (
-            <div key={cat}>
-              <div className="px-3 py-2 text-[11px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                {cat}
-              </div>
-              {ENDPOINTS.filter((e) => e.category === cat).map((ep) => {
-                const isSelected = selectedEndpoint.id === ep.id;
-                const colors = methodColors[ep.method];
-                return (
-                  <button
-                    key={ep.id}
-                    onClick={() => { setSelectedEndpoint(ep); setDebugResponse(''); setDebugStatus(null); }}
-                    className="flex items-center gap-2 w-full px-3 py-2 text-left transition-colors"
-                    style={{
-                      backgroundColor: isSelected ? 'rgba(34,211,238,0.1)' : 'transparent',
-                    }}
-                    onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
-                    onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                  >
-                    <span
-                      className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0"
-                      style={{ backgroundColor: colors.bg, color: colors.text }}
-                    >
-                      {ep.method}
-                    </span>
-                    <code className="text-xs truncate" style={{ color: isSelected ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}>
-                      {ep.path}
-                    </code>
-                  </button>
-                );
-              })}
+        <button onClick={() => setTokenModalOpen(true)} className="btn-secondary w-full text-xs py-1.5 min-h-10 md:min-h-0 flex items-center justify-center gap-1.5">
+          <Key className="w-3.5 h-3.5" />
+          管理 Token
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        {CATEGORIES.map((cat) => (
+          <div key={cat}>
+            <div className="px-3 py-2 text-[11px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              {cat}
             </div>
-          ))}
-        </div>
+            {ENDPOINTS.filter((e) => e.category === cat).map((ep) => {
+              const isSelected = selectedEndpoint.id === ep.id;
+              const colors = methodColors[ep.method];
+              return (
+                <button
+                  key={ep.id}
+                  onClick={() => { setSelectedEndpoint(ep); setDebugResponse(''); setDebugStatus(null); setNavOpen(false); }}
+                  className="flex items-center gap-2 w-full px-3 py-2 min-h-10 md:min-h-0 text-left transition-colors"
+                  style={{
+                    backgroundColor: isSelected ? 'rgba(34,211,238,0.1)' : 'transparent',
+                  }}
+                  onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
+                  onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                >
+                  <span
+                    className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0"
+                    style={{ backgroundColor: colors.bg, color: colors.text }}
+                  >
+                    {ep.method}
+                  </span>
+                  <code className="text-xs truncate" style={{ color: isSelected ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}>
+                    {ep.path}
+                  </code>
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex h-app" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      {/* Left Nav — ≥768px 常驻；<768px 收进左侧抽屉（内容共用 navBody） */}
+      <div className="hidden md:flex w-[280px] shrink-0 border-r flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+        {navBody}
       </div>
 
+      <MobileDrawer
+        open={navOpen}
+        onClose={() => setNavOpen(false)}
+        side="left"
+        title="接口目录"
+        ariaLabel="接口目录"
+      >
+        {navBody}
+      </MobileDrawer>
+
       {/* Right Detail */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-4xl mx-auto p-6">
+      <div className="flex-1 min-w-0 overflow-y-auto">
+        {/* 移动端工具条（≥768px 不渲染）：接口目录抽屉入口 + Token 管理 */}
+        <div className="md:hidden sticky top-0 z-10 flex items-center gap-2 px-3 py-2 border-b" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+          <button onClick={() => setNavOpen(true)} className={`${TAP_TARGET} gap-1.5 px-3 rounded border text-xs`} style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }} aria-label="打开接口目录">
+            <Menu className="w-4 h-4" />目录
+          </button>
+          <button onClick={() => setTokenModalOpen(true)} className={`${TAP_TARGET} gap-1.5 px-3 rounded border text-xs`} style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }} aria-label="管理 API Token">
+            <Key className="w-4 h-4" />Token
+          </button>
+        </div>
+        <div className="max-w-4xl mx-auto p-3 sm:p-5 lg:p-6">
           {/* Endpoint Header */}
-          <div className="flex items-center gap-3 mb-2">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-2">
             <span
-              className="text-sm font-bold px-3 py-1.5 rounded"
+              className="text-sm font-bold px-3 py-1.5 rounded shrink-0"
               style={{ backgroundColor: methodColors[selectedEndpoint.method].bg, color: methodColors[selectedEndpoint.method].text }}
             >
               {selectedEndpoint.method}
             </span>
-            <code className="text-xl font-mono" style={{ color: 'var(--text-primary)' }}>{selectedEndpoint.path}</code>
-            <button onClick={() => handleCopy(selectedEndpoint.path)} className="p-1.5 rounded hover:bg-white/5">
+            <code className="text-base sm:text-xl font-mono break-all min-w-0" style={{ color: 'var(--text-primary)' }}>{selectedEndpoint.path}</code>
+            <button onClick={() => handleCopy(selectedEndpoint.path)} className={`${TAP_TARGET} p-1.5 rounded hover:bg-white/5 shrink-0`} aria-label="复制接口路径">
               <Copy className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
             </button>
           </div>
 
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex flex-wrap items-center gap-2 mb-4">
             <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>{selectedEndpoint.description}</p>
             {selectedEndpoint.auth && (
               <span className="chip chip-amber text-[10px] py-0.5 px-2 flex items-center gap-1">
@@ -411,8 +442,29 @@ export default function APICenter() {
           {selectedEndpoint.params && selectedEndpoint.params.length > 0 && (
             <div className="mb-6">
               <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>参数</h3>
-              <div className="border rounded-md overflow-x-auto" style={{ borderColor: 'var(--border-subtle)' }}>
-                <table className="w-full text-sm">
+              {/* <640px：卡片列表，避免 4 列表格在窄屏挤压/横滚 */}
+              <div className="sm:hidden space-y-2">
+                {selectedEndpoint.params.map((p, i) => (
+                  <div key={i} className="rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="flex flex-wrap items-center gap-2 mb-1.5 min-w-0">
+                      <code className="text-xs font-mono break-all" style={{ color: 'var(--text-primary)' }}>{p.name}</code>
+                      <span className="chip text-[10px] py-0.5 px-2 shrink-0">{p.type}</span>
+                      {p.required ? (
+                        <span className="flex items-center gap-1 text-xs shrink-0" style={{ color: 'var(--accent-rose)' }}>
+                          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--accent-rose)' }} />
+                          必填
+                        </span>
+                      ) : (
+                        <span className="text-xs shrink-0" style={{ color: 'var(--text-muted)' }}>可选</span>
+                      )}
+                    </div>
+                    <p className="text-xs break-words" style={{ color: 'var(--text-secondary)' }}>{p.description}</p>
+                  </div>
+                ))}
+              </div>
+              {/* ≥640px：表格（桌面与改动前一致） */}
+              <div className="hidden sm:block border rounded-md table-scroll" style={{ borderColor: 'var(--border-subtle)' }}>
+                <table className="w-full min-w-[640px] sm:min-w-full text-sm">
                   <thead>
                     <tr style={{ backgroundColor: 'var(--bg-tertiary)' }}>
                       {['名称', '类型', '必填', '说明'].map((h) => (
@@ -439,7 +491,7 @@ export default function APICenter() {
                             <span className="text-xs" style={{ color: 'var(--text-muted)' }}>可选</span>
                           )}
                         </td>
-                        <td className="px-4 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}>{p.description}</td>
+                        <td className="px-4 py-2 text-xs break-words" style={{ color: 'var(--text-secondary)' }}>{p.description}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -456,7 +508,7 @@ export default function APICenter() {
               <div className="mb-3">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>请求</span>
-                  <button onClick={() => handleCopy(selectedEndpoint.requestExample!)} className="p-1 rounded hover:bg-white/5">
+                  <button onClick={() => handleCopy(selectedEndpoint.requestExample!)} className={`${TAP_TARGET} p-1 rounded hover:bg-white/5`} aria-label="复制请求示例">
                     <Copy className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
                   </button>
                 </div>
@@ -470,7 +522,7 @@ export default function APICenter() {
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>响应</span>
-                  <button onClick={() => handleCopy(selectedEndpoint.responseExample!)} className="p-1 rounded hover:bg-white/5">
+                  <button onClick={() => handleCopy(selectedEndpoint.responseExample!)} className={`${TAP_TARGET} p-1 rounded hover:bg-white/5`} aria-label="复制响应示例">
                     <Copy className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
                   </button>
                 </div>
@@ -485,7 +537,7 @@ export default function APICenter() {
           <div className="mb-6">
             <button
               onClick={() => setDebugOpen(!debugOpen)}
-              className="flex items-center gap-2 text-sm font-medium mb-3"
+              className="flex items-center gap-2 text-sm font-medium mb-3 min-h-10 md:min-h-0"
               style={{ color: 'var(--accent-cyan)' }}
             >
               <Send className="w-4 h-4" />
@@ -495,9 +547,9 @@ export default function APICenter() {
 
             {debugOpen && (
               <div className="border rounded-md p-4" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
-                <div className="flex gap-2 mb-3">
+                <div className="flex flex-col sm:flex-row gap-2 mb-3">
                   <select
-                    className="h-8 px-2 rounded border text-xs outline-none"
+                    className="h-10 sm:h-8 w-full sm:w-auto px-2 rounded border text-xs outline-none shrink-0"
                     style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)', color: 'var(--text-primary)' }}
                     value={debugMethod}
                     onChange={(e) => setDebugMethod(e.target.value as 'GET' | 'POST' | 'PUT' | 'DELETE')}
@@ -511,35 +563,35 @@ export default function APICenter() {
                     type="text"
                     value={debugUrl}
                     onChange={(e) => setDebugUrl(e.target.value)}
-                    className="input-base text-xs flex-1"
+                    className="input-base text-xs flex-1 min-w-0"
                   />
                 </div>
 
                 <div className="mb-3">
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Headers</span>
-                    <button onClick={handleAddHeader} className="text-[10px] flex items-center gap-1" style={{ color: 'var(--accent-cyan)' }}>
+                    <button onClick={handleAddHeader} className={`${TAP_TARGET} text-xs gap-1`} style={{ color: 'var(--accent-cyan)' }} aria-label="添加请求头">
                       <Plus className="w-3 h-3" />添加
                     </button>
                   </div>
                   <div className="space-y-2">
                     {debugHeaders.map((h, index) => (
-                      <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                      <div key={index} className="grid grid-cols-2 sm:grid-cols-[1fr_1fr_auto] gap-2">
                         <input
                           type="text"
                           value={h.key}
                           onChange={(e) => handleHeaderChange(index, 'key', e.target.value)}
                           placeholder="Key"
-                          className="input-base text-xs"
+                          className="input-base text-xs min-w-0"
                         />
                         <input
                           type="text"
                           value={h.value}
                           onChange={(e) => handleHeaderChange(index, 'value', e.target.value)}
                           placeholder="Value"
-                          className="input-base text-xs"
+                          className="input-base text-xs min-w-0"
                         />
-                        <button onClick={() => handleRemoveHeader(index)} className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--accent-rose)' }}>×</button>
+                        <button onClick={() => handleRemoveHeader(index)} className={`${TAP_TARGET} col-span-2 sm:col-span-1 justify-self-end p-1.5 rounded hover:bg-white/5`} style={{ color: 'var(--accent-rose)' }} aria-label="删除此请求头">×</button>
                       </div>
                     ))}
                   </div>
@@ -549,14 +601,14 @@ export default function APICenter() {
                   <div className="mb-3">
                     <span className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-muted)' }}>Body (JSON)</span>
                     <textarea
-                      className="input-base text-xs h-32 resize-none font-mono"
+                      className="input-base text-xs h-32 w-full resize-none font-mono"
                       value={debugBody}
                       onChange={(e) => setDebugBody(e.target.value)}
                     />
                   </div>
                 )}
 
-                <button onClick={sendRequest} disabled={debugLoading} className="btn-primary text-xs py-2 px-4 flex items-center gap-1.5 mb-4">
+                <button onClick={sendRequest} disabled={debugLoading} className="btn-primary w-full sm:w-auto text-xs py-2 px-4 min-h-10 md:min-h-0 flex items-center justify-center gap-1.5 mb-4">
                   {debugLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                   {debugLoading ? '发送中...' : '发送请求'}
                 </button>
@@ -589,11 +641,11 @@ export default function APICenter() {
 
       {/* Token Modal */}
       {tokenModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
-          <div className="animate-scale-in rounded-lg border p-4 sm:p-6 w-[500px] max-w-[calc(100vw-2rem)] max-h-[85vh] overflow-y-auto" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-4" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
+          <div className="animate-scale-in rounded-lg border p-4 sm:p-6 w-full max-w-[500px] sm:w-[500px] max-h-[85dvh] overflow-y-auto overscroll-contain" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>API Token 管理</h3>
-              <button onClick={() => setTokenModalOpen(false)} className="p-1 rounded hover:bg-white/5">
+              <button onClick={() => setTokenModalOpen(false)} className={`${TAP_TARGET} p-1 rounded hover:bg-white/5`} aria-label="关闭 Token 管理">
                 <BookOpen className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
               </button>
             </div>
@@ -626,7 +678,7 @@ export default function APICenter() {
               <button
                 onClick={handleCreateKey}
                 disabled={isGeneratingApiKey || !selectedAgentId || !keyName.trim()}
-                className="btn-primary w-full text-xs py-2 flex items-center justify-center gap-1.5"
+                className="btn-primary w-full text-xs py-2 min-h-10 md:min-h-0 flex items-center justify-center gap-1.5"
               >
                 {isGeneratingApiKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Key className="w-3.5 h-3.5" />}
                 {isGeneratingApiKey ? '生成中...' : '创建新 Token'}
@@ -639,17 +691,17 @@ export default function APICenter() {
                 <p className="text-xs mb-2" style={{ color: 'var(--accent-amber)' }}>
                   重要：请立即复制此密钥，它不会再次显示。
                 </p>
-                <div className="flex gap-2">
+                <div className="flex flex-col sm:flex-row gap-2">
                   <input
                     readOnly
                     value={generatedKey.key}
-                    className="input-base text-xs flex-1 font-mono"
+                    className="input-base text-xs flex-1 min-w-0 font-mono break-all"
                     onClick={(e) => e.currentTarget.select()}
                   />
-                  <button onClick={() => handleCopyKey(generatedKey.key)} className="btn-primary text-xs py-2 px-3 flex items-center gap-1.5">
+                  <button onClick={() => handleCopyKey(generatedKey.key)} className="btn-primary w-full sm:w-auto text-xs py-2 px-3 min-h-10 md:min-h-0 flex items-center justify-center gap-1.5" aria-label="复制密钥">
                     <Copy className="w-3.5 h-3.5" />复制
                   </button>
-                  <button onClick={() => setGeneratedKey(null)} className="btn-ghost text-xs py-2 px-3">关闭</button>
+                  <button onClick={() => setGeneratedKey(null)} className="btn-ghost w-full sm:w-auto text-xs py-2 px-3 min-h-10 md:min-h-0">关闭</button>
                 </div>
               </div>
             )}
@@ -679,15 +731,16 @@ export default function APICenter() {
                         </div>
                         <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{key.name}</div>
                         {(key as ApiKey & { agentName?: string }).agentName && (
-                          <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Agent: {(key as ApiKey & { agentName?: string }).agentName}</div>
+                          <div className="text-xs sm:text-[10px]" style={{ color: 'var(--text-muted)' }}>Agent: {(key as ApiKey & { agentName?: string }).agentName}</div>
                         )}
                       </div>
                       {key.isActive === 'true' && (
                         <button
                           onClick={() => setRevokeConfirmId(key.id)}
-                          className="p-1.5 rounded hover:bg-white/5"
+                          className={`${TAP_TARGET} p-1.5 rounded hover:bg-white/5 shrink-0`}
                           style={{ color: 'var(--accent-rose)' }}
                           title="删除"
+                          aria-label="删除此密钥"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -713,13 +766,13 @@ export default function APICenter() {
 
       {/* Revoke confirmation */}
       {revokeConfirmId !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
-          <div className="animate-scale-in rounded-lg border p-5 w-[360px]" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-4" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
+          <div className="animate-scale-in rounded-lg border p-5 w-full max-w-[360px] sm:w-[360px]" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
             <h4 className="text-base font-bold mb-2" style={{ color: 'var(--text-primary)' }}>确认删除密钥</h4>
             <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>删除后，使用此密钥的所有请求将立即被拒绝。此操作不可撤销。</p>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setRevokeConfirmId(null)} className="btn-ghost text-xs py-2 px-4">取消</button>
-              <button onClick={() => handleRevokeKey(revokeConfirmId)} disabled={isRevokingApiKey} className="btn-danger text-xs py-2 px-4">
+            <div className="flex flex-col sm:flex-row justify-end gap-2">
+              <button onClick={() => setRevokeConfirmId(null)} className="btn-ghost w-full sm:w-auto text-xs py-2 px-4 min-h-10 md:min-h-0">取消</button>
+              <button onClick={() => handleRevokeKey(revokeConfirmId)} disabled={isRevokingApiKey} className="btn-danger w-full sm:w-auto text-xs py-2 px-4 min-h-10 md:min-h-0">
                 {isRevokingApiKey ? '删除中...' : '确认删除'}
               </button>
             </div>

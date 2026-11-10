@@ -35,9 +35,9 @@ export function ModelsPanel() {
   const listError = listQuery.data && !listQuery.data.ok ? listQuery.data.error : undefined;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between">
-        <div>
+    <div className="space-y-4 sm:space-y-6">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <h3 className="text-lg font-semibold mb-1 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
             <Cpu className="w-5 h-5" />
             模型中心
@@ -48,7 +48,7 @@ export function ModelsPanel() {
         </div>
         <button
           onClick={() => { void statusQuery.refetch(); void listQuery.refetch(); }}
-          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-colors"
+          className="flex items-center justify-center gap-1.5 text-xs px-3 py-1.5 min-h-10 sm:min-h-0 rounded-lg transition-colors shrink-0 w-full sm:w-auto"
           style={{ color: 'var(--text-muted)', border: '1px solid var(--border-color, rgba(255,255,255,0.1))' }}
         >
           <RefreshCw className="w-3.5 h-3.5" /> 刷新
@@ -89,22 +89,22 @@ export function ModelsPanel() {
             {listError ?? '未获取到模型，请检查 TIANSHU_API_KEY 配置'}
           </div>
         ) : (
-          <div className="space-y-1 max-h-96 overflow-y-auto">
+          <div className="space-y-1 max-h-96 overflow-y-auto overscroll-contain">
             {models.map((m) => {
               const isChat = m === status?.chatModel;
               const isEmbedding = m === status?.embeddingModel;
               return (
                 <div
                   key={m}
-                  className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg"
+                  className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3 px-3 py-2 rounded-lg"
                   style={{
                     background: isChat || isEmbedding ? 'rgba(59,130,246,0.08)' : 'transparent',
                     border: '1px solid rgba(255,255,255,0.05)',
                   }}
                 >
                   <div className="min-w-0">
-                    <div className="text-xs font-mono truncate" style={{ color: 'var(--text-primary)' }}>{m}</div>
-                    <div className="flex gap-2 mt-0.5">
+                    <div className="text-xs font-mono break-all sm:truncate" style={{ color: 'var(--text-primary)' }}>{m}</div>
+                    <div className="flex flex-wrap gap-2 mt-0.5">
                       {isChat && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}>
                           当前对话模型
@@ -117,12 +117,12 @@ export function ModelsPanel() {
                       )}
                     </div>
                   </div>
-                  <div className="flex gap-2 shrink-0">
+                  <div className="flex gap-2 shrink-0 w-full sm:w-auto">
                     {!isChat && (
                       <button
                         onClick={() => setChatMutation.mutate({ model: m })}
                         disabled={setChatMutation.isPending}
-                        className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg transition-colors"
+                        className="flex items-center justify-center gap-1 text-xs sm:text-[11px] px-2 py-1 min-h-10 sm:min-h-0 rounded-lg transition-colors flex-1 sm:flex-none"
                         style={{ color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}
                       >
                         <Check className="w-3 h-3" /> 设为对话
@@ -135,7 +135,7 @@ export function ModelsPanel() {
                           setEmbeddingMutation.mutate({ model: m });
                         }}
                         disabled={setEmbeddingMutation.isPending}
-                        className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg transition-colors"
+                        className="flex items-center justify-center gap-1 text-xs sm:text-[11px] px-2 py-1 min-h-10 sm:min-h-0 rounded-lg transition-colors flex-1 sm:flex-none"
                         style={{ color: '#a855f7', border: '1px solid rgba(168,85,247,0.3)' }}
                       >
                         <Check className="w-3 h-3" /> 设为嵌入
@@ -154,7 +154,7 @@ export function ModelsPanel() {
         style={{ background: 'rgba(234,179,8,0.06)', border: '1px solid rgba(234,179,8,0.2)', color: 'var(--text-muted)' }}
       >
         <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" style={{ color: '#eab308' }} />
-        <div>
+        <div className="min-w-0 break-words">
           切换嵌入模型可能改变向量维度，已有知识库向量将无法匹配，需要重建索引。
           对话模型切换不影响已有数据，立即生效。
         </div>

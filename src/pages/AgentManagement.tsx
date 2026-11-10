@@ -5,8 +5,12 @@ import { useAgents } from '@/hooks/useAgents';
 import { useVectorModelTemplate, useVectorModelTemplates } from '@/hooks/useSettings';
 import { trpc, trpcClient } from '@/providers/trpc';
 import PermissionSelector from '@/components/PermissionSelector';
+import MobileDrawer from '@/components/MobileDrawer';
 import { isSameDay, isWithinInterval, startOfDay, endOfDay, subDays } from 'date-fns';
 import { Search, Grid3X3, List, Plus, X, Activity, Shield, Zap, Users, Pencil, Trash2, Eye, EyeOff, KeyRound, Copy } from 'lucide-react';
+
+/** 图标/小按钮触控热区：<768px ≥40×40，≥768px 回落桌面原尺寸（移动端契约第 6 条） */
+const TAP_TARGET = 'min-w-[40px] min-h-[40px] inline-flex items-center justify-center md:min-w-0 md:min-h-0';
 
 const ABILITY_LABELS = ['知识管理', '内容创作', '编程', '数据分析', '沟通', '学习'];
 const PLATFORM_PRESETS: ReadonlyArray<string> = ['天宫', 'OpenCode', 'OpenClaw', 'Dify'];
@@ -433,10 +437,335 @@ export default function AgentManagement() {
     );
   };
 
+  // 详情内容（桌面右侧常驻面板与移动端抽屉共用同一份，避免两份实现漂移）
+  const detailBody = selectedAgentData ? (
+    <div className="p-4 sm:p-6">
+      <div className="flex items-start justify-between mb-6">
+        <div className="flex items-center gap-4">
+          <div className="w-16 h-16 rounded-full flex items-center justify-center text-2xl font-bold" style={{ background: getAvatarGradient(selectedAgentData.name), color: '#0A0E1A' }}>{selectedAgentData.name.charAt(0)}</div>
+          <div><h2 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{selectedAgentData.name}</h2><span className="chip">{selectedAgentData.role}</span></div>
+        </div>
+        <div className="flex gap-2 shrink-0">
+          <button onClick={() => openEditModal(selectedAgentData)} className={`${TAP_TARGET} p-2 rounded hover:bg-white/5`} style={{ color: 'var(--accent-cyan)' }} title="编辑" aria-label="编辑此 Agent"><Pencil className="w-4 h-4" /></button>
+          <button onClick={() => setSelectedAgent(null)} className={`${TAP_TARGET} p-2 rounded hover:bg-white/5`} style={{ color: 'var(--text-muted)' }} aria-label="关闭详情面板"><X className="w-5 h-5" /></button>
+        </div>
+      </div>
+
+      {/* Info */}
+      <div className="space-y-2 mb-6">
+        {[{ label: 'ID', value: selectedAgentData.id }, { label: '部门', value: selectedAgentData.department }, { label: '平台', value: selectedAgentData.platform }].map((item) => (
+          <div key={item.label} className="flex justify-between py-1.5 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{item.label}</span>
+            <span className="text-xs font-mono break-all text-right min-w-0" style={{ color: 'var(--text-primary)' }}>{item.value}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Status */}
+      <div className="card-base mb-6"><div className="flex items-center justify-between">
+        <div className="flex items-center gap-2"><span className={getStatusMeta(selectedAgentData.status).dotClass} /><span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{getStatusMeta(selectedAgentData.status).label}</span></div>
+        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>心跳: {selectedAgentData.lastHeartbeat}</span>
+      </div></div>
+
+      {/* Permissions - editable */}
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-sm font-semibold flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}><Shield className="w-4 h-4" />权限配置</h4>
+          <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>点击切换</span>
+        </div>
+        <PermissionSelector
+          permissions={selectedAgentData.permissions}
+          onChange={async (perms) => {
+            try {
+              await updatePermissions(selectedAgentData.id, perms);
+              addToast({ type: 'success', title: '权限已更新' });
+            } catch (err: any) {
+              addToast({ type: 'error', title: err.message || '权限更新失败' });
+            }
+          }}
+          showPresets={true}
+        />
+      </div>
+
+      {/* API Keys */}
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-sm font-semibold flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}><KeyRound className="w-4 h-4" />API 密钥</h4>
+          <button
+            onClick={() => { setShowGenerateForm(!showGenerateForm); setGeneratedKey(null); }}
+            className="btn-ghost text-xs py-1.5 px-3 min-h-10 md:min-h-0 flex items-center gap-1.5"
+          >
+            <Plus className="w-3.5 h-3.5" />生成密钥
+          </button>
+        </div>
+
+        {/* Generated key display - shown once after creation */}
+        {generatedKey && (
+          <div className="bg-yellow-900/20 border border-yellow-500/30 rounded p-3 mb-3">
+            <p className="text-xs mb-2" style={{ color: 'var(--accent-amber)' }}>
+              重要：请立即复制此密钥，它不会再次显示。
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                readOnly
+                value={generatedKey}
+                className="input-base text-xs flex-1 min-w-0 font-mono break-all"
+                onClick={(e) => e.currentTarget.select()}
+              />
+              <button
+                onClick={() => handleCopyKey(generatedKey)}
+                className="btn-primary w-full sm:w-auto text-xs py-2 px-3 min-h-10 md:min-h-0 flex items-center justify-center gap-1.5"
+                aria-label="复制密钥"
+              >
+                <Copy className="w-3.5 h-3.5" />复制
+              </button>
+              <button
+                onClick={() => setGeneratedKey(null)}
+                className="btn-ghost w-full sm:w-auto text-xs py-2 px-3 min-h-10 md:min-h-0"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Generate form */}
+        {showGenerateForm && (
+          <div className="card-base mb-3 space-y-3">
+            <div>
+              <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>密钥名称 *</label>
+              <input
+                type="text"
+                value={keyName}
+                onChange={(e) => setKeyName(e.target.value)}
+                placeholder="如：生产环境密钥"
+                className="input-base text-xs w-full"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>过期时间（可选）</label>
+              <input
+                type="date"
+                value={keyExpiry}
+                onChange={(e) => setKeyExpiry(e.target.value)}
+                className="input-base text-xs w-full"
+              />
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <button
+                onClick={handleGenerateApiKey}
+                disabled={generatingKey || !keyName.trim()}
+                className="btn-primary w-full sm:w-auto text-xs py-2 px-3 min-h-10 md:min-h-0 flex items-center justify-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5" />{generatingKey ? '生成中...' : '生成'}
+              </button>
+              <button
+                onClick={() => { setShowGenerateForm(false); setKeyName(''); setKeyExpiry(''); }}
+                className="btn-ghost w-full sm:w-auto text-xs py-2 px-3 min-h-10 md:min-h-0"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Key list */}
+        {apiKeysLoading ? (
+          <div className="text-xs py-4 text-center" style={{ color: 'var(--text-muted)' }}>加载中...</div>
+        ) : apiKeys.length === 0 ? (
+          <div className="text-xs py-4 text-center" style={{ color: 'var(--text-muted)' }}>暂无 API 密钥</div>
+        ) : (
+          <div className="space-y-2">
+            {apiKeys.map((key) => (
+              <div key={key.id} className="card-base p-3">
+                <div className="flex items-start justify-between mb-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-mono" style={{ color: 'var(--accent-cyan)' }}>{key.keyPrefix}...</span>
+                      <span className={`chip text-[10px] py-0.5 px-2 ${key.isActive === 'true' ? 'chip-emerald' : 'chip-rose'}`}>
+                        {key.isActive === 'true' ? '活跃' : '已撤销'}
+                      </span>
+                    </div>
+                    <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{key.name}</div>
+                  </div>
+                  {key.isActive === 'true' && (
+                    <button
+                      onClick={() => setRevokeConfirmId(key.id)}
+                      className="btn-danger text-xs py-1.5 px-3 min-h-10 md:min-h-0 shrink-0"
+                    >
+                      撤销
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                  <span>创建: {formatDate(key.createdAt)}</span>
+                  <span>·</span>
+                  <span>最后使用: {formatDate(key.lastUsedAt)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* LLM Config */}
+      <div className="mb-6">
+        <h4 className="text-sm font-semibold mb-3 flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}><Zap className="w-4 h-4" />LLM 配置</h4>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>使用系统模板</label>
+            <select
+              value={llmConfig.llm_template_id}
+              onChange={(e) => handleSelectLlmTemplate(e.target.value)}
+              className="input-base text-xs w-full"
+            >
+              <option value="">手动填写</option>
+              {vectorTemplates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.name} / {template.customProviderName || template.provider} / {template.model}
+                </option>
+              ))}
+            </select>
+            {vectorTemplatesLoading && (
+              <p className="text-xs sm:text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>正在加载系统模板...</p>
+            )}
+            {!vectorTemplatesLoading && vectorTemplates.length === 0 && (
+              <p className="text-xs sm:text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>暂无系统模板，可继续手动填写。</p>
+            )}
+            {selectedLlmTemplateSummary && (
+              <p className="text-xs sm:text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                已套用模板 URL 与模型{selectedLlmTemplateSummary.hasApiKey ? '，并读取模板密钥；也可手动覆盖。' : '；模板未保存密钥，保留当前 API Key。'}
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>API URL</label>
+            <input
+              type="text"
+              value={llmConfig.llm_api_url}
+              onChange={(e) => setLlmConfig({ ...llmConfig, llm_api_url: e.target.value })}
+              placeholder="https://api.openai.com/v1"
+              className="input-base text-xs w-full"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>API Key</label>
+            <div className="flex gap-2">
+              <input
+                type={showLlmKey ? 'text' : 'password'}
+                value={llmConfig.llm_api_key}
+                onChange={(e) => setLlmConfig({ ...llmConfig, llm_api_key: e.target.value })}
+                placeholder="sk-..."
+                className="input-base text-xs flex-1 min-w-0"
+              />
+              <button
+                onClick={() => setShowLlmKey(!showLlmKey)}
+                className={`${TAP_TARGET} p-2 rounded border shrink-0`}
+                style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                title={showLlmKey ? '隐藏' : '显示'}
+                aria-label={showLlmKey ? '隐藏 API Key' : '显示 API Key'}
+              >
+                {showLlmKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>模型</label>
+              {tianshuModels.length > 0 && (
+                <select
+                  value=""
+                  onChange={(e) => handleSelectProviderModel(e.target.value)}
+                  className="input-base text-xs w-full mb-1.5"
+                >
+                  <option value="">从天枢 {tianshuModels.length} 个模型中选择…</option>
+                  {tianshuModels.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              )}
+              <input
+                type="text"
+                list="tianshu-model-options"
+                value={llmConfig.llm_model}
+                onChange={(e) => setLlmConfig({ ...llmConfig, llm_model: e.target.value })}
+                placeholder={tianshuModels.length > 0 ? "或手动输入模型名" : "gpt-3.5-turbo"}
+                className="input-base text-xs w-full"
+              />
+              <datalist id="tianshu-model-options">
+                {tianshuModels.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+              {tianshuModelsQuery.data?.ok && (
+                <p className="text-xs sm:text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                  下拉选择会自动填好网关 URL；API Key 填天枢密钥即可。
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>Max Tokens</label>
+              <input
+                type="number"
+                value={llmConfig.max_tokens}
+                onChange={(e) => setLlmConfig({ ...llmConfig, max_tokens: Number(e.target.value) })}
+                className="input-base text-xs w-full"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>Temperature: {llmConfig.temperature}</label>
+            <input
+              type="range"
+              min={0}
+              max={2}
+              step={0.1}
+              value={llmConfig.temperature}
+              onChange={(e) => setLlmConfig({ ...llmConfig, temperature: Number(e.target.value) })}
+              className="w-full"
+            />
+          </div>
+          <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2 pt-2">
+            <button onClick={handleTestLlm} className="btn-ghost w-full sm:w-auto text-xs py-2 px-3 min-h-10 md:min-h-0 flex items-center justify-center gap-1.5">
+              <Zap className="w-3.5 h-3.5" />测试连接
+            </button>
+            <button onClick={handleSaveLlmConfig} className="btn-primary w-full sm:w-auto text-xs py-2 px-3 min-h-10 md:min-h-0 flex items-center justify-center gap-1.5">
+              <Pencil className="w-3.5 h-3.5" />保存配置
+            </button>
+            {testLlmStatus !== 'idle' && testLlmStatus !== 'loading' && (
+              <span className="text-xs" style={{ color: testLlmStatus === 'success' ? 'var(--accent-emerald)' : 'var(--accent-rose)' }}>
+                {testLlmMessage}
+              </span>
+            )}
+            {testLlmStatus === 'loading' && (
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>测试中...</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Radar */}
+      <div className="mb-6"><h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>能力评估</h4>
+        <div className="flex justify-center">{renderRadarChart(selectedAgentData.abilities)}</div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3">
+          {ABILITY_LABELS.map((label, i) => {
+            const vals = [selectedAgentData.abilities.knowledge, selectedAgentData.abilities.creation, selectedAgentData.abilities.coding, selectedAgentData.abilities.analysis, selectedAgentData.abilities.communication, selectedAgentData.abilities.learning];
+            return (<div key={label} className="text-center"><div className="text-sm font-bold" style={{ color: 'var(--accent-cyan)' }}>{vals[i]}</div><div className="text-xs sm:text-[10px]" style={{ color: 'var(--text-muted)' }}>{label}</div></div>);
+          })}
+        </div>
+      </div>
+
+      {/* Danger */}
+      <div className="pt-4" style={{ borderTop: '2px solid var(--accent-rose)' }}>
+        <button onClick={() => setShowDeleteConfirm(selectedAgentData.id)} className="btn-danger w-full text-xs py-2 min-h-10 md:min-h-0">断开连接</button>
+      </div>
+    </div>
+  ) : null;
+
   return (
-    <div className="p-6" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="p-3 sm:p-5 lg:p-6" style={{ backgroundColor: 'var(--bg-primary)' }}>
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
         {[
           { label: '全部 Agent', value: agents.length, icon: Users, color: 'var(--accent-cyan)' },
           { label: '活跃', value: activeCount, icon: Activity, color: 'var(--accent-emerald)' },
@@ -454,23 +783,23 @@ export default function AgentManagement() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3 mb-4">
-        <div className="flex items-center flex-1 min-w-[200px] max-w-sm h-8 px-3 rounded border" style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)' }}>
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-4">
+        <div className="flex items-center w-full sm:flex-1 min-w-[200px] max-w-sm h-10 sm:h-8 px-3 rounded border" style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)' }}>
           <Search className="w-4 h-4 mr-2" style={{ color: 'var(--text-muted)' }} />
           <input type="text" placeholder="搜索 Agent..." className="bg-transparent text-xs outline-none w-full" style={{ color: 'var(--text-primary)' }} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
         </div>
-        <select className="h-8 px-3 rounded border text-xs outline-none" style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }} value={filterDept} onChange={(e) => setFilterDept(e.target.value)}>
+        <select className="h-10 sm:h-8 flex-1 sm:flex-none min-w-0 px-3 rounded border text-xs outline-none" style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }} value={filterDept} onChange={(e) => setFilterDept(e.target.value)}>
           <option value="all">全部部门</option>
           {depts.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
-        <select className="h-8 px-3 rounded border text-xs outline-none" style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+        <select className="h-10 sm:h-8 flex-1 sm:flex-none min-w-0 px-3 rounded border text-xs outline-none" style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
           <option value="all">全部状态</option>
           {AGENT_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
         <div className="flex items-center gap-1 ml-auto">
-          <button onClick={() => setViewMode('grid')} className="p-2 rounded" style={{ backgroundColor: viewMode === 'grid' ? 'var(--bg-tertiary)' : 'transparent', color: viewMode === 'grid' ? 'var(--accent-cyan)' : 'var(--text-muted)' }}><Grid3X3 className="w-4 h-4" /></button>
-          <button onClick={() => setViewMode('list')} className="p-2 rounded" style={{ backgroundColor: viewMode === 'list' ? 'var(--bg-tertiary)' : 'transparent', color: viewMode === 'list' ? 'var(--accent-cyan)' : 'var(--text-muted)' }}><List className="w-4 h-4" /></button>
-          <button onClick={openAddModal} className="btn-primary text-xs py-2 px-3 ml-2 flex items-center gap-1.5"><Plus className="w-3.5 h-3.5" />添加 Agent</button>
+          <button onClick={() => setViewMode('grid')} className={`${TAP_TARGET} p-2 rounded`} aria-label="网格视图" style={{ backgroundColor: viewMode === 'grid' ? 'var(--bg-tertiary)' : 'transparent', color: viewMode === 'grid' ? 'var(--accent-cyan)' : 'var(--text-muted)' }}><Grid3X3 className="w-4 h-4" /></button>
+          <button onClick={() => setViewMode('list')} className={`${TAP_TARGET} p-2 rounded`} aria-label="列表视图" style={{ backgroundColor: viewMode === 'list' ? 'var(--bg-tertiary)' : 'transparent', color: viewMode === 'list' ? 'var(--accent-cyan)' : 'var(--text-muted)' }}><List className="w-4 h-4" /></button>
+          <button onClick={openAddModal} className="btn-primary text-xs py-2 px-3 ml-2 min-h-10 md:min-h-0 flex items-center gap-1.5"><Plus className="w-3.5 h-3.5" />添加 Agent</button>
         </div>
       </div>
 
@@ -483,20 +812,20 @@ export default function AgentManagement() {
 
       {/* Agent Grid/List */}
       {!isLoading && (viewMode === 'grid' ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
           {filteredAgents.map((agent) => (
-            <div key={agent.id} className="card-base cursor-pointer group" onClick={() => setSelectedAgent(agent.id)}>
+            <div key={agent.id} className="card-base cursor-pointer group" role="button" tabIndex={0} aria-label={`查看 ${agent.name} 详情`} onClick={() => setSelectedAgent(agent.id)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedAgent(agent.id); } }}>
               <div className="flex items-start justify-between mb-2">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full flex items-center justify-center text-base font-bold shrink-0" style={{ background: getAvatarGradient(agent.name), color: '#0A0E1A' }}>{agent.name.charAt(0)}</div>
                   <div>
                     <h4 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{agent.name}</h4>
-                    <span className="chip text-[10px] py-0.5 px-2">{agent.role}</span>
+                    <span className="chip text-xs sm:text-[10px] py-0.5 px-2">{agent.role}</span>
                   </div>
                 </div>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
-                  <button onClick={() => openEditModal(agent)} className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }} title="编辑"><Pencil className="w-3.5 h-3.5" /></button>
-                  <button onClick={() => setShowDeleteConfirm(agent.id)} className="p-1.5 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }} title="删除"><Trash2 className="w-3.5 h-3.5" /></button>
+                <div className="flex gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                  <button onClick={() => openEditModal(agent)} className={`${TAP_TARGET} p-1.5 rounded hover:bg-white/5`} style={{ color: 'var(--text-muted)' }} title="编辑" aria-label={`编辑 ${agent.name}`}><Pencil className="w-3.5 h-3.5" /></button>
+                  <button onClick={() => setShowDeleteConfirm(agent.id)} className={`${TAP_TARGET} p-1.5 rounded hover:bg-white/5`} style={{ color: 'var(--text-muted)' }} title="删除" aria-label={`删除 ${agent.name}`}><Trash2 className="w-3.5 h-3.5" /></button>
                 </div>
               </div>
               <div className="flex items-center gap-2 text-xs mb-2" style={{ color: 'var(--text-muted)' }}><span>{agent.department}</span><span>·</span><span>{agent.platform}</span></div>
@@ -511,7 +840,7 @@ export default function AgentManagement() {
               {/* Permission summary */}
               <div className="flex items-center gap-1 mt-2">
                 <Shield className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
-                <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                <span className="text-xs sm:text-[10px]" style={{ color: 'var(--text-muted)' }}>
                   {Object.entries(agent.permissions).filter(([, v]) => v).length}/7 权限
                 </span>
               </div>
@@ -519,25 +848,25 @@ export default function AgentManagement() {
           ))}
         </div>
       ) : (
-        <div className="border rounded-md overflow-x-auto" style={{ borderColor: 'var(--border-subtle)' }}>
-          <table className="w-full text-sm">
+        <div className="border rounded-md table-scroll" style={{ borderColor: 'var(--border-subtle)' }}>
+          <table className="w-full min-w-[640px] sm:min-w-full text-sm">
             <thead><tr style={{ backgroundColor: 'var(--bg-tertiary)' }}>
               {['Agent', '角色', '部门', '状态', '权限', '操作'].map((h) => (<th key={h} className="text-left px-4 py-2.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>{h}</th>))}
             </tr></thead>
             <tbody>
               {filteredAgents.map((agent) => (
-                <tr key={agent.id} className="border-t cursor-pointer hover:bg-white/[0.02] transition-colors" style={{ borderColor: 'var(--border-subtle)' }} onClick={() => setSelectedAgent(agent.id)}>
+                <tr key={agent.id} className="border-t cursor-pointer hover:bg-white/[0.02] transition-colors" style={{ borderColor: 'var(--border-subtle)' }} tabIndex={0} aria-label={`查看 ${agent.name} 详情`} onClick={() => setSelectedAgent(agent.id)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedAgent(agent.id); } }}>
                   <td className="px-4 py-3"><div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ background: getAvatarGradient(agent.name), color: '#0A0E1A' }}>{agent.name.charAt(0)}</div>
                     <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{agent.name}</span>
                   </div></td>
-                  <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-secondary)' }}>{agent.role}</td>
-                  <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-secondary)' }}>{agent.department}</td>
+                  <td className="px-4 py-3 text-xs break-words" style={{ color: 'var(--text-secondary)' }}>{agent.role}</td>
+                  <td className="px-4 py-3 text-xs break-words" style={{ color: 'var(--text-secondary)' }}>{agent.department}</td>
                   <td className="px-4 py-3"><div className="flex items-center gap-1.5"><span className={getStatusMeta(agent.status).dotClass} /><span className="text-xs" style={{ color: getStatusMeta(agent.status).color }}>{getStatusMeta(agent.status).label}</span></div></td>
                   <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>{Object.entries(agent.permissions).filter(([, v]) => v).length}/7</td>
                   <td className="px-4 py-3"><div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                    <button onClick={() => openEditModal(agent)} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><Pencil className="w-3.5 h-3.5" /></button>
-                    <button onClick={() => setShowDeleteConfirm(agent.id)} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><Trash2 className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => openEditModal(agent)} className={`${TAP_TARGET} p-1 rounded hover:bg-white/5`} style={{ color: 'var(--text-muted)' }} aria-label={`编辑 ${agent.name}`}><Pencil className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => setShowDeleteConfirm(agent.id)} className={`${TAP_TARGET} p-1 rounded hover:bg-white/5`} style={{ color: 'var(--text-muted)' }} aria-label={`删除 ${agent.name}`}><Trash2 className="w-3.5 h-3.5" /></button>
                   </div></td>
                 </tr>
               ))}
@@ -546,354 +875,31 @@ export default function AgentManagement() {
         </div>
       ))}
 
-      {/* Detail Drawer */}
+      {/* Detail Panel — <768px 用 MobileDrawer 右滑抽屉；≥768px 为右侧常驻面板（内容共用 detailBody） */}
+      <MobileDrawer
+        open={!!selectedAgentData}
+        onClose={() => setSelectedAgent(null)}
+        side="right"
+        widthClass="w-[92vw] max-w-[420px]"
+        title={selectedAgentData ? `${selectedAgentData.name} · 详情` : 'Agent 详情'}
+        ariaLabel="Agent 详情面板"
+      >
+        {detailBody}
+      </MobileDrawer>
+
       {selectedAgentData && (
-        <div className="fixed top-12 right-0 bottom-0 w-full sm:w-[480px] z-40 border-l overflow-y-auto animate-slide-in-right" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
-          <div className="p-6">
-            <div className="flex items-start justify-between mb-6">
-              <div className="flex items-center gap-4">
-                <div className="w-16 h-16 rounded-full flex items-center justify-center text-2xl font-bold" style={{ background: getAvatarGradient(selectedAgentData.name), color: '#0A0E1A' }}>{selectedAgentData.name.charAt(0)}</div>
-                <div><h2 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{selectedAgentData.name}</h2><span className="chip">{selectedAgentData.role}</span></div>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={() => openEditModal(selectedAgentData)} className="p-2 rounded hover:bg-white/5" style={{ color: 'var(--accent-cyan)' }} title="编辑"><Pencil className="w-4 h-4" /></button>
-                <button onClick={() => setSelectedAgent(null)} className="p-2 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><X className="w-5 h-5" /></button>
-              </div>
-            </div>
-
-            {/* Info */}
-            <div className="space-y-2 mb-6">
-              {[{ label: 'ID', value: selectedAgentData.id }, { label: '部门', value: selectedAgentData.department }, { label: '平台', value: selectedAgentData.platform }].map((item) => (
-                <div key={item.label} className="flex justify-between py-1.5 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
-                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{item.label}</span>
-                  <span className="text-xs font-mono" style={{ color: 'var(--text-primary)' }}>{item.value}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* Status */}
-            <div className="card-base mb-6"><div className="flex items-center justify-between">
-              <div className="flex items-center gap-2"><span className={getStatusMeta(selectedAgentData.status).dotClass} /><span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{getStatusMeta(selectedAgentData.status).label}</span></div>
-              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>心跳: {selectedAgentData.lastHeartbeat}</span>
-            </div></div>
-
-            {/* Permissions - editable */}
-            <div className="mb-6">
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="text-sm font-semibold flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}><Shield className="w-4 h-4" />权限配置</h4>
-                <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>点击切换</span>
-              </div>
-              <PermissionSelector
-                permissions={selectedAgentData.permissions}
-                onChange={async (perms) => {
-                  try {
-                    await updatePermissions(selectedAgentData.id, perms);
-                    addToast({ type: 'success', title: '权限已更新' });
-                  } catch (err: any) {
-                    addToast({ type: 'error', title: err.message || '权限更新失败' });
-                  }
-                }}
-                showPresets={true}
-              />
-            </div>
-
-            {/* API Keys */}
-            <div className="mb-6">
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="text-sm font-semibold flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}><KeyRound className="w-4 h-4" />API 密钥</h4>
-                <button
-                  onClick={() => { setShowGenerateForm(!showGenerateForm); setGeneratedKey(null); }}
-                  className="btn-ghost text-xs py-1.5 px-3 flex items-center gap-1.5"
-                >
-                  <Plus className="w-3.5 h-3.5" />生成密钥
-                </button>
-              </div>
-
-              {/* Generated key display - shown once after creation */}
-              {generatedKey && (
-                <div className="bg-yellow-900/20 border border-yellow-500/30 rounded p-3 mb-3">
-                  <p className="text-xs mb-2" style={{ color: 'var(--accent-amber)' }}>
-                    重要：请立即复制此密钥，它不会再次显示。
-                  </p>
-                  <div className="flex gap-2">
-                    <input
-                      readOnly
-                      value={generatedKey}
-                      className="input-base text-xs flex-1 font-mono"
-                      onClick={(e) => e.currentTarget.select()}
-                    />
-                    <button
-                      onClick={() => handleCopyKey(generatedKey)}
-                      className="btn-primary text-xs py-2 px-3 flex items-center gap-1.5"
-                    >
-                      <Copy className="w-3.5 h-3.5" />复制
-                    </button>
-                    <button
-                      onClick={() => setGeneratedKey(null)}
-                      className="btn-ghost text-xs py-2 px-3"
-                    >
-                      关闭
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Generate form */}
-              {showGenerateForm && (
-                <div className="card-base mb-3 space-y-3">
-                  <div>
-                    <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>密钥名称 *</label>
-                    <input
-                      type="text"
-                      value={keyName}
-                      onChange={(e) => setKeyName(e.target.value)}
-                      placeholder="如：生产环境密钥"
-                      className="input-base text-xs w-full"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>过期时间（可选）</label>
-                    <input
-                      type="date"
-                      value={keyExpiry}
-                      onChange={(e) => setKeyExpiry(e.target.value)}
-                      className="input-base text-xs w-full"
-                    />
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleGenerateApiKey}
-                      disabled={generatingKey || !keyName.trim()}
-                      className="btn-primary text-xs py-2 px-3 flex items-center gap-1.5"
-                    >
-                      <Plus className="w-3.5 h-3.5" />{generatingKey ? '生成中...' : '生成'}
-                    </button>
-                    <button
-                      onClick={() => { setShowGenerateForm(false); setKeyName(''); setKeyExpiry(''); }}
-                      className="btn-ghost text-xs py-2 px-3"
-                    >
-                      取消
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Key list */}
-              {apiKeysLoading ? (
-                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-muted)' }}>加载中...</div>
-              ) : apiKeys.length === 0 ? (
-                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-muted)' }}>暂无 API 密钥</div>
-              ) : (
-                <div className="space-y-2">
-                  {apiKeys.map((key) => (
-                    <div key={key.id} className="card-base p-3">
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-xs font-mono" style={{ color: 'var(--accent-cyan)' }}>{key.keyPrefix}...</span>
-                            <span className={`chip text-[10px] py-0.5 px-2 ${key.isActive === 'true' ? 'chip-emerald' : 'chip-rose'}`}>
-                              {key.isActive === 'true' ? '活跃' : '已撤销'}
-                            </span>
-                          </div>
-                          <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{key.name}</div>
-                        </div>
-                        {key.isActive === 'true' && (
-                          <button
-                            onClick={() => setRevokeConfirmId(key.id)}
-                            className="btn-danger text-[10px] py-1 px-2"
-                          >
-                            撤销
-                          </button>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-3 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                        <span>创建: {formatDate(key.createdAt)}</span>
-                        <span>·</span>
-                        <span>最后使用: {formatDate(key.lastUsedAt)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Revoke confirmation */}
-              {revokeConfirmId !== null && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
-                  <div className="animate-scale-in rounded-lg border p-5 w-[360px]" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
-                    <h4 className="text-base font-bold mb-2" style={{ color: 'var(--text-primary)' }}>确认撤销密钥</h4>
-                    <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>撤销后，使用此密钥的所有请求将立即被拒绝。此操作不可撤销。</p>
-                    <div className="flex justify-end gap-2">
-                      <button onClick={() => setRevokeConfirmId(null)} className="btn-ghost text-xs py-2 px-4">取消</button>
-                      <button onClick={() => handleRevokeApiKey(revokeConfirmId)} disabled={revokingKey} className="btn-danger text-xs py-2 px-4">
-                        {revokingKey ? '撤销中...' : '确认撤销'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* LLM Config */}
-            <div className="mb-6">
-              <h4 className="text-sm font-semibold mb-3 flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}><Zap className="w-4 h-4" />LLM 配置</h4>
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>使用系统模板</label>
-                  <select
-                    value={llmConfig.llm_template_id}
-                    onChange={(e) => handleSelectLlmTemplate(e.target.value)}
-                    className="input-base text-xs w-full"
-                  >
-                    <option value="">手动填写</option>
-                    {vectorTemplates.map((template) => (
-                      <option key={template.id} value={template.id}>
-                        {template.name} / {template.customProviderName || template.provider} / {template.model}
-                      </option>
-                    ))}
-                  </select>
-                  {vectorTemplatesLoading && (
-                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>正在加载系统模板...</p>
-                  )}
-                  {!vectorTemplatesLoading && vectorTemplates.length === 0 && (
-                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>暂无系统模板，可继续手动填写。</p>
-                  )}
-                  {selectedLlmTemplateSummary && (
-                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
-                      已套用模板 URL 与模型{selectedLlmTemplateSummary.hasApiKey ? '，并读取模板密钥；也可手动覆盖。' : '；模板未保存密钥，保留当前 API Key。'}
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>API URL</label>
-                  <input
-                    type="text"
-                    value={llmConfig.llm_api_url}
-                    onChange={(e) => setLlmConfig({ ...llmConfig, llm_api_url: e.target.value })}
-                    placeholder="https://api.openai.com/v1"
-                    className="input-base text-xs w-full"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>API Key</label>
-                  <div className="flex gap-2">
-                    <input
-                      type={showLlmKey ? 'text' : 'password'}
-                      value={llmConfig.llm_api_key}
-                      onChange={(e) => setLlmConfig({ ...llmConfig, llm_api_key: e.target.value })}
-                      placeholder="sk-..."
-                      className="input-base text-xs flex-1"
-                    />
-                    <button
-                      onClick={() => setShowLlmKey(!showLlmKey)}
-                      className="p-2 rounded border"
-                      style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                      title={showLlmKey ? '隐藏' : '显示'}
-                    >
-                      {showLlmKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>模型</label>
-                    {tianshuModels.length > 0 && (
-                      <select
-                        value=""
-                        onChange={(e) => handleSelectProviderModel(e.target.value)}
-                        className="input-base text-xs w-full mb-1.5"
-                      >
-                        <option value="">从天枢 {tianshuModels.length} 个模型中选择…</option>
-                        {tianshuModels.map((m) => (
-                          <option key={m} value={m}>{m}</option>
-                        ))}
-                      </select>
-                    )}
-                    <input
-                      type="text"
-                      list="tianshu-model-options"
-                      value={llmConfig.llm_model}
-                      onChange={(e) => setLlmConfig({ ...llmConfig, llm_model: e.target.value })}
-                      placeholder={tianshuModels.length > 0 ? "或手动输入模型名" : "gpt-3.5-turbo"}
-                      className="input-base text-xs w-full"
-                    />
-                    <datalist id="tianshu-model-options">
-                      {tianshuModels.map((m) => (
-                        <option key={m} value={m} />
-                      ))}
-                    </datalist>
-                    {tianshuModelsQuery.data?.ok && (
-                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
-                        下拉选择会自动填好网关 URL；API Key 填天枢密钥即可。
-                      </p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>Max Tokens</label>
-                    <input
-                      type="number"
-                      value={llmConfig.max_tokens}
-                      onChange={(e) => setLlmConfig({ ...llmConfig, max_tokens: Number(e.target.value) })}
-                      className="input-base text-xs w-full"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>Temperature: {llmConfig.temperature}</label>
-                  <input
-                    type="range"
-                    min={0}
-                    max={2}
-                    step={0.1}
-                    value={llmConfig.temperature}
-                    onChange={(e) => setLlmConfig({ ...llmConfig, temperature: Number(e.target.value) })}
-                    className="w-full"
-                  />
-                </div>
-                <div className="flex items-center gap-2 pt-2">
-                  <button onClick={handleTestLlm} className="btn-ghost text-xs py-2 px-3 flex items-center gap-1.5">
-                    <Zap className="w-3.5 h-3.5" />测试连接
-                  </button>
-                  <button onClick={handleSaveLlmConfig} className="btn-primary text-xs py-2 px-3 flex items-center gap-1.5">
-                    <Pencil className="w-3.5 h-3.5" />保存配置
-                  </button>
-                  {testLlmStatus !== 'idle' && testLlmStatus !== 'loading' && (
-                    <span className="text-xs" style={{ color: testLlmStatus === 'success' ? 'var(--accent-emerald)' : 'var(--accent-rose)' }}>
-                      {testLlmMessage}
-                    </span>
-                  )}
-                  {testLlmStatus === 'loading' && (
-                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>测试中...</span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Radar */}
-            <div className="mb-6"><h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>能力评估</h4>
-              <div className="flex justify-center">{renderRadarChart(selectedAgentData.abilities)}</div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3">
-                {ABILITY_LABELS.map((label, i) => {
-                  const vals = [selectedAgentData.abilities.knowledge, selectedAgentData.abilities.creation, selectedAgentData.abilities.coding, selectedAgentData.abilities.analysis, selectedAgentData.abilities.communication, selectedAgentData.abilities.learning];
-                  return (<div key={label} className="text-center"><div className="text-sm font-bold" style={{ color: 'var(--accent-cyan)' }}>{vals[i]}</div><div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{label}</div></div>);
-                })}
-              </div>
-            </div>
-
-            {/* Danger */}
-            <div className="pt-4" style={{ borderTop: '2px solid var(--accent-rose)' }}>
-              <button onClick={() => setShowDeleteConfirm(selectedAgentData.id)} className="btn-danger w-full text-xs py-2">断开连接</button>
-            </div>
-          </div>
+        <div className="hidden md:block fixed top-12 right-0 bottom-0 w-full sm:w-[480px] z-40 border-l overflow-y-auto animate-slide-in-right" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+          {detailBody}
         </div>
       )}
 
       {/* Add/Edit Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
-          <div className="animate-scale-in rounded-lg border p-4 sm:p-6 w-[560px] max-w-[calc(100vw-2rem)] max-h-[85vh] overflow-y-auto" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-4" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
+          <div className="animate-scale-in rounded-lg border p-4 sm:p-6 w-full max-w-[560px] sm:w-[560px] sm:max-w-[calc(100vw-2rem)] max-h-[85dvh] overflow-y-auto overscroll-contain" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>{isEditing ? '编辑 Agent' : '添加 Agent'}</h3>
-              <button onClick={() => { setShowAddModal(false); resetForm(); setIsEditing(false); }} className="p-1 rounded hover:bg-white/5"><X className="w-5 h-5" style={{ color: 'var(--text-muted)' }} /></button>
+              <button onClick={() => { setShowAddModal(false); resetForm(); setIsEditing(false); }} className={`${TAP_TARGET} p-1 rounded hover:bg-white/5`} aria-label="关闭弹窗"><X className="w-5 h-5" style={{ color: 'var(--text-muted)' }} /></button>
             </div>
 
             <div className="space-y-4">
@@ -957,10 +963,26 @@ export default function AgentManagement() {
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 mt-6 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-              <button onClick={() => { setShowAddModal(false); resetForm(); setIsEditing(false); }} className="btn-ghost text-xs py-2 px-4">取消</button>
-              <button onClick={isEditing ? handleEditAgent : handleAddAgent} className="btn-primary text-xs py-2 px-4 flex items-center gap-1.5">
+            <div className="flex flex-col sm:flex-row justify-end gap-2 mt-6 pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+              <button onClick={() => { setShowAddModal(false); resetForm(); setIsEditing(false); }} className="btn-ghost w-full sm:w-auto text-xs py-2 px-4 min-h-10 md:min-h-0">取消</button>
+              <button onClick={isEditing ? handleEditAgent : handleAddAgent} className="btn-primary w-full sm:w-auto text-xs py-2 px-4 min-h-10 md:min-h-0 flex items-center justify-center gap-1.5">
                 <Plus className="w-3.5 h-3.5" />{isEditing ? '保存修改' : '添加 Agent'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Revoke confirmation */}
+      {revokeConfirmId !== null && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-4" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
+          <div className="animate-scale-in rounded-lg border p-5 w-full max-w-[360px] sm:w-[360px]" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+            <h4 className="text-base font-bold mb-2" style={{ color: 'var(--text-primary)' }}>确认撤销密钥</h4>
+            <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>撤销后，使用此密钥的所有请求将立即被拒绝。此操作不可撤销。</p>
+            <div className="flex flex-col sm:flex-row justify-end gap-2">
+              <button onClick={() => setRevokeConfirmId(null)} className="btn-ghost w-full sm:w-auto text-xs py-2 px-4 min-h-10 md:min-h-0">取消</button>
+              <button onClick={() => handleRevokeApiKey(revokeConfirmId)} disabled={revokingKey} className="btn-danger w-full sm:w-auto text-xs py-2 px-4 min-h-10 md:min-h-0">
+                {revokingKey ? '撤销中...' : '确认撤销'}
               </button>
             </div>
           </div>
@@ -969,13 +991,13 @@ export default function AgentManagement() {
 
       {/* Delete Confirm */}
       {showDeleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
-          <div className="animate-scale-in rounded-lg border p-5 w-[360px]" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-4" style={{ backgroundColor: 'rgba(10,14,26,0.8)' }}>
+          <div className="animate-scale-in rounded-lg border p-5 w-full max-w-[360px] sm:w-[360px]" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
             <h4 className="text-base font-bold mb-2" style={{ color: 'var(--text-primary)' }}>确认删除</h4>
             <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>此操作不可撤销，Agent 的所有关联数据将被移除。</p>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setShowDeleteConfirm(null)} className="btn-ghost text-xs py-2 px-4">取消</button>
-              <button onClick={() => handleDeleteAgent(showDeleteConfirm)} className="btn-danger text-xs py-2 px-4">确认删除</button>
+            <div className="flex flex-col sm:flex-row justify-end gap-2">
+              <button onClick={() => setShowDeleteConfirm(null)} className="btn-ghost w-full sm:w-auto text-xs py-2 px-4 min-h-10 md:min-h-0">取消</button>
+              <button onClick={() => handleDeleteAgent(showDeleteConfirm)} className="btn-danger w-full sm:w-auto text-xs py-2 px-4 min-h-10 md:min-h-0">确认删除</button>
             </div>
           </div>
         </div>

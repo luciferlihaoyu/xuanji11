@@ -97,12 +97,12 @@ function RunningProgress({ job }: { job: { filesDone: number | null; filesTotal:
   if (job.status !== 'running') return null;
 
   return (
-    <div className="text-[10px] space-y-1" style={{ color: 'var(--text-muted)' }}>
+    <div className="text-xs space-y-1" style={{ color: 'var(--text-muted)' }}>
       <div className="flex items-center gap-2">
         <Loader2 className="w-3 h-3 animate-spin text-cyan-400" />
         <span>正在备份... {progress}%</span>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span>已处理: {done}/{total} 文件</span>
         {failed > 0 && <span className="text-rose-400">失败: {failed}</span>}
         <span>剩余: {Math.max(0, total - done - failed)}</span>
@@ -272,6 +272,8 @@ export default function BackupPage() {
   };
 
   const handleDelete = async (id: number) => {
+    // 危险操作二次确认：移动端按钮全宽后误触面积变大，删除前必须确认（家法与 DataSources/KnowledgeBase 一致）
+    if (!window.confirm(`确定删除备份任务 #${id}？`)) return;
     try {
       await deleteBackup({ id });
       addToast({ type: 'success', title: '已删除' });
@@ -297,15 +299,15 @@ export default function BackupPage() {
   };
 
   return (
-    <div className="p-6 max-w-6xl mx-auto" style={{ backgroundColor: 'var(--bg-primary)', minHeight: 'calc(100vh - 48px)' }}>
-      <div className="flex items-center justify-between mb-6">
-        <div>
+    <div className="p-3 sm:p-5 lg:p-6 max-w-6xl mx-auto min-h-app" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4 sm:mb-6">
+        <div className="min-w-0">
           <h1 className="text-xl font-bold mb-1" style={{ color: 'var(--text-primary)' }}>备份与恢复</h1>
           <p className="text-xs" style={{ color: 'var(--text-muted)' }}>管理数据备份任务和恢复操作</p>
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="btn-primary text-xs py-2 px-4 flex items-center gap-1.5"
+          className="btn-primary text-xs py-2 px-4 flex items-center justify-center gap-1.5 shrink-0 w-full sm:w-auto min-h-[44px] sm:min-h-0"
         >
           <Plus className="w-3.5 h-3.5" />新建备份
         </button>
@@ -313,16 +315,16 @@ export default function BackupPage() {
 
       {showCreate && (
         <div className="card-base p-4 mb-6">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between gap-2 mb-3">
             <h3 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>新建备份任务</h3>
-            <button onClick={() => { setShowCreate(false); setConnectionStatus({ testing: false }); }} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+            <button onClick={() => { setShowCreate(false); setConnectionStatus({ testing: false }); }} className="inline-flex items-center justify-center rounded hover:bg-white/5 min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0" style={{ color: 'var(--text-muted)' }} aria-label="关闭"><X className="w-4 h-4" /></button>
           </div>
           <form onSubmit={handleCreateBackup} className="space-y-3">
-            <div className="flex gap-2 mb-2">
+            <div className="flex flex-wrap gap-2 mb-2">
               <button
                 type="button"
                 onClick={() => setMode('immediate')}
-                className={`text-xs px-3 py-1.5 rounded ${mode === 'immediate' ? 'bg-cyan-500/20 text-cyan-400' : 'hover:bg-white/5'}`}
+                className={`text-xs px-3 py-1.5 rounded min-h-[44px] sm:min-h-0 ${mode === 'immediate' ? 'bg-cyan-500/20 text-cyan-400' : 'hover:bg-white/5'}`}
                 style={{ color: mode === 'immediate' ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
               >
                 立即备份
@@ -330,7 +332,7 @@ export default function BackupPage() {
               <button
                 type="button"
                 onClick={() => setMode('scheduled')}
-                className={`text-xs px-3 py-1.5 rounded ${mode === 'scheduled' ? 'bg-cyan-500/20 text-cyan-400' : 'hover:bg-white/5'}`}
+                className={`text-xs px-3 py-1.5 rounded min-h-[44px] sm:min-h-0 ${mode === 'scheduled' ? 'bg-cyan-500/20 text-cyan-400' : 'hover:bg-white/5'}`}
                 style={{ color: mode === 'scheduled' ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
               >
                 定时策略
@@ -395,7 +397,7 @@ export default function BackupPage() {
                     required
                   />
                 </div>
-                <div className="flex items-end">
+                <div className="flex items-end min-h-[44px] sm:min-h-0">
                   <label className="flex items-center gap-2 text-xs cursor-pointer">
                     <input
                       type="checkbox"
@@ -425,7 +427,7 @@ export default function BackupPage() {
               />
             )}
             <div className="flex justify-end">
-              <button type="submit" disabled={isSubmitting} className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50">
+              <button type="submit" disabled={isSubmitting} className="btn-primary text-xs py-1.5 px-3 flex items-center justify-center gap-1.5 w-full sm:w-auto min-h-[44px] sm:min-h-0 disabled:opacity-50">
                 {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Archive className="w-3.5 h-3.5" />}
                 {mode === 'scheduled' ? '创建策略' : '开始备份'}
               </button>
@@ -439,48 +441,49 @@ export default function BackupPage() {
           <Loader2 className="w-5 h-5 animate-spin mr-2" /> 加载中...
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
           {/* Backups */}
-          <div className="space-y-3">
+          <div className="space-y-3 min-w-0">
             <h2 className="text-sm font-bold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
               <Archive className="w-4 h-4" style={{ color: 'var(--accent-cyan)' }} />备份任务
             </h2>
 
             {schedules.length > 0 && (
               <div className="space-y-2">
-                <h3 className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>定时策略</h3>
+                <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>定时策略</h3>
                 {schedules.map((job) => (
                   <div key={job.id} className="card-base p-3">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
                         {(() => {
                           const Icon = TARGET_ICONS[job.target] || HardDrive;
-                          return <Icon className="w-4 h-4" style={{ color: 'var(--accent-cyan)' }} />;
+                          return <Icon className="w-4 h-4 shrink-0" style={{ color: 'var(--accent-cyan)' }} />;
                         })()}
-                        <div>
+                        <div className="min-w-0">
                           <div className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>{TARGET_NAMES[job.target] || job.target}</div>
-                          <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{job.sourcePath} · {parseCron(job.cron ?? '')}</div>
+                          <div className="text-xs break-all" style={{ color: 'var(--text-muted)' }}>{job.sourcePath} · {parseCron(job.cron ?? '')}</div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 shrink-0">
                         <button
                           onClick={() => handleToggleSchedule(job)}
-                          className={`text-[10px] px-2 py-1 rounded ${job.enabled === 'true' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-500/15 text-slate-400'}`}
+                          className={`text-xs px-2 py-1 rounded min-h-[44px] sm:min-h-0 ${job.enabled === 'true' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-500/15 text-slate-400'}`}
                         >
                           {job.enabled === 'true' ? '已启用' : '已禁用'}
                         </button>
                         <button
                           onClick={() => handleDelete(job.id)}
-                          className="p-1 rounded hover:bg-white/5"
+                          className="inline-flex items-center justify-center rounded hover:bg-white/5 min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0"
                           style={{ color: 'var(--accent-rose)' }}
                           title="删除"
+                          aria-label="删除备份任务"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3 mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                      <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />保留 {job.keepLastN ?? 7} 份</span>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                      <span className="flex items-center gap-1"><Calendar className="w-3 h-3 shrink-0" />保留 {job.keepLastN ?? 7} 份</span>
                       <span>下次运行: {formatTime(job.nextRunAt)}</span>
                     </div>
                   </div>
@@ -489,48 +492,49 @@ export default function BackupPage() {
             )}
 
             {runJobs.length === 0 ? (
-              <div className="card-base p-6 text-center">
+              <div className="card-base p-4 sm:p-6 text-center">
                 <Archive className="w-8 h-8 mx-auto mb-2" style={{ color: 'var(--text-muted)' }} />
                 <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>暂无备份任务</p>
               </div>
             ) : (
               runJobs.map((job) => (
                 <div key={job.id} className="card-base p-4">
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
                       {(() => {
                         const Icon = TARGET_ICONS[job.target] || HardDrive;
-                        return <Icon className="w-4 h-4" style={{ color: 'var(--accent-cyan)' }} />;
+                        return <Icon className="w-4 h-4 shrink-0" style={{ color: 'var(--accent-cyan)' }} />;
                       })()}
-                      <div>
+                      <div className="min-w-0">
                         <div className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>{TARGET_NAMES[job.target] || job.target}</div>
-                        <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{job.sourcePath}</div>
+                        <div className="text-xs break-all" style={{ color: 'var(--text-muted)' }}>{job.sourcePath}</div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 shrink-0">
                       {statusBadge(job.status)}
                       <button
                         onClick={() => handleDelete(job.id)}
-                        className="p-1 rounded hover:bg-white/5"
+                        className="inline-flex items-center justify-center rounded hover:bg-white/5 min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0"
                         style={{ color: 'var(--accent-rose)' }}
                         title="删除"
+                        aria-label="删除备份任务"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
                   <div className="mb-2">{progressBar(job.progress ?? 0, job.status)}</div>
-                  <div className="flex items-center gap-3 text-[10px] mb-2" style={{ color: 'var(--text-muted)' }}>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
                     <span>文件: {job.filesDone}/{job.filesTotal}</span>
                     {(job.filesFailed ?? 0) > 0 && <span className="text-rose-400">失败 {job.filesFailed ?? 0}</span>}
                     <span>{formatTime(job.createdAt)}</span>
                   </div>
                   {job.status === 'running' && <div className="mb-2"><RunningProgress job={job} /></div>}
-                  {job.error && <div className="text-[10px] mb-2" style={{ color: 'var(--accent-rose)' }}>{job.error}</div>}
-                  <div className="flex items-center gap-2">
+                  {job.error && <div className="text-xs break-all mb-2" style={{ color: 'var(--accent-rose)' }}>{job.error}</div>}
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => setSelectedBackupId(selectedBackupId === job.id ? null : job.id)}
-                      className="text-[10px] flex items-center gap-1 px-2 py-1 rounded hover:bg-white/5"
+                      className="text-xs flex items-center justify-center gap-1 px-2 py-1 rounded hover:bg-white/5 min-h-[44px] sm:min-h-0"
                       style={{ color: 'var(--text-secondary)' }}
                     >
                       {selectedBackupId === job.id ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
@@ -538,7 +542,7 @@ export default function BackupPage() {
                     </button>
                     <button
                       onClick={() => { setSelectedBackupId(job.id); }}
-                      className="text-[10px] flex items-center gap-1 px-2 py-1 rounded hover:bg-white/5"
+                      className="text-xs flex items-center justify-center gap-1 px-2 py-1 rounded hover:bg-white/5 min-h-[44px] sm:min-h-0"
                       style={{ color: 'var(--accent-cyan)' }}
                     >
                       <RotateCcw className="w-3 h-3" />恢复
@@ -547,12 +551,12 @@ export default function BackupPage() {
 
                   {selectedBackupId === job.id && selectedBackup && (
                     <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                      <h4 className="text-[10px] font-bold mb-2" style={{ color: 'var(--text-primary)' }}>备份文件清单</h4>
+                      <h4 className="text-xs font-bold mb-2" style={{ color: 'var(--text-primary)' }}>备份文件清单</h4>
                       {selectedBackup.files && selectedBackup.files.length > 0 ? (
-                        <div className="max-h-48 overflow-y-auto space-y-1">
+                        <div className="max-h-48 min-h-0 overflow-y-auto overscroll-contain space-y-1">
                           {selectedBackup.files.map((file) => (
-                            <div key={file.id} className="flex items-center justify-between text-[10px] py-1 px-2 rounded" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-                              <span className="truncate flex-1" style={{ color: 'var(--text-secondary)' }}>{file.relativePath}</span>
+                            <div key={file.id} className="flex items-center justify-between gap-2 text-xs py-1 px-2 rounded" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+                              <span className="truncate flex-1 min-w-0" style={{ color: 'var(--text-secondary)' }}>{file.relativePath}</span>
                               <div className="flex items-center gap-2 shrink-0">
                                 <span style={{ color: 'var(--text-muted)' }}>{formatBytes(file.size)}</span>
                                 {file.status === 'uploaded' ? <CheckCircle2 className="w-3 h-3 text-emerald-400" /> : <AlertCircle className="w-3 h-3 text-rose-400" />}
@@ -561,12 +565,12 @@ export default function BackupPage() {
                           ))}
                         </div>
                       ) : (
-                        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>暂无文件清单</p>
+                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>暂无文件清单</p>
                       )}
 
                       <form onSubmit={handleCreateRestore} className="mt-3 space-y-2">
                         <div>
-                          <label className="text-[10px] font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>恢复到路径</label>
+                          <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>恢复到路径</label>
                           <input
                             type="text"
                             value={restoreTargetPath}
@@ -575,7 +579,7 @@ export default function BackupPage() {
                             required
                           />
                         </div>
-                        <button type="submit" disabled={isSubmitting} className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-50">
+                        <button type="submit" disabled={isSubmitting} className="btn-primary text-xs py-1.5 px-3 flex items-center justify-center gap-1.5 w-full sm:w-auto min-h-[44px] sm:min-h-0 disabled:opacity-50">
                           {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
                           创建恢复任务
                         </button>
@@ -588,35 +592,35 @@ export default function BackupPage() {
           </div>
 
           {/* Restores */}
-          <div className="space-y-3">
+          <div className="space-y-3 min-w-0">
             <h2 className="text-sm font-bold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
               <RotateCcw className="w-4 h-4" style={{ color: 'var(--accent-cyan)' }} />恢复任务
             </h2>
             {restores.length === 0 ? (
-              <div className="card-base p-6 text-center">
+              <div className="card-base p-4 sm:p-6 text-center">
                 <RotateCcw className="w-8 h-8 mx-auto mb-2" style={{ color: 'var(--text-muted)' }} />
                 <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>暂无恢复任务</p>
               </div>
             ) : (
               restores.map((job) => (
                 <div key={job.id} className="card-base p-4">
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <Clock className="w-4 h-4" style={{ color: 'var(--accent-cyan)' }} />
-                      <div>
+                  <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Clock className="w-4 h-4 shrink-0" style={{ color: 'var(--accent-cyan)' }} />
+                      <div className="min-w-0">
                         <div className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>恢复 #{job.id}</div>
-                        <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{job.targetPath}</div>
+                        <div className="text-xs break-all" style={{ color: 'var(--text-muted)' }}>{job.targetPath}</div>
                       </div>
                     </div>
                     {restoreStatusBadge(job.status, job.manifestVerified)}
                   </div>
                   <div className="mb-2">{progressBar(job.progress ?? 0, job.status)}</div>
-                  <div className="flex items-center gap-3 text-[10px] mb-2" style={{ color: 'var(--text-muted)' }}>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
                     <span>文件: {job.filesDone}/{job.filesTotal}</span>
                     {(job.filesFailed ?? 0) > 0 && <span className="text-rose-400">失败 {job.filesFailed ?? 0}</span>}
                     <span>校验: {job.manifestVerified}</span>
                   </div>
-                  {job.error && <div className="text-[10px]" style={{ color: 'var(--accent-rose)' }}>{job.error}</div>}
+                  {job.error && <div className="text-xs break-all" style={{ color: 'var(--accent-rose)' }}>{job.error}</div>}
                 </div>
               ))
             )}

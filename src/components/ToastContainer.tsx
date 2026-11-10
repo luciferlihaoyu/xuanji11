@@ -22,14 +22,14 @@ export default function ToastContainer() {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed top-16 right-4 z-[100] flex flex-col gap-2">
+    <div className="fixed top-16 right-4 z-[100] flex flex-col gap-2 max-sm:left-3 max-sm:right-3 max-sm:top-auto max-sm:bottom-0 max-sm:w-auto max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       {toasts.map((toast) => {
         const Icon = iconMap[toast.type];
         const color = colorMap[toast.type];
         return (
           <div
             key={toast.id}
-            className="flex items-start gap-3 min-w-[280px] max-w-[400px] p-3 rounded-md border animate-slide-up"
+            className="flex items-start gap-3 min-w-[280px] max-w-[400px] p-3 rounded-md border animate-slide-up max-sm:min-w-0 max-sm:max-w-full"
             style={{
               backgroundColor: 'var(--bg-elevated)',
               borderColor: 'var(--border-subtle)',
@@ -49,7 +49,7 @@ export default function ToastContainer() {
             </div>
             <button
               onClick={() => removeToast(toast.id)}
-              className="p-0.5 rounded hover:opacity-70 transition-opacity"
+              className="p-0.5 rounded hover:opacity-70 transition-opacity max-sm:p-3.5"
               style={{ color: 'var(--text-muted)' }}
             >
               <X className="w-3.5 h-3.5" />

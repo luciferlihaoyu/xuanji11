@@ -34,16 +34,16 @@ export default function AuditLog() {
   const totalPages = data?.totalPages ?? 1;
 
   return (
-    <div className="p-6 h-[calc(100vh-48px)] overflow-y-auto" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      <div className="flex items-center justify-between mb-6">
+    <div className="p-3 sm:p-5 lg:p-6 h-app overflow-y-auto" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      <div className="flex items-center justify-between gap-2 mb-4 sm:mb-6">
         <h2 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>审计日志</h2>
         <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
           共 {data?.total ?? 0} 条记录
         </div>
       </div>
 
-      <div className="border rounded-md overflow-x-auto" style={{ borderColor: 'var(--border-subtle)' }}>
-        <table className="w-full text-sm">
+      <div className="border rounded-md table-scroll" style={{ borderColor: 'var(--border-subtle)' }}>
+        <table className="w-full min-w-[640px] sm:min-w-0 text-sm">
           <thead style={{ backgroundColor: 'var(--bg-tertiary)' }}>
             <tr>
               {['时间', '用户', '操作', '详情'].map((h) => (
@@ -70,27 +70,27 @@ export default function AuditLog() {
               logs.map((log) => (
                 <tr key={log.id} className="border-t" style={{ borderColor: 'var(--border-subtle)' }}>
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
-                      <Clock className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
+                    <div className="flex items-center gap-1.5 min-h-11 sm:min-h-0 break-words text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      <Clock className="w-3 h-3 shrink-0" style={{ color: 'var(--text-muted)' }} />
                       {formatDate(log.createdAt)}
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
-                      <User className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
+                    <div className="flex items-center gap-1.5 min-h-11 sm:min-h-0 break-words text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      <User className="w-3 h-3 shrink-0" style={{ color: 'var(--text-muted)' }} />
                       {log.userName || log.actorId || '系统'}
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--accent-cyan)' }}>
-                      <Activity className="w-3 h-3" />
+                    <div className="flex items-center gap-1.5 min-h-11 sm:min-h-0 break-words text-xs" style={{ color: 'var(--accent-cyan)' }}>
+                      <Activity className="w-3 h-3 shrink-0" />
                       {log.action}
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex items-start gap-1.5">
+                    <div className="flex items-start gap-1.5 min-h-11 sm:min-h-0 min-w-0">
                       <FileJson className="w-3 h-3 mt-0.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
-                      <pre className="text-[10px] font-mono whitespace-pre-wrap break-all max-w-md" style={{ color: 'var(--text-secondary)' }}>
+                      <pre className="text-[10px] font-mono whitespace-pre-wrap break-all max-w-full min-w-0 overflow-x-auto" style={{ color: 'var(--text-secondary)' }}>
                         {formatDetails(log.details)}
                       </pre>
                     </div>
@@ -103,11 +103,11 @@ export default function AuditLog() {
       </div>
 
       {totalPages > 1 && (
-        <div className="flex items-center justify-between mt-4">
+        <div className="flex items-center justify-between gap-2 mt-4">
           <button
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page <= 1}
-            className="btn-secondary text-xs py-2 px-3 flex items-center gap-1"
+            className="btn-secondary text-xs py-2 px-3 min-h-11 sm:min-h-0 flex items-center gap-1"
           >
             <ChevronLeft className="w-3.5 h-3.5" /> 上一页
           </button>
@@ -117,7 +117,7 @@ export default function AuditLog() {
           <button
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             disabled={page >= totalPages}
-            className="btn-secondary text-xs py-2 px-3 flex items-center gap-1"
+            className="btn-secondary text-xs py-2 px-3 min-h-11 sm:min-h-0 flex items-center gap-1"
           >
             下一页 <ChevronRight className="w-3.5 h-3.5" />
           </button>

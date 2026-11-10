@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import ForceGraph3D from '3d-force-graph';
 import { trpc } from '@/providers/trpc';
 import { useAppStore } from '@/store/useAppStore';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { loadSettings, saveSettings, ACCENT_DARK, ACCENT_LIGHT, type SpikeSettings } from './spike3d/presets';
 import { Hud, TooltipCard, Minimap, SearchBar, type MiniNode, type CatDef } from './spike3d/widgets';
 import { NodeSidebar, SettingsPanel } from './spike3d/panels';
@@ -143,6 +144,7 @@ export default function GraphWorkbench3D() {
   const [error, setError] = useState<string | null>(null);
   const theme = useAppStore(s => s.theme);
   const isDark = theme === 'dark';
+  const isMobile = useIsMobile();
   const graphQuery = trpc.knowledge.getGraph.useQuery();
 
   const [settings, setSettings] = useState<SpikeSettings>(loadSettings);
@@ -166,6 +168,8 @@ export default function GraphWorkbench3D() {
   const degSortedRef = useRef<number[]>([]);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  // 上一次生效的「自动旋转」值：null = 尚未应用过（用于区分「初值」与「用户主动拖动滑杆」）
+  const prevRotateRef = useRef<number | null>(null);
   const accentRef = useRef(ACCENT_DARK);
 
   const COLORS = isDark ? PALETTE.dark : PALETTE.light;
@@ -353,9 +357,11 @@ export default function GraphWorkbench3D() {
       (graph.controls() as unknown as { addEventListener: (t: string, cb: () => void) => void })
         .addEventListener('change', gateLabels);
 
-      graph.renderer().setPixelRatio(lowSpec ? 1 : Math.min(window.devicePixelRatio || 1, 2));
+      // 像素比：桌面仍按 HiDPI 上限 2；移动端封顶 1.5（390px 屏上点密度收益远不抵填充率开销）
+      graph.renderer().setPixelRatio(lowSpec ? 1 : Math.min(window.devicePixelRatio || 1, isMobile ? 1.5 : 2));
       const ctl = graph.controls() as { autoRotate: boolean; autoRotateSpeed: number };
-      ctl.autoRotate = !lowSpec;
+      // 自动旋转会让引擎常驻重绘；移动端关掉，只在用户拖动时出帧（省电、防烫手）
+      ctl.autoRotate = !lowSpec && !isMobile;
       ctl.autoRotateSpeed = settingsRef.current.autoRotate;
       setTimeout(() => {
         if (disposed) return;
@@ -398,8 +404,14 @@ export default function GraphWorkbench3D() {
     const linkF = g.d3Force('link') as unknown as { distance: (v: number) => void } | null;
     linkF?.distance(settings.linkDist * scale);
     g.linkCurvature(settings.curvature);
-    const ctl = g.controls() as { autoRotateSpeed: number };
+    const ctl = g.controls() as { autoRotate?: boolean; autoRotateSpeed: number };
     ctl.autoRotateSpeed = settings.autoRotate;
+    // 移动端为省电默认不自动旋转（见建图 effect）；用户主动拖过「自动旋转」滑杆后按用户意图生效，
+    // 否则这条滑杆在手机上会成为空操作（桌面侧顺带修好「速度为 0 却仍常驻旋转」的不一致）。
+    if (!isMobile || prevRotateRef.current !== null) {
+      ctl.autoRotate = !lowSpec && settings.autoRotate > 0;
+    }
+    prevRotateRef.current = settings.autoRotate;
     swirlRef.current = settings.swirl;
     labelCutRef.current = degSortedRef.current[Math.floor(degSortedRef.current.length * (1 - settings.labelPct / 100))] ?? 0;
     const gd = g.graphData() as { nodes: SpikeNode[] } | null;
@@ -473,9 +485,15 @@ export default function GraphWorkbench3D() {
         .spike3d-root input[type="range"] { appearance: none; -webkit-appearance: none; height: 4px; border-radius: 2px; background: ${isDark ? '#1a3a4a' : '#c8d4e0'}; outline: none; }
         .spike3d-root input[type="range"]::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: ${accent}; cursor: pointer; border: 2px solid ${isDark ? '#000' : '#fff'}; }
         .spike3d-root input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: ${accent}; cursor: pointer; border: 2px solid ${isDark ? '#000' : '#fff'}; }
+        /* 移动端：滑杆拇指放大到 20px、轨道加粗，手指好点（桌面样式不变） */
+        @media (max-width: 767px) {
+          .spike3d-root input[type="range"] { height: 6px; }
+          .spike3d-root input[type="range"]::-webkit-slider-thumb { width: 20px; height: 20px; }
+          .spike3d-root input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; }
+        }
       `}</style>
       <div className="spike3d-root" style={{ position: 'absolute', inset: 0 }}>
-        <div key={theme} ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
+        <div key={theme} ref={containerRef} className="touch-pan-canvas" style={{ position: 'absolute', inset: 0 }} />
 
         {/* 加载遮罩：图初始化期间先给反馈（标签纹理已 idle 懒加载，遮罩一闪而过） */}
         {graphReady === 0 && !error && (

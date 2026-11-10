@@ -24,9 +24,9 @@ export function AnalysisCards({ totals }: AnalysisCardsProps) {
       {cards.map((card) => {
         const value = totals?.[card.key] ?? 0;
         return (
-          <div key={card.key} className="card-base flex items-center gap-4">
+          <div key={card.key} className="card-base flex items-center gap-3 sm:gap-4 min-w-0">
             <div
-              className="w-10 h-10 rounded-lg flex items-center justify-center"
+              className="w-10 h-10 shrink-0 rounded-lg flex items-center justify-center"
               style={{
                 backgroundColor: `${card.color}15`,
                 border: `1px solid ${card.color}30`,
@@ -34,12 +34,12 @@ export function AnalysisCards({ totals }: AnalysisCardsProps) {
             >
               <card.icon className="w-5 h-5" style={{ color: card.color }} />
             </div>
-            <div>
-              <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+            <div className="min-w-0">
+              <div className="text-xs truncate" style={{ color: 'var(--text-secondary)' }}>
                 {card.label}
               </div>
               <div
-                className="text-2xl font-bold font-mono"
+                className="text-2xl font-bold font-mono break-words tabular-nums"
                 style={{ color: 'var(--text-primary)' }}
               >
                 {value.toLocaleString()}

@@ -165,27 +165,27 @@ export default function SearchResults() {
   };
 
   return (
-    <div className="p-3 sm:p-6 max-w-5xl mx-auto" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="p-3 sm:p-5 lg:p-6 max-w-5xl mx-auto min-h-app" style={{ backgroundColor: 'var(--bg-primary)' }}>
       <div className="mb-6">
         <form
           onSubmit={handleSearch}
-          className="flex items-center max-w-2xl mx-auto h-10 px-4 rounded-lg border mb-4"
+          className="flex items-center max-w-2xl mx-auto h-10 px-3 sm:px-4 rounded-lg border mb-4"
           style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}
         >
-          <Search className="w-5 h-5 mr-3" style={{ color: 'var(--accent-cyan)' }} />
+          <Search className="w-5 h-5 mr-3 shrink-0" style={{ color: 'var(--accent-cyan)' }} />
           <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索知识、文件、文档、Agent..."
-            className="flex-1 bg-transparent text-base outline-none"
+            className="flex-1 min-w-0 bg-transparent text-base outline-none"
             style={{ color: 'var(--text-primary)' }}
           />
           <button
             type="button"
             onClick={handleAsk}
             disabled={trimmed.length < 2 || asking}
-            className="ml-2 px-3 py-1 rounded text-xs font-medium transition-colors disabled:opacity-40"
+            className="ml-2 px-3 py-2 sm:py-1 rounded text-xs font-medium transition-colors disabled:opacity-40 shrink-0 min-h-10 sm:min-h-0"
             style={{ backgroundColor: 'rgba(167,139,250,0.15)', color: '#a78bfa' }}
             title="基于知识库生成带引用的回答"
           >
@@ -193,12 +193,12 @@ export default function SearchResults() {
           </button>
         </form>
 
-        {/* 过滤器栏 */}
-        <div className="flex items-center gap-2 flex-wrap max-w-2xl mx-auto mb-3">
+        {/* 过滤器栏：移动端单列堆叠（控件全宽），≥sm 恢复横排 wrap */}
+        <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2 max-w-2xl mx-auto mb-3">
           <select
             value={filterFolder}
             onChange={(e) => setFilterFolder(e.target.value === '' ? '' : Number(e.target.value))}
-            className="text-xs px-2 py-1.5 rounded border"
+            className="text-xs px-2 py-2 sm:py-1.5 rounded border w-full sm:w-auto min-h-10 sm:min-h-0"
             style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-primary)' }}
           >
             <option value=''>全部文件夹</option>
@@ -211,24 +211,24 @@ export default function SearchResults() {
             value={filterTag}
             onChange={(e) => setFilterTag(e.target.value)}
             placeholder="按标签过滤…"
-            className="text-xs px-2 py-1.5 rounded border w-28 outline-none"
+            className="text-xs px-2 py-2 sm:py-1.5 rounded border w-full sm:w-28 outline-none min-h-10 sm:min-h-0"
             style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-primary)' }}
           />
-          <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--text-secondary)' }} title="用 LLM 对候选结果精排（更准但更慢）">
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer min-h-10 sm:min-h-0" style={{ color: 'var(--text-secondary)' }} title="用 LLM 对候选结果精排（更准但更慢）">
             <input type="checkbox" checked={rerank} onChange={(e) => setRerank(e.target.checked)} className="accent-cyan-400" />
             AI 重排
           </label>
           {(filterFolder !== '' || filterTag.trim() || rerank) && (
             <button
               onClick={() => { setFilterFolder(''); setFilterTag(''); setRerank(false); }}
-              className="text-[10px] px-2 py-1 rounded"
+              className="text-xs sm:text-[10px] px-2 py-2 sm:py-1 rounded min-h-10 sm:min-h-0"
               style={{ color: 'var(--text-muted)' }}
             >清除</button>
           )}
         </div>
 
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0 flex-wrap">
             <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
               {trimmed ? `共找到 ${total} 个结果` : '输入关键词开始搜索'}
             </span>
@@ -256,29 +256,29 @@ export default function SearchResults() {
 
       {/* 引用式问答答案卡片 */}
       {askTriggered && (chatHistory.length > 0 || streaming || asking) && (
-        <div className="mb-6 rounded-lg border p-4 max-w-2xl mx-auto"
+        <div className="mb-6 rounded-lg border p-3 sm:p-4 max-w-2xl mx-auto"
           style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'rgba(167,139,250,0.3)' }}>
-          <div className="flex items-center gap-2 mb-3">
+          <div className="flex flex-wrap items-center gap-2 mb-3">
             <span className="text-xs font-semibold" style={{ color: '#a78bfa' }}>知识库问答</span>
             {askMeta?.insufficient && (
               <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>
                 证据不足
               </span>
             )}
-            <span className="text-[10px] ml-auto" style={{ color: 'var(--text-muted)' }}>
+            <span className="text-[11px] sm:text-[10px] ml-auto break-words" style={{ color: 'var(--text-muted)' }}>
               {askMeta ? `${askMeta.evidenceCount} 条证据${askMeta.model ? ` · ${askMeta.model}` : ''}` : asking ? '检索+生成中…' : ''}
             </span>
             <button
               onClick={() => { setChatHistory([]); setAskMeta(null); setAskTriggered(false); }}
-              className="text-[10px] px-1.5 py-0.5 rounded hover:bg-white/5"
+              className="text-xs sm:text-[10px] px-2 py-2 sm:py-0.5 rounded hover:bg-white/5 inline-flex items-center justify-center min-h-10 sm:min-h-0 shrink-0"
               style={{ color: 'var(--text-muted)' }}
               title="清空对话"
             >清空</button>
           </div>
-          <div className="space-y-3 max-h-[400px] overflow-y-auto">
+          <div className="space-y-3 max-h-[400px] overflow-y-auto min-h-0 overscroll-contain">
             {chatHistory.map((msg, i) => (
               <div key={i} className={msg.role === 'user' ? 'text-right' : ''}>
-                <div className={`inline-block text-sm whitespace-pre-wrap leading-relaxed rounded-lg px-3 py-2 max-w-[90%] text-left ${msg.role === 'user' ? '' : 'w-full'}`}
+                <div className={`inline-block text-sm whitespace-pre-wrap leading-relaxed rounded-lg px-3 py-2 max-w-[90%] text-left break-words ${msg.role === 'user' ? '' : 'w-full'}`}
                   style={{
                     backgroundColor: msg.role === 'user' ? 'rgba(34,211,238,0.12)' : 'var(--bg-tertiary)',
                     color: 'var(--text-primary)',
@@ -288,7 +288,7 @@ export default function SearchResults() {
               </div>
             ))}
             {streaming && (
-              <div className="text-sm whitespace-pre-wrap leading-relaxed rounded-lg px-3 py-2"
+              <div className="text-sm whitespace-pre-wrap leading-relaxed rounded-lg px-3 py-2 break-words"
                 style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
                 {streaming}<span className="animate-pulse" style={{ color: '#a78bfa' }}>▍</span>
               </div>
@@ -302,7 +302,7 @@ export default function SearchResults() {
           </div>
           {askMeta && askMeta.citations.length > 0 && (
             <div className="mt-3 pt-3 border-t space-y-1.5" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="text-[10px] font-medium mb-1" style={{ color: 'var(--text-muted)' }}>引用来源（可点击跳转到命中段落）：</div>
+              <div className="text-xs sm:text-[10px] font-medium mb-1" style={{ color: 'var(--text-muted)' }}>引用来源（可点击跳转到命中段落）：</div>
               {askMeta.citations.map((c) => {
                 const chunk = c.anchor?.chunkIndex;
                 const hasChunk = typeof chunk === 'number';
@@ -312,13 +312,13 @@ export default function SearchResults() {
                     <div className="min-w-0 flex-1">
                       <Link
                         to={hasChunk ? `/doc/${c.documentId}?q=${encodeURIComponent(trimmed)}#chunk-${chunk}` : `/doc/${c.documentId}`}
-                        className="hover:underline"
+                        className="hover:underline break-words"
                         style={{ color: 'var(--accent-cyan)' }}
                         title={hasChunk ? `定位到第 ${chunk + 1} 块` : '该文档无块级定位信息'}
                       >
                         {c.title}
                       </Link>
-                      <span className="ml-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      <span className="ml-2 text-[11px] sm:text-[10px] break-words" style={{ color: 'var(--text-muted)' }}>
                         {hasChunk ? `第 ${chunk + 1} 块` : '文档级'}
                         {c.anchor?.heading ? ` · ${c.anchor.heading}` : ''}
                         {typeof c.score === 'number' ? ` · 分 ${c.score.toFixed(3)}` : ''}
@@ -366,10 +366,10 @@ export default function SearchResults() {
               onClick={() => { const n = Number(item.id); if (Number.isFinite(n)) logClick(n); }}
               className="block card-base p-4 hover:border-[var(--accent-cyan)] transition-colors"
             >
-              <h4 className="text-base font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+              <h4 className="text-base font-semibold mb-1 break-words" style={{ color: 'var(--text-primary)' }}>
                 {highlightText(item.title ?? '(无标题)', query)}
               </h4>
-              <p className="text-sm mb-2 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
+              <p className="text-sm mb-2 line-clamp-2 break-words" style={{ color: 'var(--text-secondary)' }}>
                 {highlightText(item.snippet ?? '', query)}
               </p>
               <div className="flex items-center gap-2 flex-wrap">
@@ -414,10 +414,10 @@ export default function SearchResults() {
               to={`/doc/${doc.id}`}
               className="block card-base p-4 hover:border-[var(--accent-cyan)] transition-colors"
             >
-              <h4 className="text-base font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+              <h4 className="text-base font-semibold mb-1 break-words" style={{ color: 'var(--text-primary)' }}>
                 {highlightText(doc.title, query)}
               </h4>
-              <p className="text-sm mb-2 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
+              <p className="text-sm mb-2 line-clamp-2 break-words" style={{ color: 'var(--text-secondary)' }}>
                 {highlightText((doc.content ?? '').slice(0, 200), query)}
               </p>
               <div className="flex items-center gap-2 flex-wrap">
@@ -440,7 +440,7 @@ export default function SearchResults() {
               key={file.id}
               className="card-base p-4"
             >
-              <h4 className="text-base font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+              <h4 className="text-base font-semibold mb-1 break-words" style={{ color: 'var(--text-primary)' }}>
                 {highlightText(file.originalName, query)}
               </h4>
               <div className="flex items-center gap-2 flex-wrap">
@@ -467,7 +467,7 @@ export default function SearchResults() {
             >
               <div className="flex items-center gap-3">
                 <div
-                  className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold"
+                  className="w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-xs font-bold"
                   style={{
                     background: 'linear-gradient(135deg, rgba(0,229,255,0.2), rgba(167,139,250,0.2))',
                     border: '1px solid var(--accent-cyan)',
@@ -476,11 +476,11 @@ export default function SearchResults() {
                 >
                   {agent.name.slice(0, 1)}
                 </div>
-                <div className="flex-1">
-                  <h4 className="text-base font-semibold mb-0.5" style={{ color: 'var(--text-primary)' }}>
+                <div className="flex-1 min-w-0">
+                  <h4 className="text-base font-semibold mb-0.5 break-words" style={{ color: 'var(--text-primary)' }}>
                     {highlightText(agent.name, query)}
                   </h4>
-                  <p className="text-sm line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
+                  <p className="text-sm line-clamp-2 break-words" style={{ color: 'var(--text-secondary)' }}>
                     {highlightText(agent.description ?? '', query)}
                   </p>
                   <div className="flex items-center gap-2 flex-wrap mt-1">

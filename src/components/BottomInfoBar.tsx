@@ -18,7 +18,7 @@ export default function BottomInfoBar({ nodeCount, edgeCount, onlineAgents, tota
 
   return (
     <div
-      className="flex items-center gap-6 px-5 py-2 rounded-full border"
+      className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 px-3 py-1.5 sm:gap-x-4 md:gap-6 md:px-5 md:py-2 rounded-full border max-w-[calc(100vw-1.5rem)]"
       style={{
         backgroundColor: 'var(--bg-secondary)',
         borderColor: 'var(--border-subtle)',
@@ -27,7 +27,7 @@ export default function BottomInfoBar({ nodeCount, edgeCount, onlineAgents, tota
     >
       {items.map((item, i) => (
         <div key={i} className="flex items-center gap-1.5">
-          <item.icon className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+          <item.icon className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
           <span className="text-xs whitespace-nowrap" style={{ color: 'var(--text-secondary)' }}>
             {item.label}
           </span>

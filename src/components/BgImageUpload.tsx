@@ -82,7 +82,7 @@ export default function BgImageUpload() {
               }}
               disabled={isSetting}
               title="删除背景图"
-              className="absolute top-1.5 right-1.5 p-1.5 rounded-full bg-black/70 hover:bg-red-500/90 transition-colors disabled:opacity-50"
+              className="absolute top-1.5 right-1.5 p-1.5 rounded-full bg-black/70 hover:bg-red-500/90 transition-colors disabled:opacity-50 max-sm:p-3.5"
             >
               <X className="w-3.5 h-3.5 text-white" />
             </button>
@@ -104,7 +104,7 @@ export default function BgImageUpload() {
               onChange={(e) => setGraphBgScale(Number(e.target.value))}
               onMouseUp={() => setSetting('ui_background_image_scale', String(graphBgScale), 'ui').catch(() => {})}
               onTouchEnd={() => setSetting('ui_background_image_scale', String(graphBgScale), 'ui').catch(() => {})}
-              className="w-full h-1 rounded-full appearance-none cursor-pointer"
+              className="w-full h-1 rounded-full appearance-none cursor-pointer max-sm:h-2"
               style={{ backgroundColor: 'var(--bg-tertiary)', accentColor: 'var(--accent-cyan)' }}
             />
           </div>

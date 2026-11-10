@@ -5,10 +5,19 @@ import { marked, Renderer } from 'marked';
 import type { Token, Tokens } from 'marked';
 import { useKbTree, useDocument, useIngestion, useClusterDocuments } from '@/hooks/useKb';
 import { useAppStore } from '@/store/useAppStore';
-import { Search, Folder, FolderOpen, FileText, ChevronRight, ChevronDown, Plus, Pencil, Trash2, X, Check, FileCode, Image, File, Save, RotateCcw, Tag, MoreHorizontal, Sparkles, Boxes, History } from 'lucide-react';
+import { Search, Folder, FolderOpen, FileText, ChevronRight, ChevronDown, Plus, Pencil, Trash2, X, Check, FileCode, Image, File, Save, RotateCcw, Tag, MoreHorizontal, Sparkles, Boxes, History, PanelLeft, PanelRight } from 'lucide-react';
+import MobileDrawer from '@/components/MobileDrawer';
 import type { KbFolder, KbDocument } from '@db/schema';
 
 const markdownRenderer = new Renderer();
+
+/**
+ * 触控热区 ≥40×40（移动端放大，md 起还原桌面原尺寸）。
+ * 说明：基座 `.tap-target` 落在 @layer utilities 尾部（晚于 Tailwind 生成的 md: 变体），
+ * 会盖掉 `md:min-w-0` / `md:hidden` 这类还原类，故本页一律用这里的显式类，
+ * 只有 MobileDrawer 内部（祖先已 md:hidden）才直接用 `tap-target`。
+ */
+const TAP_TARGET = 'min-w-[40px] min-h-[40px] inline-flex items-center justify-center md:min-w-0 md:min-h-0';
 
 const FileIcon = ({ type, size = 16 }: { type?: string; size?: number }) => {
   const props = { size, className: 'shrink-0' };
@@ -80,7 +89,7 @@ markdownRenderer.list = ({ ordered, items }) => {
   return ordered ? `<ol>${body}</ol>` : `<ul>${body}</ul>`;
 };
 markdownRenderer.listitem = renderListItem;
-markdownRenderer.code = ({ text }) => `<pre class="rounded-md p-4 my-4 overflow-x-auto text-xs" style="background:#0D1117;border:1px solid var(--border-subtle)"><code>${escapeHtml(text)}</code></pre>`;
+markdownRenderer.code = ({ text }) => `<pre class="rounded-md p-4 my-4 max-w-full overflow-x-auto text-xs" style="background:#0D1117;border:1px solid var(--border-subtle)"><code>${escapeHtml(text)}</code></pre>`;
 markdownRenderer.codespan = ({ text }) => `<code class="px-1 py-0.5 rounded text-xs" style="background:#0D1117;color:var(--text-primary)">${escapeHtml(text)}</code>`;
 markdownRenderer.blockquote = ({ tokens }) => `<blockquote class="pl-4 py-3 pr-4 my-4 rounded-r-md border-l-2" style="border-color:var(--accent-cyan);background:rgba(34,211,238,0.05);color:var(--text-secondary)">${marked.Parser.parse(tokens, { renderer: markdownRenderer })}</blockquote>`;
 markdownRenderer.paragraph = ({ tokens }) => `<p class="mb-3 text-sm leading-relaxed" style="color:var(--text-secondary)">${renderInline(tokens)}</p>`;
@@ -257,6 +266,7 @@ function TreeItem({ node, depth = 0, activeFile, onSelect, onRename, onDelete, o
   const [expanded, setExpanded] = useState(depth < 1);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(node.name);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isActive = activeFile === node.id;
   const isFolder = node.type === 'folder';
 
@@ -270,7 +280,7 @@ function TreeItem({ node, depth = 0, activeFile, onSelect, onRename, onDelete, o
   return (
     <div>
       <div
-        className="flex items-center gap-1 py-1 pr-2 rounded text-[13px] group relative"
+        className="flex items-center gap-1 py-1 pr-2 rounded text-[13px] group relative min-h-[44px] md:min-h-0"
         style={{
           paddingLeft: `${depth * 12 + 6}px`,
           backgroundColor: isActive ? 'rgba(34,211,238,0.1)' : 'transparent',
@@ -281,24 +291,24 @@ function TreeItem({ node, depth = 0, activeFile, onSelect, onRename, onDelete, o
         onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
       >
         {isFolder ? (
-          <button onClick={() => setExpanded(!expanded)} className="p-0.5 shrink-0">
+          <button onClick={() => setExpanded(!expanded)} className="p-0.5 shrink-0 min-w-[32px] min-h-[32px] inline-flex items-center justify-center md:min-w-0 md:min-h-0">
             {expanded ? <ChevronDown className="w-3 h-3" style={{ color: 'var(--text-muted)' }} /> : <ChevronRight className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />}
           </button>
-        ) : (<span className="w-4" />)}
+        ) : (<span className="w-4 shrink-0" />)}
 
-        <button onClick={() => onSelect(node.id)} className="flex items-center gap-1.5 flex-1 min-w-0 text-left">
+        <button onClick={() => onSelect(node.id)} className="flex items-center gap-1.5 flex-1 min-w-0 py-2.5 text-left md:py-0">
           {isFolder ? (expanded ? <FolderOpen className="w-4 h-4 shrink-0" style={{ color: 'var(--accent-amber)' }} /> : <Folder className="w-4 h-4 shrink-0" style={{ color: 'var(--accent-amber)' }} />) : <FileIcon type={node.fileType} />}
           {isRenaming ? (
             <div className="flex items-center gap-1 flex-1" onClick={(e) => e.stopPropagation()}>
-              <input value={renameValue} onChange={(e) => setRenameValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleRename(); if (e.key === 'Escape') { setIsRenaming(false); setRenameValue(node.name); } }} autoFocus className="input-base text-xs h-6 py-0.5 px-1.5 flex-1" />
-              <button onClick={handleRename} className="p-0.5"><Check className="w-3 h-3" style={{ color: 'var(--accent-emerald)' }} /></button>
-              <button onClick={() => { setIsRenaming(false); setRenameValue(node.name); }} className="p-0.5"><X className="w-3 h-3" style={{ color: 'var(--accent-rose)' }} /></button>
+              <input value={renameValue} onChange={(e) => setRenameValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleRename(); if (e.key === 'Escape') { setIsRenaming(false); setRenameValue(node.name); } }} autoFocus className="input-base text-xs h-9 py-0.5 px-1.5 flex-1 md:h-6" />
+              <button onClick={handleRename} className="p-0.5 shrink-0 min-w-[32px] min-h-[32px] inline-flex items-center justify-center md:min-w-0 md:min-h-0"><Check className="w-3 h-3" style={{ color: 'var(--accent-emerald)' }} /></button>
+              <button onClick={() => { setIsRenaming(false); setRenameValue(node.name); }} className="p-0.5 shrink-0 min-w-[32px] min-h-[32px] inline-flex items-center justify-center md:min-w-0 md:min-h-0"><X className="w-3 h-3" style={{ color: 'var(--accent-rose)' }} /></button>
             </div>
           ) : (<span className="truncate">{node.name}</span>)}
         </button>
 
         {!isRenaming && (
-          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+          <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
             {isFolder && (
               <>
                 <button onClick={(e) => { e.stopPropagation(); onAdd(node.id, 'folder'); }} className="p-0.5 rounded hover:bg-white/10" title="新建文件夹" style={{ color: 'var(--text-muted)' }}><FolderOpen className="w-3 h-3" /></button>
@@ -309,7 +319,35 @@ function TreeItem({ node, depth = 0, activeFile, onSelect, onRename, onDelete, o
             <button onClick={(e) => { e.stopPropagation(); onDelete(node.id); }} className="p-0.5 rounded hover:bg-white/10" title="删除" style={{ color: 'var(--text-muted)' }}><Trash2 className="w-3 h-3" /></button>
           </div>
         )}
+
+        {/* 移动端常显操作入口（触屏无 hover，桌面隐藏） */}
+        {!isRenaming && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setMobileMenuOpen((v) => !v); }}
+            className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center rounded md:hidden shrink-0"
+            style={{ color: 'var(--text-muted)' }}
+            aria-label={mobileMenuOpen ? `收起「${node.name}」的操作` : `展开「${node.name}」的操作`}
+            aria-expanded={mobileMenuOpen}
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
+        )}
       </div>
+
+      {mobileMenuOpen && !isRenaming && (
+        <div className="md:hidden flex items-center flex-wrap gap-1 pb-2" style={{ paddingLeft: `${depth * 12 + 6}px` }}>
+          {isFolder && (
+            <>
+              <button onClick={() => { setMobileMenuOpen(false); onAdd(node.id, 'folder'); }} className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center px-2 rounded border text-xs" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}><FolderOpen className="w-3.5 h-3.5" /><span className="ml-1">新建文件夹</span></button>
+              <button onClick={() => { setMobileMenuOpen(false); onAdd(node.id, 'file'); }} className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center px-2 rounded border text-xs" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}><Plus className="w-3.5 h-3.5" /><span className="ml-1">新建文件</span></button>
+            </>
+          )}
+          <button onClick={() => { setMobileMenuOpen(false); setIsRenaming(true); }} className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center px-2 rounded border text-xs" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}><Pencil className="w-3.5 h-3.5" /><span className="ml-1">重命名</span></button>
+          <button onClick={() => { setMobileMenuOpen(false); onDelete(node.id); }} className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center px-2 rounded border text-xs" style={{ borderColor: 'var(--border-subtle)', color: 'var(--accent-rose)' }}><Trash2 className="w-3.5 h-3.5" /><span className="ml-1">删除</span></button>
+        </div>
+      )}
+
       {isFolder && expanded && node.children.length > 0 && (
         <div>{node.children.map((child) => (<TreeItem key={child.id} node={child} depth={depth + 1} activeFile={activeFile} onSelect={onSelect} onRename={onRename} onDelete={onDelete} onAdd={onAdd} onMove={onMove} />))}</div>
       )}
@@ -334,6 +372,9 @@ export default function KnowledgeBase() {
   const [editMode, setEditMode] = useState<'edit' | 'preview' | 'split'>('preview');
   const [rightPanel, setRightPanel] = useState<'outline' | 'links' | 'tags'>('outline');
   const [sidebarVisible, setSidebarVisible] = useState(true);
+  // 移动端（<768px）两个抽屉：与桌面常驻侧栏分开管理，避免共享状态导致抽屉首屏自动弹出
+  const [mobileTreeOpen, setMobileTreeOpen] = useState(false);
+  const [mobileRightOpen, setMobileRightOpen] = useState(false);
   const [showRecycleBin, setShowRecycleBin] = useState(false);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
@@ -583,159 +624,229 @@ export default function KnowledgeBase() {
 
   if (isLoading) {
     return (
-      <div className="flex h-[calc(100vh-48px)] items-center justify-center" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      <div className="flex h-app items-center justify-center" style={{ backgroundColor: 'var(--bg-primary)' }}>
         <div className="text-sm" style={{ color: 'var(--text-muted)' }}>加载知识库...</div>
       </div>
     );
   }
 
-  return (
-    <div className="flex h-[calc(100vh-48px)]" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      {/* Left Sidebar */}
-      {sidebarVisible && (
-        <>
-        <div className="fixed inset-0 top-12 bg-black/40 z-20 md:hidden" onClick={() => setSidebarVisible(false)} />
-        <div className="absolute md:relative z-30 h-full w-[260px] shrink-0 border-r flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
-          <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>主知识库</span>
-              <div className="flex gap-1">
-                <button onClick={() => setSidebarVisible(false)} className="md:hidden p-1 rounded hover:bg-white/5" title="收起侧栏" style={{ color: 'var(--text-muted)' }}><X className="w-3.5 h-3.5" /></button>
-                <button onClick={handleCluster} className="p-1 rounded hover:bg-white/5" title="语义聚类：AI 自动发现主题群" style={{ color: '#7aa2f7' }}><Boxes className="w-3.5 h-3.5" /></button>
-                <button onClick={() => handleAddNode(null, 'folder')} className="p-1 rounded hover:bg-white/5" title="新建文件夹" style={{ color: 'var(--text-muted)' }}><FolderOpen className="w-3.5 h-3.5" /></button>
-                <button onClick={() => handleAddNode(null, 'file')} className="p-1 rounded hover:bg-white/5" title="新建文档" style={{ color: 'var(--text-muted)' }}><Plus className="w-3.5 h-3.5" /></button>
-              </div>
-            </div>
-            <div className="flex items-center h-7 px-2 rounded border" style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)' }}>
-              <Search className="w-3.5 h-3.5 mr-1.5" style={{ color: 'var(--text-muted)' }} />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => handleSearch(e.target.value)}
-                placeholder="搜索文档..."
-                className="bg-transparent text-xs outline-none w-full"
-                style={{ color: 'var(--text-primary)' }}
-              />
-            </div>
+  // 左侧目录面板：桌面常驻侧栏与移动端抽屉共用同一份结构（只切换外层容器）
+  const treePanel = (
+    <div className="flex flex-col h-full min-h-0">
+      <div className="p-3 border-b shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
+        <div className="flex items-center justify-between gap-1 mb-2">
+          <span className="hidden md:inline text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>主知识库</span>
+          <div className="flex gap-1 ml-auto">
+            <button onClick={handleCluster} className={`${TAP_TARGET} p-1 rounded hover:bg-white/5 md:p-1`} title="语义聚类：AI 自动发现主题群" aria-label="语义聚类" style={{ color: '#7aa2f7' }}><Boxes className="w-4 h-4 md:w-3.5 md:h-3.5" /></button>
+            <button onClick={() => handleAddNode(null, 'folder')} className={`${TAP_TARGET} p-1 rounded hover:bg-white/5 md:p-1`} title="新建文件夹" aria-label="新建文件夹" style={{ color: 'var(--text-muted)' }}><FolderOpen className="w-4 h-4 md:w-3.5 md:h-3.5" /></button>
+            <button onClick={() => handleAddNode(null, 'file')} className={`${TAP_TARGET} p-1 rounded hover:bg-white/5 md:p-1`} title="新建文档" aria-label="新建文档" style={{ color: 'var(--text-muted)' }}><Plus className="w-4 h-4 md:w-3.5 md:h-3.5" /></button>
           </div>
+        </div>
+        <div className="flex items-center h-9 px-2 rounded border md:h-7" style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-subtle)' }}>
+          <Search className="w-3.5 h-3.5 mr-1.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => handleSearch(e.target.value)}
+            placeholder="搜索文档..."
+            className="bg-transparent text-xs outline-none w-full min-w-0"
+            style={{ color: 'var(--text-primary)' }}
+          />
+        </div>
+      </div>
 
-          {searchQuery ? (
-            <div className="flex-1 overflow-y-auto p-1">
-              {isSearching ? (
-                <div className="text-xs p-2" style={{ color: 'var(--text-muted)' }}>搜索中...</div>
-              ) : searchResults.length === 0 ? (
-                <div className="text-xs p-2" style={{ color: 'var(--text-muted)' }}>无结果</div>
-              ) : (
-                searchResults.map((doc) => (
-                  <button
-                    key={doc.id}
-                    onClick={() => setActiveFile(`doc-${doc.id}`)}
-                    className="w-full text-left px-2 py-1 text-xs rounded hover:bg-white/5"
-                    style={{ color: activeFile === `doc-${doc.id}` ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
-                  >
-                    {doc.title}
-                  </button>
-                ))
-              )}
-            </div>
+      {searchQuery ? (
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-1">
+          {isSearching ? (
+            <div className="text-xs p-2" style={{ color: 'var(--text-muted)' }}>搜索中...</div>
+          ) : searchResults.length === 0 ? (
+            <div className="text-xs p-2" style={{ color: 'var(--text-muted)' }}>无结果</div>
           ) : (
-            <>
-              {addingTo !== null && (
-                <div className="px-3 py-2 flex items-center gap-1" style={{ backgroundColor: 'rgba(34,211,238,0.05)' }}>
-                  <input value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') confirmAdd(); if (e.key === 'Escape') setAddingTo(null); }} autoFocus className="input-base text-xs h-7 py-0.5 px-1.5 flex-1" placeholder={addingType === 'folder' ? '文件夹名' : '文件名.md'} />
-                  <button onClick={confirmAdd} className="p-1"><Check className="w-3.5 h-3.5" style={{ color: 'var(--accent-emerald)' }} /></button>
-                  <button onClick={() => setAddingTo(null)} className="p-1"><X className="w-3.5 h-3.5" style={{ color: 'var(--accent-rose)' }} /></button>
-                </div>
-              )}
-
-              <div className="flex-1 overflow-y-auto p-1">
-                {tree.map((node) => (
-                  <TreeItem key={node.id} node={node} activeFile={activeFile} onSelect={setActiveFile} onRename={handleRename} onDelete={handleDelete} onAdd={handleAddNode} onMove={handleMove} />
-                ))}
-              </div>
-
-              <div className="px-3 py-2 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
-                <button
-                  onClick={() => setShowRecycleBin(true)}
-                  className="w-full flex items-center gap-1.5 text-[11px] py-1 hover:text-[var(--accent-cyan)] transition-colors"
-                  style={{ color: 'var(--text-muted)' }}
-                >
-                  <Trash2 className="w-3 h-3" />
-                  回收站
-                </button>
-              </div>
-              <div className="p-3 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px] font-semibold mb-1.5" style={{ color: 'var(--text-muted)' }}>最近编辑</div>
-                <div className="space-y-1">
-                  {recentDocs.map((doc) => (
-                    <button
-                      key={doc.id}
-                      onClick={() => setActiveFile(`doc-${doc.id}`)}
-                      className="w-full text-left text-[10px] truncate hover:text-[var(--accent-cyan)]"
-                      style={{ color: activeFile === `doc-${doc.id}` ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
-                    >
-                      {doc.title}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </>
+            searchResults.map((doc) => (
+              <button
+                key={doc.id}
+                onClick={() => { setActiveFile(`doc-${doc.id}`); setMobileTreeOpen(false); }}
+                className="w-full text-left px-2 py-2 text-xs rounded hover:bg-white/5 truncate md:py-1"
+                style={{ color: activeFile === `doc-${doc.id}` ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
+              >
+                {doc.title}
+              </button>
+            ))
           )}
         </div>
+      ) : (
+        <>
+          {addingTo !== null && (
+            <div className="px-3 py-2 flex items-center gap-1 shrink-0" style={{ backgroundColor: 'rgba(34,211,238,0.05)' }}>
+              <input value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') confirmAdd(); if (e.key === 'Escape') setAddingTo(null); }} autoFocus className="input-base text-xs h-9 py-0.5 px-1.5 flex-1 min-w-0 md:h-7" placeholder={addingType === 'folder' ? '文件夹名' : '文件名.md'} />
+              <button onClick={confirmAdd} className={`${TAP_TARGET} p-1`} aria-label="确认创建"><Check className="w-4 h-4 md:w-3.5 md:h-3.5" style={{ color: 'var(--accent-emerald)' }} /></button>
+              <button onClick={() => setAddingTo(null)} className={`${TAP_TARGET} p-1`} aria-label="取消创建"><X className="w-4 h-4 md:w-3.5 md:h-3.5" style={{ color: 'var(--accent-rose)' }} /></button>
+            </div>
+          )}
+
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-1">
+            {tree.map((node) => (
+              <TreeItem key={node.id} node={node} activeFile={activeFile} onSelect={(id) => { setActiveFile(id); if (id.startsWith('doc-')) setMobileTreeOpen(false); }} onRename={handleRename} onDelete={handleDelete} onAdd={handleAddNode} onMove={handleMove} />
+            ))}
+          </div>
+
+          <div className="px-3 py-2 border-t shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
+            <button
+              onClick={() => setShowRecycleBin(true)}
+              className="w-full flex items-center gap-1.5 text-xs py-2 hover:text-[var(--accent-cyan)] transition-colors md:text-[11px] md:py-1"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              <Trash2 className="w-3 h-3 shrink-0" />
+              回收站
+            </button>
+          </div>
+          <div className="p-3 border-t shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
+            <div className="text-[10px] font-semibold mb-1.5" style={{ color: 'var(--text-muted)' }}>最近编辑</div>
+            <div className="space-y-1">
+              {recentDocs.map((doc) => (
+                <button
+                  key={doc.id}
+                  onClick={() => { setActiveFile(`doc-${doc.id}`); setMobileTreeOpen(false); }}
+                  className="w-full text-left text-xs truncate py-2 hover:text-[var(--accent-cyan)] md:text-[10px] md:py-0"
+                  style={{ color: activeFile === `doc-${doc.id}` ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
+                >
+                  {doc.title}
+                </button>
+              ))}
+            </div>
+          </div>
         </>
       )}
+    </div>
+  );
+
+  // 右侧大纲面板正文：桌面右栏与移动端抽屉共用（只切换外层容器）
+  const rightPanelBody = (
+    <>
+      <div className="flex border-b shrink-0 pt-0 md:pt-8" style={{ borderColor: 'var(--border-subtle)' }}>
+        {[{ key: 'outline', label: '大纲' }, { key: 'links', label: '链接' }, { key: 'tags', label: '标签' }].map((tab) => (
+          <button key={tab.key} onClick={() => setRightPanel(tab.key as any)} className="flex-1 py-2 text-xs font-medium transition-colors relative" style={{ color: rightPanel === tab.key ? 'var(--accent-cyan)' : 'var(--text-secondary)', backgroundColor: rightPanel === tab.key ? 'rgba(34,211,238,0.05)' : 'transparent' }}>
+            {tab.label}
+            {rightPanel === tab.key && <span className="absolute bottom-0 left-0 right-0 h-0.5" style={{ backgroundColor: 'var(--accent-cyan)' }} />}
+          </button>
+        ))}
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3">
+        {rightPanel === 'outline' && (
+          <div className="space-y-1">
+            {outline.map((item, i) => (
+              <button key={i} className="block w-full text-left text-xs py-2 rounded px-2 transition-colors hover:bg-white/5 break-words md:py-1" style={{ paddingLeft: `${item.level * 12 + 8}px`, color: 'var(--text-secondary)' }}>{item.text}</button>
+            ))}
+          </div>
+        )}
+        {rightPanel === 'links' && (
+          <div className="space-y-1">
+            {extractInternalLinks(localContent).map((label) => {
+              const doc = resolveInternalLink(label, documents);
+              return doc ? (
+                <button
+                  key={label}
+                  onClick={() => { setActiveFile(`doc-${doc.id}`); setMobileRightOpen(false); }}
+                  className="block w-full text-left text-xs py-2 px-2 rounded hover:bg-white/5 break-words md:py-1"
+                  style={{ color: 'var(--accent-cyan)' }}
+                >
+                  {label}
+                </button>
+              ) : (
+                <div key={label} className="text-xs py-2 px-2 break-words md:py-1" style={{ color: 'var(--text-muted)' }}>
+                  {label}
+                </div>
+              );
+            })}
+            {extractInternalLinks(localContent).length === 0 && (
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>暂无内部链接</div>
+            )}
+          </div>
+        )}
+        {rightPanel === 'tags' && (
+          <div className="flex flex-wrap gap-1.5">
+            {(activeDoc?.tags ?? []).length === 0 ? <span className="text-xs" style={{ color: 'var(--text-muted)' }}>无标签</span> : (activeDoc?.tags ?? []).map((tag) => (
+              <span key={tag} className="chip chip-violet cursor-pointer">{tag}</span>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+
+  return (
+    <div className="flex h-app" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      {/* Left Sidebar（桌面常驻；移动端收进抽屉） */}
+      {sidebarVisible && (
+        <div className="hidden md:flex md:relative z-30 h-full w-[260px] shrink-0 border-r flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+          {treePanel}
+        </div>
+      )}
+
+      {/* 移动端目录抽屉 */}
+      <MobileDrawer
+        open={mobileTreeOpen}
+        onClose={() => setMobileTreeOpen(false)}
+        side="left"
+        title="主知识库"
+        ariaLabel="知识库目录"
+      >
+        {treePanel}
+      </MobileDrawer>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2 border-b shrink-0" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
-          <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-            <button onClick={() => setSidebarVisible(!sidebarVisible)} className="p-1 rounded hover:bg-white/5"><ChevronRight className={`w-4 h-4 transition-transform ${!sidebarVisible ? 'rotate-180' : ''}`} /></button>
-            <span>知识库</span><ChevronRight className="w-3 h-3" /><span style={{ color: 'var(--text-primary)' }}>{activeNode?.name || '请选择文件'}</span>
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-y-2 px-3 py-2 border-b shrink-0 sm:px-4" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+          <div className="flex items-center gap-2 text-xs min-w-0 flex-1" style={{ color: 'var(--text-muted)' }}>
+            <button onClick={() => setSidebarVisible(!sidebarVisible)} className="p-1 rounded hover:bg-white/5 hidden md:inline-flex" aria-label={sidebarVisible ? '收起目录侧栏' : '展开目录侧栏'}><ChevronRight className={`w-4 h-4 transition-transform ${!sidebarVisible ? 'rotate-180' : ''}`} /></button>
+            <button onClick={() => setMobileTreeOpen(true)} className={`${TAP_TARGET} rounded hover:bg-white/5 md:hidden`} aria-label="打开知识库目录"><PanelLeft className="w-4 h-4" /></button>
+            <span className="shrink-0">知识库</span><ChevronRight className="w-3 h-3 shrink-0" /><span className="truncate" style={{ color: 'var(--text-primary)' }}>{activeNode?.name || '请选择文件'}</span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
             {(['edit', 'preview', 'split'] as const).map((mode) => (
-              <button key={mode} onClick={() => setEditMode(mode)} className="px-3 py-1 text-xs rounded transition-colors" style={{ backgroundColor: editMode === mode ? 'var(--accent-cyan)' : 'transparent', color: editMode === mode ? '#0A0E1A' : 'var(--text-secondary)' }}>
+              <button key={mode} onClick={() => setEditMode(mode)} className="px-2.5 py-2 text-xs rounded transition-colors sm:px-3 sm:py-1" style={{ backgroundColor: editMode === mode ? 'var(--accent-cyan)' : 'transparent', color: editMode === mode ? '#0A0E1A' : 'var(--text-secondary)' }}>
                 {mode === 'edit' ? '编辑' : mode === 'preview' ? '预览' : '分屏'}
               </button>
             ))}
+            <button onClick={() => setMobileRightOpen(true)} className={`${TAP_TARGET} rounded hover:bg-white/5 ml-0.5 md:hidden`} aria-label="打开大纲面板"><PanelRight className="w-4 h-4" /></button>
           </div>
         </div>
 
         {activeDoc ? (
           <>
-            <div className="flex items-center justify-between px-4 py-2 border-b shrink-0" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
-              <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                <Tag className="w-3.5 h-3.5" />
+            <div className="flex flex-wrap items-center justify-between gap-y-2 px-3 py-2 border-b shrink-0 sm:px-4" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+              <div className="flex flex-wrap items-center gap-2 text-xs min-w-0" style={{ color: 'var(--text-muted)' }}>
+                <Tag className="w-3.5 h-3.5 shrink-0" />
                 {(activeDoc.tags ?? []).length === 0 ? '无标签' : (activeDoc.tags ?? []).map((tag) => (
                   <span key={tag} className="chip chip-violet text-[10px] py-0.5 px-1.5">{tag}</span>
                 ))}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                 <TagEditor tags={activeDoc.tags ?? []} onChange={handleTagsChange} />
                 <MoveButton docId={activeFile} folders={folders} currentFolderId={activeDoc.folderId ?? null} onMove={handleMove} />
-                <button onClick={handleSuggestIngestion} className="btn-ghost text-[10px] py-1 px-2 flex items-center gap-1" title="AI 建议文件夹/标签/概念实体" style={{ color: '#7aa2f7' }}>
+                <button onClick={handleSuggestIngestion} className="btn-ghost text-xs py-2 px-2 min-h-[40px] flex items-center gap-1 md:text-[10px] md:py-1 md:min-h-0" title="AI 建议文件夹/标签/概念实体" style={{ color: '#7aa2f7' }}>
                   <Sparkles className="w-3 h-3" />智能分拣
                 </button>
-                <button onClick={handleReindex} className="btn-ghost text-[10px] py-1 px-2 flex items-center gap-1" title="重建向量索引">
+                <button onClick={handleReindex} className="btn-ghost text-xs py-2 px-2 min-h-[40px] flex items-center gap-1 md:text-[10px] md:py-1 md:min-h-0" title="重建向量索引">
                   <RotateCcw className="w-3 h-3" />重建索引
                 </button>
-                <button onClick={() => setShowVersionHistory(true)} className="btn-ghost text-[10px] py-1 px-2 flex items-center gap-1" title="查看历史版本并回滚">
+                <button onClick={() => setShowVersionHistory(true)} className="btn-ghost text-xs py-2 px-2 min-h-[40px] flex items-center gap-1 md:text-[10px] md:py-1 md:min-h-0" title="查看历史版本并回滚">
                   <History className="w-3 h-3" />历史
                 </button>
-                <button onClick={handleSaveContent} className="btn-primary text-[10px] py-1 px-2 flex items-center gap-1">
+                <button onClick={handleSaveContent} className="btn-primary text-xs py-2 px-2 min-h-[40px] flex items-center gap-1 md:text-[10px] md:py-1 md:min-h-0">
                   <Save className="w-3 h-3" />保存
                 </button>
               </div>
             </div>
-            <div className="flex-1 flex overflow-hidden">
+            <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0">
               {(editMode === 'edit' || editMode === 'split') && (
-                <div className={`${editMode === 'split' ? 'w-1/2 border-r' : 'w-full'} overflow-auto`} style={{ borderColor: 'var(--border-subtle)' }}>
-                  <textarea value={localContent} onChange={(e) => setLocalContent(e.target.value)} className="w-full h-full p-6 bg-transparent text-sm leading-relaxed resize-none outline-none font-mono" style={{ color: 'var(--text-primary)' }} spellCheck={false} />
+                <div className={`${editMode === 'split' ? 'w-full lg:w-1/2 lg:border-r' : 'w-full'} flex-1 overflow-auto min-w-0 min-h-0`} style={{ borderColor: 'var(--border-subtle)' }}>
+                  <textarea value={localContent} onChange={(e) => setLocalContent(e.target.value)} className="w-full h-full p-3 sm:p-6 bg-transparent text-sm leading-relaxed resize-none outline-none font-mono" style={{ color: 'var(--text-primary)' }} spellCheck={false} />
                 </div>
               )}
               {(editMode === 'preview' || editMode === 'split') && (
-                <div className={`${editMode === 'split' ? 'w-1/2' : 'w-full'} overflow-auto`}>
-                  <div className="p-6 max-w-3xl mx-auto">{renderMarkdown(localContent)}</div>
+                <div className={`${editMode === 'split' ? 'w-full lg:w-1/2' : 'w-full'} flex-1 overflow-auto min-w-0 min-h-0`}>
+                  <div className="p-3 sm:p-6 max-w-3xl mx-auto break-words">{renderMarkdown(localContent)}</div>
                 </div>
               )}
             </div>
@@ -749,69 +860,34 @@ export default function KnowledgeBase() {
           </div>
         )}
 
-        <div className="flex items-center justify-between px-4 py-1 border-t text-[11px] shrink-0" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-          <div className="flex items-center gap-4"><span>{localContent.length.toLocaleString()} 字符</span><span>约 {Math.ceil(localContent.length / 400)} 分钟阅读</span></div>
-          <div className="flex items-center gap-4"><span>{activeDoc ? new Date(activeDoc.updatedAt).toLocaleString() : '-'}</span></div>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-3 py-1 border-t text-[11px] shrink-0 sm:px-4" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
+          <div className="flex items-center gap-4 min-w-0"><span className="shrink-0">{localContent.length.toLocaleString()} 字符</span><span className="shrink-0">约 {Math.ceil(localContent.length / 400)} 分钟阅读</span></div>
+          <div className="flex items-center gap-4 min-w-0"><span className="truncate">{activeDoc ? new Date(activeDoc.updatedAt).toLocaleString() : '-'}</span></div>
         </div>
+        {/* 移动端底部安全区占位（md 起不渲染，桌面像素不变） */}
+        <div className="md:hidden shrink-0" style={{ height: 'env(safe-area-inset-bottom)', backgroundColor: 'var(--bg-secondary)' }} />
       </div>
 
-      {/* Right Panel */}
+      {/* Right Panel（桌面常驻；移动端收进抽屉） */}
       {rightPanelVisible && (
-        <>
-        <div className="fixed inset-0 top-12 bg-black/40 z-20 md:hidden" onClick={() => setRightPanelVisible(false)} />
-        <div className="absolute md:relative right-0 z-30 h-full w-[280px] max-w-[85vw] shrink-0 border-l overflow-y-auto" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
-          <button onClick={() => setRightPanelVisible(false)} className="absolute top-2 left-2 p-1 rounded z-10" style={{ color: 'var(--text-muted)' }}><ChevronRight className="w-4 h-4" /></button>
-          <div className="flex border-b pt-8" style={{ borderColor: 'var(--border-subtle)' }}>
-            {[{ key: 'outline', label: '大纲' }, { key: 'links', label: '链接' }, { key: 'tags', label: '标签' }].map((tab) => (
-              <button key={tab.key} onClick={() => setRightPanel(tab.key as any)} className="flex-1 py-2 text-xs font-medium transition-colors relative" style={{ color: rightPanel === tab.key ? 'var(--accent-cyan)' : 'var(--text-secondary)', backgroundColor: rightPanel === tab.key ? 'rgba(34,211,238,0.05)' : 'transparent' }}>
-                {tab.label}
-                {rightPanel === tab.key && <span className="absolute bottom-0 left-0 right-0 h-0.5" style={{ backgroundColor: 'var(--accent-cyan)' }} />}
-              </button>
-            ))}
-          </div>
-          <div className="p-3">
-            {rightPanel === 'outline' && (
-              <div className="space-y-1">
-                {outline.map((item, i) => (
-                  <button key={i} className="block w-full text-left text-xs py-1 rounded px-2 transition-colors hover:bg-white/5" style={{ paddingLeft: `${item.level * 12 + 8}px`, color: 'var(--text-secondary)' }}>{item.text}</button>
-                ))}
-              </div>
-            )}
-            {rightPanel === 'links' && (
-              <div className="space-y-1">
-                {extractInternalLinks(localContent).map((label) => {
-                  const doc = resolveInternalLink(label, documents);
-                  return doc ? (
-                    <button
-                      key={label}
-                      onClick={() => setActiveFile(`doc-${doc.id}`)}
-                      className="block w-full text-left text-xs py-1 px-2 rounded hover:bg-white/5"
-                      style={{ color: 'var(--accent-cyan)' }}
-                    >
-                      {label}
-                    </button>
-                  ) : (
-                    <div key={label} className="text-xs py-1 px-2" style={{ color: 'var(--text-muted)' }}>
-                      {label}
-                    </div>
-                  );
-                })}
-                {extractInternalLinks(localContent).length === 0 && (
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>暂无内部链接</div>
-                )}
-              </div>
-            )}
-            {rightPanel === 'tags' && (
-              <div className="flex flex-wrap gap-1.5">
-                {(activeDoc?.tags ?? []).length === 0 ? <span className="text-xs" style={{ color: 'var(--text-muted)' }}>无标签</span> : (activeDoc?.tags ?? []).map((tag) => (
-                  <span key={tag} className="chip chip-violet cursor-pointer">{tag}</span>
-                ))}
-              </div>
-            )}
-          </div>
+        <div className="hidden md:flex flex-col relative z-30 h-full w-[280px] max-w-[85vw] shrink-0 border-l overflow-hidden" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+          <button onClick={() => setRightPanelVisible(false)} className="hidden md:inline-flex absolute top-2 left-2 p-1 rounded z-10" title="收起面板" aria-label="收起大纲面板" style={{ color: 'var(--text-muted)' }}><ChevronRight className="w-4 h-4" /></button>
+          {rightPanelBody}
         </div>
-        </>
       )}
+
+      {/* 移动端大纲抽屉（与桌面右栏共用同一份内容） */}
+      <MobileDrawer
+        open={mobileRightOpen}
+        onClose={() => setMobileRightOpen(false)}
+        side="right"
+        title="大纲 / 链接 / 标签"
+        ariaLabel="文档大纲面板"
+      >
+        <div className="flex flex-col h-full min-h-0">
+          {rightPanelBody}
+        </div>
+      </MobileDrawer>
 
 
       {/* 回收站弹窗 */}
@@ -833,14 +909,14 @@ export default function KnowledgeBase() {
 
       {/* 语义聚类结果弹窗 */}
       {showClusterModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.6)' }}>
-          <div className="rounded-lg border p-4 sm:p-6 w-[560px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-bold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
-                <Boxes className="w-4 h-4" style={{ color: '#7aa2f7' }} />
-                语义聚类 · 自动发现的主题群
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4" style={{ backgroundColor: 'rgba(10,14,26,0.6)' }}>
+          <div className="rounded-lg border p-4 sm:p-6 w-[560px] max-w-[calc(100vw-2rem)] max-h-[85dvh] flex flex-col" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <h3 className="text-sm sm:text-base font-bold flex items-center gap-2 min-w-0" style={{ color: 'var(--text-primary)' }}>
+                <Boxes className="w-4 h-4 shrink-0" style={{ color: '#7aa2f7' }} />
+                <span className="truncate">语义聚类 · 自动发现的主题群</span>
               </h3>
-              <button onClick={() => setShowClusterModal(false)} className="p-1 rounded hover:bg-white/5">
+              <button onClick={() => setShowClusterModal(false)} className={`${TAP_TARGET} p-1 rounded hover:bg-white/5`} aria-label="关闭语义聚类">
                 <X className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
               </button>
             </div>
@@ -864,7 +940,7 @@ export default function KnowledgeBase() {
                       </div>
                       <div className="flex flex-wrap gap-1">
                         {c.docTitles.slice(0, 6).map((t, j) => (
-                          <span key={j} className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>{t}</span>
+                          <span key={j} className="text-[10px] px-1.5 py-0.5 rounded max-w-full break-words" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>{t}</span>
                         ))}
                         {c.size > 6 && <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>+{c.size - 6}</span>}
                       </div>
@@ -875,22 +951,23 @@ export default function KnowledgeBase() {
             ) : null}
 
             <div className="flex justify-end pt-4 mt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-              <button onClick={() => setShowClusterModal(false)} className="btn-ghost text-xs py-2 px-4">关闭</button>
+              <button onClick={() => setShowClusterModal(false)} className="btn-ghost text-xs py-2.5 px-4 min-h-[40px] md:py-2 md:min-h-0">关闭</button>
             </div>
+            <div className="md:hidden shrink-0" style={{ height: 'env(safe-area-inset-bottom)' }} />
           </div>
         </div>
       )}
 
       {/* 智能分拣建议弹窗 */}
       {showSuggestModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(10,14,26,0.6)' }}>
-          <div className="rounded-lg border p-4 sm:p-6 w-[480px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-bold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
-                <Sparkles className="w-4 h-4" style={{ color: '#7aa2f7' }} />
-                智能分拣建议
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4" style={{ backgroundColor: 'rgba(10,14,26,0.6)' }}>
+          <div className="rounded-lg border p-4 sm:p-6 w-[480px] max-w-[calc(100vw-2rem)] max-h-[85dvh] flex flex-col" style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}>
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <h3 className="text-sm sm:text-base font-bold flex items-center gap-2 min-w-0" style={{ color: 'var(--text-primary)' }}>
+                <Sparkles className="w-4 h-4 shrink-0" style={{ color: '#7aa2f7' }} />
+                <span className="truncate">智能分拣建议</span>
               </h3>
-              <button onClick={() => setShowSuggestModal(false)} className="p-1 rounded hover:bg-white/5">
+              <button onClick={() => setShowSuggestModal(false)} className={`${TAP_TARGET} p-1 rounded hover:bg-white/5`} aria-label="关闭智能分拣建议">
                 <X className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
               </button>
             </div>
@@ -943,7 +1020,7 @@ export default function KnowledgeBase() {
                             {c.type === 'concept' ? '概念' : '实体'}
                           </span>
                         </div>
-                        <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>{c.summary}</div>
+                        <div className="mt-0.5 break-words" style={{ color: 'var(--text-muted)' }}>{c.summary}</div>
                       </div>
                     ))}
                   </div>
@@ -952,15 +1029,16 @@ export default function KnowledgeBase() {
             ) : null}
 
             <div className="flex justify-end gap-2 pt-4 mt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-              <button onClick={() => setShowSuggestModal(false)} className="btn-ghost text-xs py-2 px-4">取消</button>
+              <button onClick={() => setShowSuggestModal(false)} className="btn-ghost text-xs py-2.5 px-4 min-h-[40px] md:py-2 md:min-h-0">取消</button>
               <button
                 onClick={handleConfirmIngestion}
                 disabled={suggestBusy || !suggestion || suggestion.skipped}
-                className="btn-primary text-xs py-2 px-4"
+                className="btn-primary text-xs py-2.5 px-4 min-h-[40px] md:py-2 md:min-h-0"
               >
                 {suggestBusy ? '落库中…' : '确认分拣'}
               </button>
             </div>
+            <div className="md:hidden shrink-0" style={{ height: 'env(safe-area-inset-bottom)' }} />
           </div>
         </div>
       )}
@@ -980,7 +1058,7 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (tags: string
 
   if (!isEditing) {
     return (
-      <button onClick={() => setIsEditing(true)} className="btn-ghost text-[10px] py-1 px-2 flex items-center gap-1">
+      <button onClick={() => setIsEditing(true)} className="btn-ghost text-xs py-2 px-2 min-h-[40px] flex items-center gap-1 md:text-[10px] md:py-1 md:min-h-0">
         <Tag className="w-3 h-3" />编辑标签
       </button>
     );
@@ -994,11 +1072,11 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (tags: string
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setIsEditing(false); }}
         placeholder="用逗号分隔"
-        className="input-base text-[10px] h-6 w-32"
+        className="input-base text-xs h-9 w-32 md:text-[10px] md:h-6"
         autoFocus
       />
-      <button onClick={handleSave} className="p-0.5"><Check className="w-3 h-3" style={{ color: 'var(--accent-emerald)' }} /></button>
-      <button onClick={() => setIsEditing(false)} className="p-0.5"><X className="w-3 h-3" style={{ color: 'var(--accent-rose)' }} /></button>
+      <button onClick={handleSave} className={`${TAP_TARGET} p-0.5`} aria-label="保存标签"><Check className="w-3 h-3" style={{ color: 'var(--accent-emerald)' }} /></button>
+      <button onClick={() => setIsEditing(false)} className={`${TAP_TARGET} p-0.5`} aria-label="取消编辑标签"><X className="w-3 h-3" style={{ color: 'var(--accent-rose)' }} /></button>
     </div>
   );
 }
@@ -1009,14 +1087,14 @@ function MoveButton({ docId, folders, currentFolderId, onMove }: { docId: string
 
   return (
     <div className="relative">
-      <button onClick={() => setOpen(!open)} className="btn-ghost text-[10px] py-1 px-2 flex items-center gap-1">
+      <button onClick={() => setOpen(!open)} className="btn-ghost text-xs py-2 px-2 min-h-[40px] flex items-center gap-1 md:text-[10px] md:py-1 md:min-h-0">
         <MoreHorizontal className="w-3 h-3" />移动到
       </button>
       {open && (
-        <div className="absolute right-0 top-8 w-40 rounded border shadow-lg z-20" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+        <div className="absolute right-0 top-8 w-40 max-w-[70vw] rounded border shadow-lg z-20" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
           <button
             onClick={() => { onMove(docId, null); setOpen(false); }}
-            className="w-full text-left px-3 py-1.5 text-xs hover:bg-white/5"
+            className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/5 truncate md:py-1.5"
             style={{ color: currentFolderId === null ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
           >
             根目录
@@ -1025,7 +1103,7 @@ function MoveButton({ docId, folders, currentFolderId, onMove }: { docId: string
             <button
               key={folder.id}
               onClick={() => { onMove(docId, folder.id); setOpen(false); }}
-              className="w-full text-left px-3 py-1.5 text-xs hover:bg-white/5"
+              className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/5 truncate md:py-1.5"
               style={{ color: currentFolderId === folder.id ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
             >
               {folder.name}
@@ -1085,26 +1163,26 @@ function RecycleBinModal({ onClose, onRestored }: { onClose: () => void; onResto
   const REASON_LABELS: Record<string, string> = { user: '手动删除', dedup: '去重合并', system: '系统' };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(10,14,26,0.6)' }} onClick={onClose}>
-      <div className="rounded-lg border p-4 sm:p-6 w-[560px] max-w-[calc(100vw-2rem)] max-h-[80vh] flex flex-col"
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4" style={{ backgroundColor: 'rgba(10,14,26,0.6)' }} onClick={onClose}>
+      <div className="rounded-lg border p-4 sm:p-6 w-[560px] max-w-[calc(100vw-2rem)] max-h-[80dvh] flex flex-col"
         style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}
         onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base font-bold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
-            <Trash2 className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
-            回收站
-            <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>{items.length} 篇</span>
+        <div className="flex items-center justify-between gap-2 mb-4">
+          <h3 className="text-sm sm:text-base font-bold flex items-center gap-2 min-w-0" style={{ color: 'var(--text-primary)' }}>
+            <Trash2 className="w-4 h-4 shrink-0" style={{ color: 'var(--text-muted)' }} />
+            <span className="shrink-0">回收站</span>
+            <span className="text-xs font-normal shrink-0" style={{ color: 'var(--text-muted)' }}>{items.length} 篇</span>
           </h3>
-          <button onClick={onClose} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+          <button onClick={onClose} className={`${TAP_TARGET} p-1 rounded hover:bg-white/5 shrink-0`} aria-label="关闭回收站" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
         </div>
-        <div className="flex-1 overflow-y-auto space-y-1.5 min-h-[100px]">
+        <div className="flex-1 overflow-y-auto overscroll-contain space-y-1.5 min-h-[100px]">
           {loading ? (
             <div className="text-xs py-8 text-center" style={{ color: 'var(--text-muted)' }}>加载中…</div>
           ) : items.length === 0 ? (
             <div className="text-xs py-8 text-center" style={{ color: 'var(--text-muted)' }}>回收站是空的</div>
           ) : items.map((doc) => (
-            <div key={doc.id} className="flex items-center gap-2 px-3 py-2 rounded border" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
-              <div className="flex-1 min-w-0">
+            <div key={doc.id} className="flex flex-wrap items-center gap-2 px-3 py-2 rounded border" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
+              <div className="flex-1 min-w-0 basis-full sm:basis-0">
                 <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>{doc.title}</div>
                 <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
                   {doc.deletedAt ? new Date(doc.deletedAt).toLocaleString() : ''} · {REASON_LABELS[doc.deletedReason ?? ''] ?? doc.deletedReason ?? '手动删除'}
@@ -1113,13 +1191,13 @@ function RecycleBinModal({ onClose, onRestored }: { onClose: () => void; onResto
               <button
                 onClick={() => void act(doc.id, 'restoreDocument', '已恢复')}
                 disabled={busy === doc.id}
-                className="text-[10px] px-2 py-1 rounded shrink-0 disabled:opacity-40"
+                className="text-xs px-2.5 py-2 min-h-[40px] rounded shrink-0 disabled:opacity-40 md:text-[10px] md:px-2 md:py-1 md:min-h-0"
                 style={{ backgroundColor: 'rgba(34,197,94,0.15)', color: '#22c55e' }}
               >恢复</button>
               <button
                 onClick={() => { if (window.confirm(`彻底删除「${doc.title}」？不可恢复！`)) void act(doc.id, 'purgeDocument', '已彻底删除'); }}
                 disabled={busy === doc.id}
-                className="text-[10px] px-2 py-1 rounded shrink-0 disabled:opacity-40"
+                className="text-xs px-2.5 py-2 min-h-[40px] rounded shrink-0 disabled:opacity-40 md:text-[10px] md:px-2 md:py-1 md:min-h-0"
                 style={{ backgroundColor: 'rgba(239,68,68,0.15)', color: '#ef4444' }}
               >彻底删除</button>
             </div>
@@ -1128,6 +1206,7 @@ function RecycleBinModal({ onClose, onRestored }: { onClose: () => void; onResto
         <div className="mt-3 pt-3 border-t text-[10px]" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
           恢复会重新建立索引；彻底删除不可恢复。
         </div>
+        <div className="md:hidden shrink-0" style={{ height: 'env(safe-area-inset-bottom)' }} />
       </div>
     </div>
   );
@@ -1187,26 +1266,26 @@ function VersionHistoryModal({ documentId, onClose, onRolledBack }: { documentId
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(10,14,26,0.6)' }} onClick={onClose}>
-      <div className="rounded-lg border p-4 sm:p-6 w-[640px] max-w-[calc(100vw-2rem)] max-h-[85vh] flex flex-col"
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4" style={{ backgroundColor: 'rgba(10,14,26,0.6)' }} onClick={onClose}>
+      <div className="rounded-lg border p-4 sm:p-6 w-[640px] max-w-[calc(100vw-2rem)] max-h-[85dvh] flex flex-col"
         style={{ backgroundColor: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}
         onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base font-bold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
-            <History className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
-            版本历史
-            <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>{versions.length} 个版本</span>
+        <div className="flex items-center justify-between gap-2 mb-4">
+          <h3 className="text-sm sm:text-base font-bold flex items-center gap-2 min-w-0" style={{ color: 'var(--text-primary)' }}>
+            <History className="w-4 h-4 shrink-0" style={{ color: 'var(--text-muted)' }} />
+            <span className="shrink-0">版本历史</span>
+            <span className="text-xs font-normal shrink-0" style={{ color: 'var(--text-muted)' }}>{versions.length} 个版本</span>
           </h3>
-          <button onClick={onClose} className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
+          <button onClick={onClose} className={`${TAP_TARGET} p-1 rounded hover:bg-white/5 shrink-0`} aria-label="关闭版本历史" style={{ color: 'var(--text-muted)' }}><X className="w-4 h-4" /></button>
         </div>
-        <div className="flex-1 overflow-y-auto space-y-1.5 min-h-[100px]">
+        <div className="flex-1 overflow-y-auto overscroll-contain space-y-1.5 min-h-[100px]">
           {loading ? (
             <div className="text-xs py-8 text-center" style={{ color: 'var(--text-muted)' }}>加载中…</div>
           ) : versions.length === 0 ? (
             <div className="text-xs py-8 text-center" style={{ color: 'var(--text-muted)' }}>还没有历史版本（文档首次修改后自动产生）</div>
           ) : versions.map((v) => (
             <div key={v.id}>
-              <div className="flex items-center gap-2 px-3 py-2 rounded border" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
+              <div className="flex flex-wrap items-center gap-2 px-3 py-2 rounded border" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0" style={{ backgroundColor: 'rgba(34,211,238,0.1)', color: 'var(--accent-cyan)' }}>v{v.versionNumber}</span>
                 <div className="flex-1 min-w-0">
                   <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>{v.title}</div>
@@ -1216,18 +1295,18 @@ function VersionHistoryModal({ documentId, onClose, onRolledBack }: { documentId
                 </div>
                 <button
                   onClick={() => preview?.versionNumber === v.versionNumber ? setPreview(null) : void loadPreview(v.id, v.versionNumber)}
-                  className="text-[10px] px-2 py-1 rounded shrink-0"
+                  className="text-xs px-2.5 py-2 min-h-[40px] rounded shrink-0 md:text-[10px] md:px-2 md:py-1 md:min-h-0"
                   style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
                 >{preview?.versionNumber === v.versionNumber ? '收起' : '预览'}</button>
                 <button
                   onClick={() => void rollback(v.id, v.versionNumber)}
                   disabled={busy === v.id}
-                  className="text-[10px] px-2 py-1 rounded shrink-0 disabled:opacity-40"
+                  className="text-xs px-2.5 py-2 min-h-[40px] rounded shrink-0 disabled:opacity-40 md:text-[10px] md:px-2 md:py-1 md:min-h-0"
                   style={{ backgroundColor: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}
                 >回滚</button>
               </div>
               {preview?.versionNumber === v.versionNumber && (
-                <pre className="mt-1 ml-3 p-2 rounded text-[11px] whitespace-pre-wrap max-h-40 overflow-y-auto border-l-2"
+                <pre className="mt-1 ml-3 p-2 rounded text-[11px] whitespace-pre-wrap break-words max-h-40 overflow-y-auto border-l-2"
                   style={{ borderColor: 'var(--accent-cyan)', backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
                   {preview.content}{preview.content.length >= 2000 ? '\n…（仅预览前 2000 字）' : ''}
                 </pre>
