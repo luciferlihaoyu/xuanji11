@@ -53,6 +53,38 @@
                        radial-gradient(ellipse at 80% 20%, rgba(167, 139, 250, 0.06) 0%, transparent 50%),
                        radial-gradient(ellipse at 50% 80%, rgba(255, 71, 87, 0.04) 0%, transparent 50%);
     --scanline-opacity: 0.03;
+  
+    /* ===== shadcn / radix 桥接（tailwind.config.js 的 hsl(var(--x)) 由此供值）=====
+       契约：每个三元组 = 同名调色板 token 的 hex 换算值。
+       守卫：node tools/theme-bridge-audit.mjs（改调色板必须同步改这里，否则审计报漂移）。
+       缺了它，ui/* 组件（Card/Button/Input/Label/Dialog…）会静默失效成透明背景。 */
+    --background: 223 54% 5%;
+    --foreground: 217 39% 94%;
+    --card: 224 51% 10%;
+    --card-foreground: 217 39% 94%;
+    --popover: 222 55% 12%;
+    --popover-foreground: 217 39% 94%;
+    --primary: 186 100% 50%;
+    --primary-foreground: 223 54% 5%;
+    --secondary: 224 49% 13%;
+    --secondary-foreground: 217 39% 94%;
+    --muted: 224 52% 8%;
+    --muted-foreground: 220 24% 38%;
+    --accent: 224 49% 13%;
+    --accent-foreground: 217 39% 94%;
+    --destructive: 355 100% 64%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 221 45% 18%;
+    --input: 221 45% 18%;
+    --ring: 186 100% 50%;
+    --sidebar-background: 224 52% 8%;
+    --sidebar-foreground: 217 39% 94%;
+    --sidebar-primary: 186 100% 50%;
+    --sidebar-primary-foreground: 223 54% 5%;
+    --sidebar-accent: 224 49% 13%;
+    --sidebar-accent-foreground: 217 39% 94%;
+    --sidebar-border: 221 45% 18%;
+    --sidebar-ring: 186 100% 50%;
   }
 
   /* ===== 浅色模式 — 宣纸科技白 ===== */
@@ -92,6 +124,38 @@
                        radial-gradient(ellipse at 80% 20%, rgba(124, 92, 200, 0.04) 0%, transparent 50%),
                        radial-gradient(ellipse at 50% 80%, rgba(224, 48, 48, 0.03) 0%, transparent 50%);
     --scanline-opacity: 0.01;
+  
+    /* ===== shadcn / radix 桥接（tailwind.config.js 的 hsl(var(--x)) 由此供值）=====
+       契约：每个三元组 = 同名调色板 token 的 hex 换算值。
+       守卫：node tools/theme-bridge-audit.mjs（改调色板必须同步改这里，否则审计报漂移）。
+       缺了它，ui/* 组件（Card/Button/Input/Label/Dialog…）会静默失效成透明背景。 */
+    --background: 225 36% 96%;
+    --foreground: 227 34% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 227 34% 15%;
+    --popover: 216 56% 98%;
+    --popover-foreground: 227 34% 15%;
+    --primary: 200 100% 40%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 35% 93%;
+    --secondary-foreground: 227 34% 15%;
+    --muted: 0 0% 100%;
+    --muted-foreground: 223 20% 36%;
+    --accent: 220 35% 93%;
+    --accent-foreground: 227 34% 15%;
+    --destructive: 0 74% 53%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 34% 86%;
+    --input: 220 34% 86%;
+    --ring: 200 100% 40%;
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 227 34% 15%;
+    --sidebar-primary: 200 100% 40%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 35% 93%;
+    --sidebar-accent-foreground: 227 34% 15%;
+    --sidebar-border: 220 34% 86%;
+    --sidebar-ring: 200 100% 40%;
   }
 
   /* ===== 全局默认 ===== */

@@ -723,7 +723,7 @@ export default function KnowledgeBase() {
   // 右侧大纲面板正文：桌面右栏与移动端抽屉共用（只切换外层容器）
   const rightPanelBody = (
     <>
-      <div className="flex border-b shrink-0 pt-0 md:pt-8" style={{ borderColor: 'var(--border-subtle)' }}>
+      <div className="flex border-b pt-0 md:pt-8" style={{ borderColor: 'var(--border-subtle)' }}>
         {[{ key: 'outline', label: '大纲' }, { key: 'links', label: '链接' }, { key: 'tags', label: '标签' }].map((tab) => (
           <button key={tab.key} onClick={() => setRightPanel(tab.key as any)} className="flex-1 py-2 text-xs font-medium transition-colors relative" style={{ color: rightPanel === tab.key ? 'var(--accent-cyan)' : 'var(--text-secondary)', backgroundColor: rightPanel === tab.key ? 'rgba(34,211,238,0.05)' : 'transparent' }}>
             {tab.label}
@@ -731,7 +731,7 @@ export default function KnowledgeBase() {
           </button>
         ))}
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3">
+      <div className="p-3">
         {rightPanel === 'outline' && (
           <div className="space-y-1">
             {outline.map((item, i) => (
@@ -870,7 +870,8 @@ export default function KnowledgeBase() {
 
       {/* Right Panel（桌面常驻；移动端收进抽屉） */}
       {rightPanelVisible && (
-        <div className="hidden md:flex flex-col relative z-30 h-full w-[280px] max-w-[85vw] shrink-0 border-l overflow-hidden" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
+        /* 桌面沿用基线语义：block + 面板级滚动（移动端走抽屉，与此容器无关） */
+        <div className="hidden md:block relative z-30 h-full w-[280px] max-w-[85vw] shrink-0 border-l overflow-y-auto" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)' }}>
           <button onClick={() => setRightPanelVisible(false)} className="hidden md:inline-flex absolute top-2 left-2 p-1 rounded z-10" title="收起面板" aria-label="收起大纲面板" style={{ color: 'var(--text-muted)' }}><ChevronRight className="w-4 h-4" /></button>
           {rightPanelBody}
         </div>
@@ -884,9 +885,7 @@ export default function KnowledgeBase() {
         title="大纲 / 链接 / 标签"
         ariaLabel="文档大纲面板"
       >
-        <div className="flex flex-col h-full min-h-0">
-          {rightPanelBody}
-        </div>
+        {rightPanelBody}
       </MobileDrawer>
 
 
