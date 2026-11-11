@@ -69,7 +69,7 @@
     --secondary: 224 49% 13%;
     --secondary-foreground: 217 39% 94%;
     --muted: 224 52% 8%;
-    --muted-foreground: 220 24% 38%;
+    --muted-foreground: 218 23% 63%;
     --accent: 224 49% 13%;
     --accent-foreground: 217 39% 94%;
     --destructive: 355 100% 64%;
@@ -607,4 +607,8 @@ body {
   .animate-scale-in {
     animation-duration: 0.01ms !important;
   }
+}
+
+@layer base {
+  *, ::before, ::after { border-color: hsl(var(--border)); }
 }

@@ -43,8 +43,8 @@ export default function Login() {
       }}
     >
       <Card
-        className="w-full min-w-0 max-w-sm mx-4 sm:mx-0 border border-[var(--border-subtle)]"
-        style={{ background: "var(--bg-panel)", backdropFilter: "blur(10px)" }}
+        className="w-full min-w-0 max-w-sm mx-4 sm:mx-0"
+        style={{ backdropFilter: "blur(10px)" }}
       >
         <CardHeader className="text-center space-y-3">
           {/* Logo */}
@@ -118,15 +118,13 @@ export default function Login() {
               </div>
             )}
 
+            {/* 颜色交回 Button 的 bg-primary / text-primary-foreground：
+                暗色=深底青字反转为「青底深字」，亮色=蓝底白字，两套主题对比度均达标 */}
             <Button
               type="submit"
               className="w-full h-12 sm:h-10 font-medium"
               size="lg"
               disabled={loading}
-              style={{
-                background: "var(--accent-cyan)",
-                color: "#fff",
-              }}
             >
               {loading ? "登录中..." : "登录"}
             </Button>

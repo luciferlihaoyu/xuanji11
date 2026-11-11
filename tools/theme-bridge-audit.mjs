@@ -40,7 +40,7 @@ const BRIDGE_MAP = {
   'secondary': 'bg-tertiary',
   'secondary-foreground': 'text-primary',
   'muted': 'bg-secondary',
-  'muted-foreground': { dark: 'text-muted', light: 'text-secondary' },
+  'muted-foreground': 'text-secondary',
   'accent': 'bg-tertiary',
   'accent-foreground': 'text-primary',
   'destructive': 'accent-red',
