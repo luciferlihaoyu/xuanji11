@@ -28,7 +28,7 @@ export const kbBackupTools: readonly McpTool[] = [
   },
   {
     name: "kb.import",
-    description: "Import a knowledge base backup from structured JSON. Requires knowledge:write scope. Existing rows with the same id are ignored.",
+    description: "Import a knowledge base backup from structured JSON. Requires knowledge:write scope. Existing rows with the same id are ignored. IMPORTANT: the backup carries only nodes/edges/documents — NOT chunks, vectors or FTS — so newly imported documents are NOT searchable until a reindex runs. The result reports documentsNeedingReindex; trigger kb.reindex_all yourself (it is not started automatically).",
     annotations: { title: "导入知识库", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, inputSchema: {
       type: "object",
       properties: {

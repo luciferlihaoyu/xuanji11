@@ -38,5 +38,7 @@ export const FETCH_SITES: FetchSiteEntry[] = [
   { file: "lib/mcp-client.ts", count: 1, note: "天书 MCP 客户端（管理员配置端点）", status: "ok-admin" },
   { file: "lib/vector-service.ts", count: 1, note: "embedding 外呼（管理员配置端点）", status: "ok-admin" },
   { file: "sso-router.ts", count: 1, note: "SSO 回调校验（平台固定端点）", status: "ok-admin" },
-  { file: "tianshu-router.ts", count: 1, note: "天书路由外呼（管理员配置端点）", status: "ok-admin" },
+  // tianshu-router 原先登记 1 处直呼 fetch(，现已迁走（safeFetch(scope:"admin")，DNS 钉死 + 每跳校验），
+  // 实际直呼数 = 0 → 按棘轮"只减不涨"规则收缩删除（2026-11-12 碧霄）。
+  // 本台账只登记**直呼 fetch( 的点位**；safeFetch 路径不在其列，删条目不影响域名/协议管控。
 ];

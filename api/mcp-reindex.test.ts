@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { User } from "@db/schema";
 import type { AuthInfo } from "./lib/auth";
 import { authenticateApiKey } from "./lib/auth";
@@ -30,11 +30,26 @@ vi.mock("./queries/connection", () => ({
   getDb: vi.fn(),
 }));
 
-vi.mock("./lib/document-indexer", () => ({
-  tryIndexDocumentById: vi.fn(),
-  startReindexAll: vi.fn(),
-  getReindexProgress: vi.fn(),
-}));
+// 用 importActual 展开真模块：将来 document-indexer 新增导出时，替身**自动**跟着长，
+// 不会再出现"No xxx export is defined on the mock"这种"生产加了依赖、替身忘了加"的红。
+// （2026-11-12 天演评审：手抄导出清单的替身必然再次漂移。）
+vi.mock("./lib/document-indexer", async () => {
+  const actual = await vi.importActual<typeof import("./lib/document-indexer")>("./lib/document-indexer");
+  return {
+    ...actual,
+    tryIndexDocumentById: vi.fn(),
+    startReindexAll: vi.fn(),
+    // 真实现（api/lib/document-indexer.ts:205）永远返回对象：getReindexProgress(): { ...progress }
+    // 生产代码 handleKbReindexAll 会读 getReindexProgress().running（句柄复用逻辑 P0-4），
+    // 替身不给默认值 → undefined.running 直接抛错，这条测试从那时起一直红。
+    // vi.clearAllMocks() 只清调用记录、不清实现，故此默认实现可存活。
+    getReindexProgress: vi.fn(() => ({ running: false, total: 0, done: 0, failed: 0, chunksTotal: 0 })),
+    // P0-4 还引入了"活动回填句柄"依赖：handleKbReindexAll 会问 getActiveReindexTaskId()，
+    // 句柄存在则复用（reused/adopted），不存在才新建。mock 工厂漏了这个导出 → vitest 直接抛
+    // "No getActiveReindexTaskId export is defined on the mock"。返回 undefined = 当前无活动句柄。
+    getActiveReindexTaskId: vi.fn(() => undefined),
+  };
+});
 
 vi.mock("./lib/vector", () => ({
   vectorEngine: { size: 42 },
@@ -99,6 +114,13 @@ function createFakeDb() {
 }
 
 describe("MCP kb.reindex tools", () => {
+  // 用例之间会泄漏 mockReturnValue：vi.clearAllMocks() **只清调用记录、不清实现/返回值**，
+  // 后一条用例设的 mockReturnValue 会漏给后续用例 → 顺序耦合的幽灵绿/幽灵红。
+  // resetAllMocks 会把实现复位回 vi.fn(impl) 的原始实现（默认实现因此存活），返回值则清空。
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     const user = fakeUser();

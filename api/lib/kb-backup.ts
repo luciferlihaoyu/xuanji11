@@ -11,15 +11,19 @@ const documentFormatSchema = z.enum(["markdown", "text", "json", "html", "code"]
 
 const dateOrStringSchema = z.union([z.string().datetime({ offset: true }), z.date()]);
 
+// ⚠️ 备份 schema 必须**忠实反映真实列的可空性**（2026-11-12 碧霄，真库集成测试抓出）：
+// 可空列 = `.nullable().optional()`。只写 `.optional()` 不够 —— optional 只允许"键不存在"，
+// 而真实导出里这些列是**显式 null**（drizzle JSON/可空列导出即 null）→ zod 拒收 → 恢复 100% 失败。
+// 旧 mock 测试永远发现不了：假数据里这些键干脆不存在。
 export const knowledgeNodeSchema = z.object({
   id: z.number().int().positive(),
   title: z.string().min(1).max(500),
-  content: z.string().max(50_000).optional(),
+  content: z.string().max(50_000).nullable().optional(),
   type: nodeTypeSchema,
-  posX: z.number().optional(),
-  posY: z.number().optional(),
-  style: z.record(z.string(), z.unknown()).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  posX: z.number().nullable().optional(),
+  posY: z.number().nullable().optional(),
+  style: z.record(z.string(), z.unknown()).nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
   createdBy: z.number().int().positive().nullable().optional(),
   createdAt: dateOrStringSchema,
   updatedAt: dateOrStringSchema,
@@ -29,9 +33,9 @@ export const knowledgeEdgeSchema = z.object({
   id: z.number().int().positive(),
   sourceId: z.number().int().positive(),
   targetId: z.number().int().positive(),
-  label: z.string().max(255).optional(),
+  label: z.string().max(255).nullable().optional(),
   type: edgeTypeSchema,
-  weight: z.number().optional(),
+  weight: z.number().nullable().optional(),
   createdBy: z.number().int().positive().nullable().optional(),
   createdAt: dateOrStringSchema,
 });
@@ -40,22 +44,36 @@ export const kbDocumentSchema = z.object({
   id: z.number().int().positive(),
   folderId: z.number().int().positive().nullable().optional(),
   title: z.string().min(1).max(500),
-  content: z.string().max(100_000).optional(),
+  content: z.string().max(100_000).nullable().optional(),
   format: documentFormatSchema,
-  tags: z.array(z.string().max(100)).max(100).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  tags: z.array(z.string().max(100)).max(100).nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
   createdBy: z.number().int().positive().nullable().optional(),
   createdAt: dateOrStringSchema,
   updatedAt: dateOrStringSchema,
+  // 软删三列必须进备份 schema（2026-11-12 碧霄修）：
+  // zod 对未声明键**默认剥离**，缺这三列 → 恢复时 deletedAt 落 NULL →
+  // 已归档文档复活、合并关系(mergedIntoId)丢失。全部 optional → 旧备份（无这三列）仍可导入。
+  deletedAt: dateOrStringSchema.nullable().optional(),
+  deletedReason: z.string().max(64).nullable().optional(),
+  mergedIntoId: z.number().int().positive().nullable().optional(),
 });
 
+/**
+ * 备份 payload 的形状契约。
+ *
+ * 上限 50_000 的依据（2026-11-12 真库实测）：
+ *   knowledge_nodes 3,107 / knowledge_edges **11,431** / kb_documents 5,964。
+ * 旧上限 10_000 → **自己导出的备份自己导不回去**（生产 knowledge_edges 已超），
+ * 灾备恢复在真实数据上 100% 失败（ZodError too_big）。50_000 留约 4 倍余量。
+ */
 export const kbBackupSchema = z.object({
   version: z.string().max(10),
   exportedAt: z.string().max(50).optional(),
   data: z.object({
-    nodes: z.array(knowledgeNodeSchema).max(10_000),
-    edges: z.array(knowledgeEdgeSchema).max(10_000),
-    documents: z.array(kbDocumentSchema).max(10_000),
+    nodes: z.array(knowledgeNodeSchema).max(50_000),
+    edges: z.array(knowledgeEdgeSchema).max(50_000),
+    documents: z.array(kbDocumentSchema).max(50_000),
   }),
 });
 
@@ -75,6 +93,19 @@ export interface KbImportResult {
   readonly nodes: number;
   readonly edges: number;
   readonly documents: number;
+  /**
+   * 本次**实际写入**、因而需要重建索引的文档数（2026-11-12 碧霄加）。
+   *
+   * 恢复只还原 nodes/edges/documents —— **不含 chunks / 向量 / FTS**，
+   * 所以新写进来的文档在库里、但一条都搜不到，必须重建索引才可检索。
+   * 这里**不自动触发**全量回填：那会对整库发起重建、打满 embedding API、耗时以小时计，
+   * 是"恢复"动作里最不该偷偷发生的事。改为显式回报 + 提示运维手动跑 kb.reindex_all。
+   *
+   * 口径：取**实际写入数**（= documents/changes），不是备份里的文档数 ——
+   * 重复导入同一份备份时实际写入 0 篇，就该报 0；报备份总数会让调用方
+   * 误以为有 N 篇待重建（那 N 篇早已存在、也早已有索引）。
+   */
+  readonly documentsNeedingReindex: number;
 }
 
 function toDate(value: Date | string): Date {
@@ -88,11 +119,18 @@ export async function exportKnowledgeBase(): Promise<KbBackupResult> {
     db.select().from(knowledgeEdges),
     db.select().from(kbDocuments),
   ]);
-  return {
+  const payload = {
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     data: { nodes, edges, documents },
   };
+  // 自校验：**导出成功 ⇒ 一定能导回去**（2026-11-12）。
+  // 以前导出端不校验、只有导入端校验，于是"导得出、导不回"能悄悄成立
+  // （实测两例：① 可空列导出成 null 被 zod 拒收；② edges 超上限被拒收）——
+  // 备份文件躺在那儿看着是好的，真要用时才发现恢复不了。
+  // 现在导出即校验：不合契约就地失败（显式失败 > 产出一个残缺的备份）。
+  kbBackupSchema.parse(payload);
+  return payload;
 }
 
 export async function importKnowledgeBase(input: unknown): Promise<KbImportResult> {
@@ -114,6 +152,8 @@ export async function importKnowledgeBase(input: unknown): Promise<KbImportResul
     ...doc,
     createdAt: toDate(doc.createdAt),
     updatedAt: toDate(doc.updatedAt),
+    // deletedAt 是 timestamp_ms 列 → 必须给 Date（给字符串会写错类型）
+    deletedAt: doc.deletedAt ? toDate(doc.deletedAt) : null,
   }));
 
   let nodes = 0;
@@ -133,5 +173,11 @@ export async function importKnowledgeBase(input: unknown): Promise<KbImportResul
     documents = Number(result.changes ?? 0);
   }
 
-  return { nodes, edges, documents };
+  return {
+    nodes,
+    edges,
+    documents,
+    // 恢复不带索引 → 本次导入的文档都还不可检索，明说，不让调用方误以为"恢复完就能用"
+    documentsNeedingReindex: documents,
+  };
 }
