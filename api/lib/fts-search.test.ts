@@ -123,6 +123,28 @@ describe("fts-search BM25", () => {
     expect(hits.some((h) => h.documentId === 9)).toBe(true);
   });
 
+  it("syncChunkToFts 在模块未初始化时也必须真写进去（生产事故复现：报成功但 FTS 没落库）", async () => {
+    // 复现 2026-11-12 生产验收发现的形状：进程刚起、ftsReady=false 时，
+    // 旧实现 `if (!ftsReady) return;` 会**静默跳过**写入 —— 文档入库那刻
+    // chunks_fts 里没有这一行，而调用方已经把 vectorized 置 true、对外报"索引成功"，
+    // 关键词腿要等下一次检索触发 ensureFts() 回填才补上（实测 FTS 命中 0/1 → 检索后 1/1）。
+    const { getRawDb } = await import("../queries/connection");
+    const raw = getRawDb();
+    raw.prepare("INSERT INTO document_chunks(documentId, content, chunkIndex) VALUES (77, '灵犀渡海处 潮声入耳时', 0)").run();
+    const newId = Number((raw.prepare("SELECT last_insert_rowid() id").get() as { id: number }).id);
+
+    // 关键：把模块拉回"未初始化"状态 —— 这正是刚启动的进程的样子
+    const { _resetFtsReadyForTests, syncChunkToFts } = await import("./fts-search");
+    _resetFtsReadyForTests();
+
+    syncChunkToFts(newId, "灵犀渡海处 潮声入耳时");
+
+    // 断言**落库**（不是"能被搜到"——能被搜到会被后续 ensureFts 回填掩盖）：
+    // 写入后立刻查 FTS 表，该行必须在。
+    const row = raw.prepare("SELECT COUNT(*) c FROM chunks_fts WHERE rowid = ?").get(newId) as { c: number };
+    expect(row.c).toBe(1);
+  });
+
   it("deleteDocumentFromFts 后搜不到", async () => {
     const { getRawDb } = await import("../queries/connection");
     const raw = getRawDb();

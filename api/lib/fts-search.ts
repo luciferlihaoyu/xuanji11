@@ -63,9 +63,17 @@ export function _resetFtsReadyForTests(): void {
   ftsReady = false;
 }
 
-/** 新 chunk 同步进 FTS（未初始化时跳过，等 ensureFts 回填） */
+/** 新 chunk 同步进 FTS。
+ *
+ * 关键：先 ensureFts()（2026-11-12 生产验收实测）。
+ * 早先实现是 `if (!ftsReady) return;` —— 进程刚起、ftsReady 还是 false 时**静默跳过**，
+ * 于是文档入库那刻 chunks_fts 里并没有这一行，而调用方（document-indexer）已经把
+ * metadata.vectorized 置 true、对外报"索引成功"：关键词腿其实没落库，
+ * 要等到下一次检索触发 ensureFts() 回填才补上 —— 又一处「报成功但事没做成」。
+ * 生产实测：验收文档 6383 写入后 FTS 命中 0/1，检索一次后才变 1/1。
+ * 现在同步前保证表已就绪，syncChunkToFts 的写入一定落地。 */
 export function syncChunkToFts(chunkId: number, content: string): void {
-  if (!ftsReady) return;
+  ensureFts();
   getRawDb()
     .prepare(`INSERT OR REPLACE INTO ${FTS_TABLE}(rowid, content) VALUES (?, ?)`)
     .run(chunkId, content);
@@ -73,7 +81,9 @@ export function syncChunkToFts(chunkId: number, content: string): void {
 
 /** 删除文档的全部 FTS 记录 */
 export function deleteDocumentFromFts(documentId: number): void {
-  if (!ftsReady) return;
+  // 同样先 ensureFts()：表没就绪就跳过，会留下指向已删 chunk 的孤儿行
+  // （bm25Search 有 JOIN document_chunks 兜底不会误召回，但会污染 bm25 统计）。
+  ensureFts();
   getRawDb()
     .prepare(
       `DELETE FROM ${FTS_TABLE} WHERE rowid IN (SELECT id FROM document_chunks WHERE documentId = ?)`
