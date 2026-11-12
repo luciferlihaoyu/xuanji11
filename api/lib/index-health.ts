@@ -103,6 +103,23 @@ export function checkIndexHealth(): IndexHealthReport {
     issues.push({ kind: "vectors_without_model_tag", count: noModelTag, detail: "旧向量未记录模型身份（下次重建后会补齐）" });
   }
 
+  // 8. 嵌入降级文档（2026-11-11 评审 S4：降级标记必须有真消费者）
+  // embeddingDegraded=true = 该文档最近一次索引时嵌入服务不可用、向量腿没建成。
+  // 这些文档**检索不到语义结果**，却不会出现在上面任何一项判据里（它们的 chunks/FTS 都在），
+  // 于是就成了巡检盲区。接进来，降级文档就会每天被点名，直到重建索引把标记清掉。
+  const degradedDocs = count(`
+    SELECT COUNT(*) c FROM kb_documents
+    WHERE deletedAt IS NULL
+      AND CAST(json_extract(metadata, '$.embeddingDegraded') AS INTEGER) = 1
+  `);
+  if (degradedDocs > 0) {
+    issues.push({
+      kind: "docs_embedding_degraded",
+      count: degradedDocs,
+      detail: "嵌入服务不可用导致向量腿缺失的文档（需重建索引才能恢复语义检索）",
+    });
+  }
+
   return {
     checkedAt: new Date().toISOString(),
     documents,

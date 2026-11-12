@@ -992,6 +992,9 @@ export default function WorkflowBuilder() {
                         <option value="m3e-base">M3E-base</option>
                       </optgroup>
                     </select>
+                    <p className="text-xs md:text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                      该节点只产出向量供下游节点使用，不入库；模型留空则用系统默认嵌入模型。嵌入服务不可用时节点将标记为失败，不会产出替代向量。
+                    </p>
                     {tianshuModelsQuery.isError || (tianshuModelsQuery.data && !tianshuModelsQuery.data.ok) ? (
                       <p className="text-xs md:text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
                         天枢未配置或拉取失败，仅显示常用模型（兜底）。
@@ -1042,19 +1045,36 @@ export default function WorkflowBuilder() {
                       onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, serverUrl: e.target.value } }))}
                       placeholder="https://api.dify.ai/mcp/server/{server_code}/mcp"
                     />
+                    <p className="text-xs md:text-[10px] mt-1 break-words" style={{ color: 'var(--text-muted)' }}>
+                      直连模式优先于上方服务器选择；当前不支持从直连地址拉取工具列表，请手工填写工具名称。
+                    </p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-primary)' }}>直连认证令牌（authToken，可选）</label>
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      className="input-base text-xs font-mono"
+                      value={(selectedNodeData.config.authToken as string) || ''}
+                      onChange={(e) => updateNodeConfig(selectedNodeData.id, (prev) => ({ config: { ...prev.config, authToken: e.target.value } }))}
+                      placeholder="可选：直连服务器的认证令牌"
+                    />
+                    <p className="text-xs md:text-[10px] mt-1 break-words" style={{ color: 'var(--text-muted)' }}>
+                      直连时使用此令牌作为 Authorization 头；留空则不带认证。（密钥保存在节点配置中，请勿在公共环境使用共享凭据。）
+                    </p>
                   </div>
                   <div>
                     <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
                       <label className="text-xs font-medium break-words" style={{ color: 'var(--text-primary)' }}>工具名称（toolName）</label>
-                      {Number(selectedNodeData.config.serverId) > 0 && (
-                        <button
-                          onClick={() => void fetchRemoteTools(Number(selectedNodeData.config.serverId))}
-                          className="flex min-h-10 md:min-h-0 items-center px-1 text-xs md:text-[10px]"
-                          style={{ color: 'var(--accent-cyan)' }}
-                        >
-                          拉取该服务器工具列表 →
-                        </button>
-                      )}
+                      <button
+                        onClick={() => void fetchRemoteTools(Number(selectedNodeData.config.serverId))}
+                        disabled={!(Number(selectedNodeData.config.serverId) > 0)}
+                        className="flex min-h-10 md:min-h-0 items-center px-1 text-xs md:text-[10px] disabled:opacity-40 disabled:cursor-not-allowed"
+                        style={{ color: 'var(--accent-cyan)' }}
+                        title={Number(selectedNodeData.config.serverId) > 0 ? undefined : '直连 URL 模式暂不支持拉取工具列表，请手工填写工具名'}
+                      >
+                        拉取该服务器工具列表 →
+                      </button>
                     </div>
                     <input
                       type="text"

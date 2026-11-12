@@ -241,11 +241,20 @@ export async function writeTaskMemory(input: z.infer<typeof writeTaskMemoryInput
   });
   const edgeId = Number(edgeResult.lastInsertRowid);
 
-  // 2.5 向量化（失败不阻断）
+  // 2.5 向量化（失败不阻断，但**必须如实回报**：文档入库 ≠ 可检索）
   const indexed = await tryIndexDocumentById(documentId);
+  // metadata 只**合并**本路径负责的键，不整块覆盖（评审 S3）：
+  // ① 索引器刚写下的 embeddingDegraded 降级标记不能被这里的快照抹掉；
+  // ② docValues.metadata 是入库时的快照，整块覆盖会回滚并发写入（lost update）。
+  const [latestDoc] = await db.select().from(kbDocuments).where(eq(kbDocuments.id, documentId));
   await db
     .update(kbDocuments)
-    .set({ metadata: { ...docValues.metadata, vectorized: indexed.chunks > 0 } })
+    .set({
+      metadata: {
+        ...(latestDoc?.metadata ?? docValues.metadata ?? {}),
+        vectorized: indexed.chunks > 0 && indexed.failed !== true,
+      },
+    })
     .where(eq(kbDocuments.id, documentId));
 
   return {
@@ -253,7 +262,11 @@ export async function writeTaskMemory(input: z.infer<typeof writeTaskMemoryInput
     nodeIds: [docNodeId, projectNodeId],
     edgeIds: [edgeId],
     chunkCount: indexed.chunks,
-    vectorized: indexed.chunks > 0,
+    vectorized: indexed.chunks > 0 && indexed.failed !== true,
+    // 索引失败时给出原因（外部 Agent 能据此知道"文档写了但检索不到"）。
+    // 用条件展开而非必填字段：失败时才带这个键，成功路径的返回形状与改动前一字不差，
+    // 调用方与测试桩都无需跟着改。
+    ...(indexed.failed ? { indexError: indexed.error } : {}),
   };
 }
 

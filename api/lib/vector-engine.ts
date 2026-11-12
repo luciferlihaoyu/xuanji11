@@ -8,11 +8,6 @@ import { getRawDb } from "../queries/connection";
 export interface VectorEngine {
   insert(id: string, vector: number[], metadata?: Record<string, unknown>): Promise<void>;
   insertBatch(entries: Array<{ id: string; vector: number[]; metadata?: Record<string, unknown> }>): Promise<void>;
-  indexDocumentChunks(
-    documentId: number | string,
-    chunks: Array<{ content: string; index: number; metadata?: Record<string, unknown> }>,
-    baseMetadata?: Record<string, unknown>,
-  ): Promise<number>;
   deleteByDocumentId(documentId: number | string): Promise<number>;
   /** 按 documentId 统计条目数（用于破坏性操作的 dryRun 预览，不修改任何数据）。 */
   countByDocumentId(documentId: number | string): Promise<number>;
@@ -88,15 +83,10 @@ export class MemoryVectorEngine implements VectorEngine {
     if (incoming.size > 0) this.store = this.store.filter((s) => !incoming.has(s.id));
     this.store.push(...entries.map((e) => ({ id: e.id, vector: this.normalize(e.vector), metadata: e.metadata ?? {} })));
   }
-  async indexDocumentChunks(documentId: number | string, chunks: Array<{ content: string; index: number; metadata?: Record<string, unknown> }>, baseMetadata: Record<string, unknown> = {}): Promise<number> {
-    const docKey = String(documentId);
-    await this.deleteByDocumentId(docKey);
-    // 此处不调 embedWithFallback（依赖外部）；调用方负责先 embed
-    for (const c of chunks) {
-      this.store.push({ id: `chunk-${docKey}-${c.index}`, vector: [], metadata: { ...baseMetadata, ...c.metadata, documentId: docKey, chunkIndex: c.index, content: c.content } });
-    }
-    return chunks.length;
-  }
+  // 注：原空壳分块索引方法已删除（2026-11）。它只做 deleteByDocumentId 后
+  // `return chunks.length`，既不 embed 也不写 FTS/向量表 —— 生产上唯一的调用方
+  // api/lib/ingestion.ts 曾因此把「什么都没索引」当成入库成功（假成功）。
+  // 写入向量的唯一路径是 document-indexer.indexDocumentById → insertBatch。
   async deleteByDocumentId(documentId: number | string): Promise<number> {
     const before = this.store.length;
     const target = String(documentId);
@@ -169,6 +159,20 @@ class SqliteVecEngine implements VectorEngine {
 
   async insertBatch(entries: Array<{ id: string; vector: number[]; metadata?: Record<string, unknown> }>): Promise<void> {
     if (entries.length === 0) return;
+    // 维度校验**前置且致命**（2026-11-11 评审 S1）：
+    // 原实现在循环里对维度不匹配的向量 `continue` 静默跳过 → 实际写入 0 条，
+    // 但调用方（document-indexer）仍把文档标成 vectorized:true、"索引成功"，
+    // 于是出现「vectorized=true 却零向量」的假成功——正是本轮要消灭的那类问题。
+    // 现在：先全量校验，任一条维度不符就抛错、一条都不写，失败必须被看见。
+    const mismatched = entries.filter((e) => e.vector.length !== this.dim);
+    if (mismatched.length > 0) {
+      const first = mismatched[0];
+      throw new Error(
+        `向量维度不匹配：向量表维度 ${this.dim}，实际 ${first.vector.length}`
+        + `（${mismatched.length}/${entries.length} 条不符，如 ${first.id}）`
+        + `；已中止写入，避免出现"索引成功但零向量"的假成功`,
+      );
+    }
     const raw = getRawDb();
     const insertVec = raw.prepare(`INSERT INTO ${VEC_TABLE}(embedding) VALUES (?)`);
     const insertMeta = raw.prepare(
@@ -190,10 +194,6 @@ class SqliteVecEngine implements VectorEngine {
     const deleteMetaById = raw.prepare(`DELETE FROM ${META_TABLE} WHERE id = ?`);
     const tx = raw.transaction((rows: typeof entries) => {
       for (const e of rows) {
-        if (e.vector.length !== this.dim) {
-          // 维度不匹配时跳过向量插入
-          continue;
-        }
         const stale = findMetaById.all(e.id) as Array<{ rowid: number }>;
         if (stale.length > 0) {
           for (const r of stale) deleteVecByRowid.run(r.rowid);
@@ -212,13 +212,6 @@ class SqliteVecEngine implements VectorEngine {
       }
     });
     tx(entries);
-  }
-
-  async indexDocumentChunks(documentId: number | string, chunks: Array<{ content: string; index: number; metadata?: Record<string, unknown> }>, _baseMetadata: Record<string, unknown> = {}): Promise<number> {
-    const docKey = String(documentId);
-    await this.deleteByDocumentId(docKey);
-    // embed 由调用方负责（保持与原 API 行为一致）
-    return chunks.length;
   }
 
   async countByDocumentId(documentId: number | string): Promise<number> {

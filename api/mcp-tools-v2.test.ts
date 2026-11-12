@@ -2,13 +2,15 @@
  * P0-3 MCP 现代化单测：工具注解、cursor 分页、破坏性操作 dryRun。
  * 端到端走 handleMcpRequest（JSON-RPC），用内存 SQLite 真库（不 mock DB）。
  */
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { User } from "@db/schema";
 import type { AuthInfo } from "./lib/auth";
 import { authenticateApiKey } from "./lib/auth";
 import { authenticateLocalRequest } from "./local-auth";
 import { getDb } from "./queries/connection";
 import { vectorEngine } from "./lib/vector";
+import { getVectorEngine, type VectorEngine } from "./lib/vector-engine";
+import * as vectorService from "./lib/vector-service";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "@db/schema";
@@ -72,6 +74,11 @@ function fullAuth(): AuthInfo {
   return { type: "apiKey", userId: 1, agentId: 2, scopes: ALL_SCOPES };
 }
 
+/** zvec.addDocuments 需要 zvec:write 作用域（fullAuth 的 ALL_SCOPES 不含 zvec:*）。 */
+function zvecWriteAuth(): AuthInfo {
+  return { type: "apiKey", userId: 1, agentId: 2, scopes: ["zvec:read", "zvec:write"] };
+}
+
 function authHeaders(): Headers {
   return new Headers({ Authorization: "Bearer test-key" });
 }
@@ -108,6 +115,32 @@ function createTestDb() {
       createdBy INTEGER,
       createdAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       updatedAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    );
+    -- 2026-11-11 碧霄补：测试内存库 DDL 落后于 db/schema.ts，缺 kb_document_versions
+    -- 导致 deleteDocumentCascade 抛 "no such table"（预存在红，与本轮改动无关）。
+    CREATE TABLE kb_document_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      documentId INTEGER NOT NULL,
+      versionNumber INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT,
+      format TEXT NOT NULL DEFAULT 'markdown',
+      tags TEXT,
+      contentHash TEXT NOT NULL,
+      source TEXT,
+      changedBy INTEGER,
+      changeReason TEXT,
+      createdAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    );
+    -- 同上：删除链还会清 kb_ingestion_keys（幂等键），缺表同样会抛
+    CREATE TABLE kb_ingestion_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      idempotencyKey TEXT NOT NULL UNIQUE,
+      documentId INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      externalId TEXT,
+      contentHash TEXT NOT NULL,
+      createdAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     );
     CREATE TABLE document_chunks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -179,6 +212,18 @@ function createTestDb() {
       createdAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       updatedAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     );
+    CREATE TABLE vector_collections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT,
+      model TEXT DEFAULT 'text-embedding-3-small',
+      dimension INTEGER DEFAULT 1536,
+      status TEXT NOT NULL DEFAULT 'ready',
+      documentCount INTEGER DEFAULT 0,
+      createdBy INTEGER,
+      createdAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      updatedAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    );
   `);
   return drizzle(sqlite, { schema: { ...schema, ...relations } });
 }
@@ -198,6 +243,11 @@ function seedBackupJob(db: TestDb, target: string): number {
 
 function seedWorkflow(db: TestDb, name: string): number {
   const r = db.insert(schema.workflows).values({ name, status: "draft" }).run() as unknown as { lastInsertRowid: number | bigint };
+  return Number(r.lastInsertRowid);
+}
+
+function seedVectorCollection(db: TestDb, name: string, documentCount: number): number {
+  const r = db.insert(schema.vectorCollections).values({ name, documentCount, status: "ready" }).run() as unknown as { lastInsertRowid: number | bigint };
   return Number(r.lastInsertRowid);
 }
 
@@ -453,5 +503,68 @@ describe("P0-3 破坏性操作 dryRun", () => {
     const tools = (res as { result: { tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }> } }).result.tools;
     const props = tools.find((t) => t.name === "document_delete")?.inputSchema.properties ?? {};
     expect(Object.keys(props)).toContain("dryRun");
+  });
+});
+
+/**
+ * 「向量集合」诚实性回归（碧霄派单 2026-11-12）：
+ * 生产是 sqlite-vec 单一全局表 vec_chunks，vector_collections 只是元数据登记。
+ * 旧实现的 addDocumentsToCollection 调引擎 addDocuments（两个引擎都是 `async (_docs) { return 0; }` 空壳），
+ * 调用方拿到 { added: 0 } 看起来像「没加进去」，实际是「这个功能根本不成立」。
+ * 新契约：如实返回 supported:false + reason，绝不写向量、绝不自增 documentCount。
+ */
+describe("zvec.addDocuments 诚实化（集合仅元数据登记）", () => {
+  let originalAddDocuments: VectorEngine["addDocuments"];
+  let addDocumentsSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.mocked(authenticateApiKey).mockResolvedValue({ user: fakeUser(), auth: zvecWriteAuth() });
+    // 装一个「声称写入成功 2 条」的假引擎：旧实现会据此把 documentCount 从 10 加到 12（这就是要修的病），
+    // 新实现则必须完全不碰引擎。
+    const engine = getVectorEngine();
+    originalAddDocuments = engine.addDocuments;
+    addDocumentsSpy = vi.fn(async () => 2);
+    (engine as unknown as { addDocuments: unknown }).addDocuments = addDocumentsSpy;
+  });
+
+  afterEach(() => {
+    (getVectorEngine() as unknown as { addDocuments: VectorEngine["addDocuments"] }).addDocuments = originalAddDocuments;
+  });
+
+  it("返回 added=0 / supported:false / reason，且不写向量、不自增 documentCount", async () => {
+    const db = createTestDb();
+    vi.mocked(getDb).mockReturnValue(db);
+    seedVectorCollection(db, "docs", 10);
+
+    const res = await callTool("zvec.addDocuments", {
+      name: "docs",
+      documents: [{ content: "hello world" }, { content: "foo bar", metadata: { tag: "test" } }],
+    });
+    const payload = JSON.parse(resultText(res as { result: unknown })) as { added: number; supported: boolean; reason?: string };
+
+    // 1) 外部调用方（天宫等 Agent）必须一眼看出「没有真写」
+    expect(payload.added).toBe(0);
+    expect(payload.supported).toBe(false);
+    expect(typeof payload.reason).toBe("string");
+    expect(payload.reason).toContain("元数据登记");
+    expect(payload.reason).toContain("重建索引");
+    // 2) 绝不落向量：引擎连调用都不该发生
+    expect(addDocumentsSpy).not.toHaveBeenCalled();
+    // 3) 文档计数不得被自增（旧实现在此会是 12）
+    const rows = db.select().from(schema.vectorCollections).all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.documentCount).toBe(10);
+  });
+
+  it("集合不存在时仍抛 Collection not found，且 MCP 侧表现为工具错误而非静默成功", async () => {
+    const db = createTestDb();
+    vi.mocked(getDb).mockReturnValue(db);
+
+    // 服务层保持既有语义：不存在的集合一律抛错（创建集合才能谈写入）
+    await expect(vectorService.addDocumentsToCollection("nope", [{ content: "x" }])).rejects.toThrow(/Collection not found/);
+    expect(addDocumentsSpy).not.toHaveBeenCalled();
+
+    const res = await callTool("zvec.addDocuments", { name: "nope", documents: [{ content: "x" }] });
+    expect("error" in res && res.error.code).toBe(-32603);
   });
 });

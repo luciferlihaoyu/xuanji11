@@ -44,7 +44,15 @@ export function ConnectorBrowser({ platform }: { platform: string }) {
         files: [{ path: file.id, name: file.name, size: file.size }],
       });
       const r = res.results[0];
-      if (r?.ok) {
+      if (r?.ok && r.indexed === false) {
+        // 文档确实入库了（ok 仍为 true），但索引失败 → 检索不到。
+        // 旧文案"文本类文件会自动分块并向量化"在这种情形下是假话，故单列 warning 分支。
+        addToast({
+          type: 'warning',
+          title: `已导入「${file.name}」，但索引失败`,
+          description: r.warning ?? '嵌入服务不可用，该文档暂不可检索',
+        });
+      } else if (r?.ok) {
         addToast({ type: 'success', title: `已导入「${file.name}」`, description: '文本类文件会自动分块并向量化' });
       } else {
         addToast({ type: 'error', title: `导入失败`, description: r?.error ?? undefined });

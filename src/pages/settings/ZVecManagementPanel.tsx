@@ -174,6 +174,9 @@ export function ZVecManagementPanel({ stats, collections, isLoading }: ZVecManag
                 向量集合
               </h5>
             </div>
+            <div className="text-xs md:text-[10px] mb-2 break-words" style={{ color: 'var(--text-muted)' }}>
+              集合当前仅为元数据登记，不参与检索；向量写入统一走『重建索引』。
+            </div>
             {!collections || collections.length === 0 ? (
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 暂无向量集合

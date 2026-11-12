@@ -270,7 +270,16 @@ export const connectorRouter = createRouter({
         return { success: false as const, error: "连接器配置格式错误", results: [] };
       }
 
-      const results: Array<{ path: string; ok: boolean; documentId?: number; error?: string }> = [];
+      // indexed/warning（2026-11）：ingestFile 对「文档已入库但索引失败」不再抛错，只回报 indexed:false。
+      // 旧实现无条件 push ok:true，于是这类**检索不到**的文档被报成完全成功（假成功）。
+      const results: Array<{
+        path: string;
+        ok: boolean;
+        documentId?: number;
+        error?: string;
+        indexed?: boolean;
+        warning?: string;
+      }> = [];
       for (const file of input.files) {
         try {
           const url = await connector.getDownloadUrl(config, file.path);
@@ -290,7 +299,27 @@ export const connectorRouter = createRouter({
             metadata: { platform: input.platform, project: input.project ?? null },
             createdBy: ctx.user?.id ?? null,
           });
-          results.push({ path: file.path, ok: true, documentId: result.documentId });
+          // 口径裁决：文档确实入库了 → ok 保持 true。**不**改成 false —— ok:false 会让调用方
+          // （天宫/openclaw 侧）重试，而 externalId 去重不覆盖 connector 导入路径，重试会生成
+          // 重复文档；但隐藏失败又不诚实。故另加 indexed:false + warning：既不诱发重复重试，
+          // 也不把失败信号吞掉。索引成功的路径出参与改动前一字不差。
+          results.push(
+            result.indexed
+              ? { path: file.path, ok: true, documentId: result.documentId }
+              : {
+                  path: file.path,
+                  ok: true,
+                  documentId: result.documentId,
+                  indexed: false,
+                  // 措辞按真实原因分档（评审 B3）：格式不支持 / 无内容 / 索引失败是三件事。
+                  warning:
+                    result.reason === "unsupported"
+                      ? `格式不支持，未生成文档: ${result.indexError ?? "未知原因"}`
+                      : result.reason === "empty"
+                        ? `文件无可索引内容: ${result.indexError ?? "未知原因"}`
+                        : `索引失败: ${result.indexError ?? "未知原因"}`,
+                },
+          );
         } catch (e) {
           results.push({ path: file.path, ok: false, error: e instanceof Error ? e.message : "导入失败" });
         }

@@ -56,6 +56,8 @@ async function handleZvecAddDocuments(args: Record<string, unknown>, auth: AuthI
     documents: z.array(documentSchema).min(1).max(100),
   }).parse(args);
   const result = await vectorService.addDocumentsToCollection(input.name, input.documents);
+  // 原样透出：调用方是天宫等外部 Agent，必须能看见 supported:false 与 reason（"没真写"），
+  // 不许在这里改写成只回 added 的形状。
   return textResult(result);
 }
 
@@ -71,7 +73,7 @@ export const zvecTools: readonly McpTool[] = [
   { name: "zvec.search", description: "Semantic search over indexed document chunks. Use this to find the most relevant chunks for a user question.", annotations: { title: "向量语义检索", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: { query: { type: "string", description: "Search query text" }, topK: { type: "number", description: "Maximum number of results (1-50, default 10)" } }, required: ["query"] } },
   { name: "zvec.stats", description: "Get ZVec vector engine status and health. Use this to check whether the vector engine is ready and how many documents are indexed.", annotations: { title: "向量引擎状态", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: {} } },
   { name: "zvec.listCollections", description: "List all ZVec vector collections. Use this to discover available collections before adding or searching documents.", annotations: { title: "列出向量集合", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: "object", properties: {} } },
-  { name: "zvec.addDocuments", description: "Add documents to a ZVec collection and make them immediately searchable. Requires zvec:write scope. Each document must include content text; optional metadata is stored with the chunk.", annotations: { title: "向集合添加文档", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, inputSchema: { type: "object", properties: { name: { type: "string", description: "Target collection name (alphanumeric, underscores and dashes allowed)" }, documents: { type: "array", description: "Array of documents to add (max 100). Each item: { content: string, metadata?: object }" } }, required: ["name", "documents"] } },
+  { name: "zvec.addDocuments", description: "向集合添加文档 —— 当前为占位：sqlite-vec 是全局单表索引，集合只是元数据登记，本工具不会写入向量，返回 supported:false 与原因；真正入库请用知识库上传或重建索引。Requires zvec:write scope.", annotations: { title: "向集合添加文档（占位，不写向量）", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, inputSchema: { type: "object", properties: { name: { type: "string", description: "Target collection name (alphanumeric, underscores and dashes allowed)" }, documents: { type: "array", description: "Array of documents to add (max 100). Each item: { content: string, metadata?: object }" } }, required: ["name", "documents"] } },
   { name: "zvec.deleteCollection", description: "Delete a ZVec collection by name. Requires zvec:write scope. This removes the collection metadata and associated documents.", annotations: { title: "删除向量集合", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }, inputSchema: { type: "object", properties: { name: { type: "string", description: "Collection name to delete (alphanumeric, underscores and dashes allowed)" } }, required: ["name"] } },
 ];
 

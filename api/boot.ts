@@ -228,7 +228,10 @@ app.post("/api/upload", async (c) => {
       results.push(result);
 
       try {
-        await ingestFile({
+        // 必须接住返回值：ingestFile 对「文档已入库但索引失败」（嵌入服务挂掉、格式不支持、
+        // 正文为空……）**不再抛错**，只回报 indexed:false + indexError。旧实现这里裸 await，
+        // 于是这类文档在上传页弹「成功上传 N 个文件」，实际却检索不到 —— 头号假成功。
+        const ingested = await ingestFile({
           sourceType: "upload",
           fileName: result.originalName,
           mimeType: result.mimeType,
@@ -236,7 +239,21 @@ app.post("/api/upload", async (c) => {
           storagePath: result.storagePath,
           uploadedFileId: result.id,
         });
+        if (!ingested.indexed) {
+          // 注意：不把整个上传判成 success:false —— 文件确实已落盘接收，报"上传失败"是另一种误导。
+          // 索引失败单列进 ingestionErrors，由前端展示（字段名/HTTP 状态码保持不变）。
+          // 措辞按真实原因分档（评审 B3）：格式不支持与索引失败是两回事，
+          // 全都写成"索引失败：嵌入服务不可用"会把用户引向错误的排查方向。
+          const detail = ingested.indexError ?? "未知原因";
+          const error = ingested.reason === "unsupported"
+            ? `格式不支持，未生成文档：${detail}`
+            : ingested.reason === "empty"
+              ? `未生成可索引文档：${detail}`
+              : `索引失败：${detail}`;
+          ingestionErrors.push({ file: result.originalName, error });
+        }
       } catch (err) {
+        // 抛错分支保持原样：这才是"压根没入库"，文案与既有行为一字不差。
         console.error("[Upload] Ingestion failed:", err);
         ingestionErrors.push({ file: result.originalName, error: "文件入库失败" });
       }

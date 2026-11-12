@@ -7,6 +7,9 @@ vi.hoisted(() => {
 
 vi.mock("./vector-service", () => ({
   embedTexts: vi.fn(async (texts: string[]) => texts.map(() => Array.from({ length: 8 }, () => 0.1))),
+  // 2026-11-11 起 vectorize 走严格嵌入入口：失败即抛错让节点 failed（不吃 hash 兜底）
+  embedTextsStrict: vi.fn(async (texts: string[]) => texts.map(() => Array.from({ length: 8 }, () => 0.1))),
+  getLastEmbeddingIdentity: vi.fn(() => ({ model: "test-embed-model", dimension: 8 })),
 }));
 
 import { indexDocumentById } from './document-indexer';
@@ -30,7 +33,7 @@ vi.mock("../queries/connection", () => ({
   getDb: vi.fn(),
 }));
 
-import { embedTexts } from "./vector-service";
+import { embedTextsStrict } from "./vector-service";
 import { executeHybridSearch } from "./hybrid-search";
 import { chatCompletion } from "./llm-chat";
 import { getDb } from "../queries/connection";
@@ -45,18 +48,17 @@ describe("真实执行器", () => {
     vi.restoreAllMocks();
   });
 
-  it("vectorize 调用真实嵌入服务并返回维度", async () => {
+  it("vectorize 调用严格嵌入入口并返回维度与实际模型", async () => {
     const out = await executeNode("vectorize", { text: "hello world" }, CTX);
-    expect(embedTexts).toHaveBeenCalledWith(["hello world"]);
+    expect(embedTextsStrict).toHaveBeenCalledWith(["hello world"], undefined);
     expect(out.vectorized).toBe(true);
     expect(out.dimensions).toBe(8);
+    expect(out.model).toBe("test-embed-model");
   });
 
-  it("vectorize 无嵌入配置时返回 skipped 而非假成功", async () => {
-    vi.mocked(embedTexts).mockRejectedValueOnce(new Error("Embedding provider not configured"));
-    const out = await executeNode("vectorize", { text: "hello" }, CTX);
-    expect(typeof out.skipped).toBe("string");
-    expect(out.vectorized).toBeUndefined();
+  it("vectorize 嵌入不可用时直接失败，不产出 vectorized（不再退回 skipped 假成功）", async () => {
+    vi.mocked(embedTextsStrict).mockRejectedValueOnce(new Error("Embedding provider not configured"));
+    await expect(executeNode("vectorize", { text: "hello" }, CTX)).rejects.toThrow(/not configured/i);
   });
 
   it("find-similar 返回混合搜索真实结果", async () => {

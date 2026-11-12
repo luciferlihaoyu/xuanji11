@@ -10,7 +10,7 @@ import { eq, isNotNull } from "drizzle-orm";
 import { getDb } from "../queries/connection";
 import { kbDocuments, documentChunks } from "@db/schema";
 import { vectorEngine } from "./vector";
-import { embedTextsWithFallback, ensureCorrectDimension } from "./vector-service";
+import { embedTextsWithOutcome, ensureCorrectDimension } from "./vector-service";
 import { finishTask, isCancelRequested, updateTaskProgress } from "./task-registry";
 import { decideReindexOutcome } from "./task-sync";
 
@@ -46,6 +46,40 @@ export interface IndexDocumentResult {
   readonly chunks: number;
   /** true 表示文档无内容或为空，仅做了清理 */
   readonly skipped: boolean;
+  /** 索引失败时的原因（skipped=true 且 failed=true 时有值）——区分"空文档"与"真失败" */
+  readonly error?: string;
+  /** true = 索引真失败（不是"文档本来就是空的"） */
+  readonly failed?: boolean;
+}
+
+/** 清空某文档的旧索引产物（FTS 行 + chunks 行 + 向量）。
+ *  只在**确定要重写**时调用——先删后写，一旦后续失败就会净损失既有索引。 */
+async function clearDocumentIndex(documentId: number): Promise<void> {
+  const db = getDb();
+  // 先清 FTS（deleteDocumentFromFts 依赖 document_chunks 的 id 子查询，必须赶在删 chunks 之前）
+  try {
+    const { deleteDocumentFromFts } = await import("./fts-search");
+    deleteDocumentFromFts(documentId);
+  } catch { /* FTS 清理失败等下次 ensureFts 回填修正 */ }
+  await db.delete(documentChunks).where(eq(documentChunks.documentId, documentId));
+  await vectorEngine.deleteByDocumentId(documentId);
+}
+
+/**
+ * 合并式更新文档 metadata：**先读最新行再合并**，不拿入口处的快照覆盖。
+ * （评审 S2：embed 是网络调用，窗口内别的写入（如 MCP document_write）若被
+ *   入口快照整块覆盖回旧值，就是一次静默的 lost update。）
+ */
+async function mergeDocumentMetadata(
+  documentId: number,
+  patch: { vectorized?: boolean; embeddingDegraded?: boolean },
+): Promise<void> {
+  const db = getDb();
+  const [latest] = await db.select().from(kbDocuments).where(eq(kbDocuments.id, documentId));
+  if (!latest) return;
+  await db.update(kbDocuments)
+    .set({ metadata: { ...(latest.metadata ?? {}), ...patch } })
+    .where(eq(kbDocuments.id, documentId));
 }
 
 /**
@@ -57,22 +91,12 @@ export async function indexDocumentById(documentId: number): Promise<IndexDocume
   const [doc] = await db.select().from(kbDocuments).where(eq(kbDocuments.id, documentId));
   if (!doc) throw new Error(`文档不存在: ${documentId}`);
 
-  // 先清 FTS（deleteDocumentFromFts 依赖 document_chunks 的 id 子查询，必须赶在删 chunks 之前）
-  try {
-    const { deleteDocumentFromFts } = await import("./fts-search");
-    deleteDocumentFromFts(documentId);
-  } catch { /* FTS 清理失败等下次 ensureFts 回填修正 */ }
-  await db.delete(documentChunks).where(eq(documentChunks.documentId, documentId));
-
   const content = doc.content?.trim() ?? "";
-  if (content.length === 0) {
-    await vectorEngine.deleteByDocumentId(documentId);
-    return { chunks: 0, skipped: true };
-  }
+  const chunks = content.length === 0 ? [] : chunkText(content);
 
-  const chunks = chunkText(content);
+  // 空文档：没有可索引内容，把旧索引产物清干净即可（这里没有"降级"概念）
   if (chunks.length === 0) {
-    await vectorEngine.deleteByDocumentId(documentId);
+    await clearDocumentIndex(documentId);
     return { chunks: 0, skipped: true };
   }
 
@@ -81,12 +105,24 @@ export async function indexDocumentById(documentId: number): Promise<IndexDocume
 
   // 真正 embed 每个 chunk（修复 R3 空壳：此前从不 embed/写入向量表）
   const chunkContents = chunks.map((content, index) => ({ content, index }));
-  const vectors = await embedTextsWithFallback(chunkContents.map((c) => c.content));
+  // 身份随本次调用的结果一起返回（评审 B2）：不读进程级单例，避免并发下被别的
+  // 嵌入调用（语义检索等）覆盖，导致"好向量当降级丢"或"伪向量当真向量写"。
+  const outcome = await embedTextsWithOutcome(chunkContents.map((c) => c.content));
 
-  // 重索引 = 用新分块替换该文档的旧向量。**放在 embed 成功之后**：embed 抛错时旧向量仍然有效
-  // （审查 MEDIUM：若先清后 embed，embed 一失败文档会同时失去 chunks 与向量，检索两路都消失）；
-  // 同时清掉旧行才能避免分块数变少时留下孤儿向量（旧 chunkIndex 无人引用）
-  await vectorEngine.deleteByDocumentId(documentId);
+  // ==== 事故防线（2026-09-21 复盘）· 2026-11-11 评审 B1 修正位置 ====
+  // 判定必须发生在**任何破坏性写之前**。早先版本把守卫放在 deleteByDocumentId 之后，
+  // 于是嵌入服务一挂：旧的真向量已被删光 → 守卫抛错 → 新向量一条不写，
+  // 「重建索引」在故障期会把整库向量索引清空（比写入伪向量更糟，是净损失）。
+  // 现在降级路径**不动任何既有索引产物**：旧 chunks / FTS / 向量原样保留，
+  // 只做两件事——把降级标记如实写进 metadata，然后抛错让调用方看见。
+  if (outcome.degraded) {
+    await mergeDocumentMetadata(documentId, { vectorized: false, embeddingDegraded: true });
+    throw new Error("嵌入服务不可用：已拒绝写入 hash 伪向量（文档既有索引保持不变，可稍后重建）");
+  }
+
+  // 到这里才确认是真嵌入成功 → 现在才可以动旧索引产物
+  // （先清后写，同时清掉旧行才能避免分块数变少时留下孤儿向量，旧 chunkIndex 无人引用）
+  await clearDocumentIndex(documentId);
 
   // 插入 document_chunks（embedding 列无人读取，不写大 JSON，向量只存 vec 表）
   const insertedChunks = await db.insert(documentChunks).values(chunkContents.map((c) => ({
@@ -102,29 +138,27 @@ export async function indexDocumentById(documentId: number): Promise<IndexDocume
   } catch { /* FTS 同步失败等下次 ensureFts 回填 */ }
 
   // 写入 vec 表（vec_chunks + vec_chunk_meta）
-  // 记录 embedding 模型身份——模型版本巡检靠它发现「切换模型后未重建的旧向量」
-  const { getLastEmbeddingIdentity } = await import("./vector-service");
-  const identity = getLastEmbeddingIdentity();
+  // insertBatch 对维度不匹配会**抛错**（评审 S1：原先静默 continue → 0 向量却写 vectorized:true）
   await vectorEngine.insertBatch(
     chunkContents.map((c, index) => ({
       id: `chunk-${documentId}-${c.index}`,
-      vector: vectors[index] ?? [],
+      vector: outcome.vectors[index] ?? [],
       metadata: {
         documentId: String(documentId),
         chunkIndex: c.index,
         content: c.content,
         title: doc.title,
         format: doc.format,
-        ...(identity
-          ? { embeddingModel: identity.model, embeddingDim: identity.dimension }
+        ...(outcome.identity
+          ? { embeddingModel: outcome.identity.model, embeddingDim: outcome.identity.dimension }
           : {}),
       },
     })),
   );
 
-  await db.update(kbDocuments)
-    .set({ metadata: { ...(doc.metadata ?? {}), vectorized: true } })
-    .where(eq(kbDocuments.id, documentId));
+  // 真索引成功：vectorized=true，并**清掉历史遗留的降级标记**（评审 D：
+  // 标记若永不清除，嵌入服务恢复后文档仍自称降级，属反向失真）
+  await mergeDocumentMetadata(documentId, { vectorized: true, embeddingDegraded: false });
 
   return { chunks: chunks.length, skipped: false };
 }
@@ -137,11 +171,14 @@ export async function tryIndexDocumentById(documentId: number): Promise<IndexDoc
   try {
     return await indexDocumentById(documentId);
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     console.warn(
       `[DocumentIndexer] Failed to index document ${documentId}:`,
-      err instanceof Error ? err.message : String(err)
+      message,
     );
-    return { chunks: 0, skipped: true };
+    // 三态可辨（评审 S5）：failed=true 是"真失败"（如嵌入降级），
+    // skipped=true 且无 failed 是"文档本来就是空的"。调用方据此决定要不要如实回报失败。
+    return { chunks: 0, skipped: true, failed: true, error: message };
   }
 }
 

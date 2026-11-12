@@ -406,13 +406,28 @@ export const kbRouter = createRouter({
         entityId: id,
         ...input,
       });
-      // 自动索引：有内容即入向量库；索引失败不影响文档创建
-      const indexed = input.content ? await tryIndexDocumentById(id) : { chunks: 0, skipped: true };
+      // 自动索引：有内容即入向量库；索引失败不影响文档创建，但**必须如实回报**（评审 E/S5）
+      // 只在真的尝试过索引时才回报 indexed（没内容就没有索引可言）
+      const attempted = Boolean(input.content);
+      const indexed = attempted
+        ? await tryIndexDocumentById(id)
+        : { chunks: 0, skipped: true, failed: false as const };
       // 事件触发：新文档 → 触发订阅 document-created 的工作流（fire-and-forget）
       import("./lib/workflow-events").then(({ fireDocumentCreated }) =>
         fireDocumentCreated(id, input.title)
       ).catch((err) => console.error("[WorkflowEvent] fire 失败:", err));
-      return { id, chunks: indexed.chunks };
+      return {
+        id,
+        chunks: indexed.chunks,
+        // indexed=false 表示"文档已写入但检索不到"——旧实现只回 chunks:0，
+        // 调用方无法区分"空文档"与"索引挂了"，于是把检索不到的文档当成功。
+        // 条件展开：成功路径的返回形状与改动前一字不差。
+        ...(attempted
+          ? indexed.failed
+            ? { indexed: false, indexError: indexed.error }
+            : { indexed: true }
+          : {}),
+      };
     }),
 
   updateDocument: adminQuery
@@ -441,12 +456,20 @@ export const kbRouter = createRouter({
       }
       await db.update(kbDocuments).set(clean(data as Record<string, unknown>)).where(eq(kbDocuments.id, id));
       await logAudit(ctx, "kb_document", "update", id, input as Record<string, unknown>);
-      // 内容变更时自动重建索引；索引失败不影响文档更新
+      // 内容变更时自动重建索引；索引失败不影响文档更新，但**必须如实回报**（评审 E/S5）
+      let indexed: { chunks: number; failed?: boolean; error?: string } | null = null;
       if (input.content !== undefined) {
-        await tryIndexDocumentById(id);
-      void import("./lib/hybrid-search").then((m) => m.invalidateSearchCache());
+        indexed = await tryIndexDocumentById(id);
+        void import("./lib/hybrid-search").then((m) => m.invalidateSearchCache());
       }
-      return { success: true };
+      return {
+        success: true,
+        ...(indexed
+          ? indexed.failed
+            ? { indexed: false, indexError: indexed.error }
+            : { indexed: true }
+          : {}),
+      };
     }),
 
   /** 删除 = 软删进回收站（可从 listDeleted 恢复；彻底删除用 purgeDocument） */

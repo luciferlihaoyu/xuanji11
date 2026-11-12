@@ -188,6 +188,8 @@ export const kbDocuments = sqliteTable("kb_documents", {
     source?: string;
     vectorized?: boolean;
     lastOpenedAt?: string;
+    /** 嵌入服务不可用、被拒绝写入 hash 伪向量（2026-09-21 事故防线，见 api/lib/document-indexer.ts） */
+    embeddingDegraded?: boolean;
   }>(),
   createdBy: integer("createdBy", { mode: "number" }),
   createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),

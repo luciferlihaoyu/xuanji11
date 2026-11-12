@@ -78,8 +78,18 @@ vi.mock("./lib/vector-service", () => ({
 // t2 补测：saveConfig 会调 logAudit（审计第二落点），mock 掉以便直接断言其入参。
 vi.mock("./lib/audit", () => ({ logAudit: vi.fn(), logAction: vi.fn() }));
 
+// ingestFiles 的用例需要把「连接器」和「入库」两头都换成桩：
+//   · ./connectors：getDownloadUrl 真实现要发网络请求；
+//   · ./lib/ingestion：真实现会连锁加载 document-indexer → vector-service（Zvec 原生二进制），
+//     本容器加载不了。router 里是 `await import("./lib/ingestion")` 动态导入，vitest 的模块
+//     注册表对动态导入同样生效，故此处静态 vi.mock 即可拦住。
+vi.mock("./connectors", () => ({ getConnector: vi.fn(), listConnectors: vi.fn() }));
+vi.mock("./lib/ingestion", () => ({ ingestFile: vi.fn() }));
+
 import { logAudit } from "./lib/audit";
 import { MASK } from "./lib/setting-mask";
+import { getConnector } from "./connectors";
+import { ingestFile } from "./lib/ingestion";
 import { connectorRouter } from "./connector-router";
 
 const runSearchContext = vi.mocked(searchContext);
@@ -346,5 +356,88 @@ describe("connectorRouter config masking (t2)", () => {
     expect(audit).not.toContain("brand-new-secret");
     expect(audit).not.toContain("old-password");
     expect(audit).toContain("115"); // 平台名保留，审计仍可追溯
+  });
+});
+
+/**
+ * 网盘导入（ingestFiles）的结果口径（2026-11）。
+ *
+ * 缺口：ingestFile 对「文档已入库但索引失败」不再抛错，而是回报 indexed:false + 原始原因。
+ * 旧实现无条件 push `{ ok: true, documentId }`，于是这类**检索不到**的文档被报成完全成功。
+ *
+ * 口径裁决（不把 ok 改成 false）：ok:false 会让调用方（天宫 / openclaw 侧）重试，
+ * 而 externalId 去重不覆盖 connector 导入路径 —— 重试会产生**重复文档**；但隐藏失败又不诚实。
+ * 因此照实保留 ok:true（文档确实入库了），另加 indexed:false + warning 把失败信号露出来。
+ */
+describe("connectorRouter ingestFiles 的索引状态口径", () => {
+  function harness() {
+    const connectorStub = { getDownloadUrl: vi.fn(async () => "https://dl.example.test/f1") };
+    vi.mocked(getConnector).mockReturnValue(connectorStub as never);
+    const dbStub = {
+      select: () => ({
+        from: () => ({
+          where: () => Promise.resolve([{ value: JSON.stringify({ baseUrl: "https://pan.example.com" }) }]),
+        }),
+      }),
+    };
+    vi.mocked(getDb).mockReturnValue(dbStub as never);
+    return {
+      caller: connectorRouter.createCaller(makeContext(sessionAuth(fakeUser()))),
+      connectorStub,
+    };
+  }
+
+  const file = { path: "/docs/a.md", name: "a.md", size: 10 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("文档入库但索引失败：ok 仍为 true（不诱发重试重复入库），但必须带 indexed:false + warning", async () => {
+    // Given: ingestFile 正常返回，只是 indexed === false（嵌入服务不可用，文档已入库但检索不到）。
+    const { caller } = harness();
+    vi.mocked(ingestFile).mockResolvedValue({
+      itemId: 5,
+      documentId: 42,
+      indexed: false,
+      indexError: "嵌入服务不可用：已拒绝写入 hash 伪向量",
+    });
+
+    // When: 从网盘导入一个文件。
+    const result = await caller.ingestFiles({ platform: "115", files: [file] });
+
+    // Then: 不诱导重试，但失败信号必须可见。
+    expect(result.success).toBe(true);
+    expect(result.results[0]).toMatchObject({ path: "/docs/a.md", ok: true, documentId: 42, indexed: false });
+    const warning = String(result.results[0]?.warning);
+    expect(warning).toContain("索引失败");
+    expect(warning).toContain("嵌入服务不可用");
+  });
+
+  it("索引成功时结果保持原样，不带 indexed/warning（不给日常成功加噪音）", async () => {
+    // Given: 正常索引成功。
+    const { caller } = harness();
+    vi.mocked(ingestFile).mockResolvedValue({ itemId: 6, documentId: 43, indexed: true });
+
+    // When: 导入同一个文件。
+    const result = await caller.ingestFiles({ platform: "115", files: [file] });
+
+    // Then: 出参与改动前一致（ok:true + documentId），没有多余字段。
+    expect(result.results[0]).toEqual({ path: "/docs/a.md", ok: true, documentId: 43 });
+  });
+
+  it("ingestFile 抛错（压根没入库）维持 ok:false + error，不塞 warning", async () => {
+    // Given: 下载/解析阶段直接炸掉 —— 文档根本没入库。
+    const { caller } = harness();
+    vi.mocked(ingestFile).mockRejectedValue(new Error("Download failed: 404"));
+
+    // When: 导入同一个文件。
+    const result = await caller.ingestFiles({ platform: "115", files: [file] });
+
+    // Then: 既有失败形态保持不变（ok:false 会触发调用方重试，这里是对的：库中无脏文档）。
+    expect(result.results[0]).toMatchObject({ path: "/docs/a.md", ok: false });
+    expect(String(result.results[0]?.error)).toContain("Download failed");
+    expect(result.results[0]).not.toHaveProperty("warning");
+    expect(result.results[0]).not.toHaveProperty("indexed");
   });
 });

@@ -24,10 +24,17 @@ vi.mock("./vector", () => ({
     countByDocumentId: vi.fn(async () => 0),
   },
 }));
+// 嵌入服务替身：生产 indexer 现在只取 embedTextsWithOutcome（身份随结果返回，评审 B2），
+// 旧桩里的 embedTextsWithFallback 已不被使用 —— 留着它会因缺新导出而让整条索引路径在 mock 层抛错
+// （"No embedTextsWithOutcome export is defined"），与被测语义无关。
 vi.mock("./vector-service", () => ({
   ensureCorrectDimension: vi.fn(async () => {}),
   getLastEmbeddingIdentity: vi.fn(() => ({ model: "test-model", dimension: 8 })),
-  embedTextsWithFallback: vi.fn(async (texts: string[]) => texts.map(() => new Array(8).fill(0))),
+  embedTextsWithOutcome: vi.fn(async (texts: string[]) => ({
+    vectors: texts.map(() => new Array(8).fill(0)),
+    identity: { model: "test-model", dimension: 8 },
+    degraded: false,
+  })),
 }));
 
 import { getDb } from "../queries/connection";
@@ -107,8 +114,9 @@ describe("全库回填取消（P0-4）", () => {
   });
 
   it("嵌入失败时**不动**旧向量（审查 MEDIUM：先清后 embed 会让文档同时失去 chunks 与向量）", async () => {
-    const { embedTextsWithFallback } = await import("./vector-service");
-    vi.mocked(embedTextsWithFallback).mockRejectedValueOnce(new Error("嵌入服务 502"));
+    // 嵌入彻底失败（硬错误，不是 hash 降级）→ 必须在任何破坏性写之前中断
+    const { embedTextsWithOutcome } = await import("./vector-service");
+    vi.mocked(embedTextsWithOutcome).mockRejectedValueOnce(new Error("嵌入服务 502"));
     const { vectorEngine } = await import("./vector");
     const engine = vectorEngine as unknown as { deleteByDocumentId: ReturnType<typeof vi.fn> };
     const { indexDocumentById } = await import("./document-indexer");

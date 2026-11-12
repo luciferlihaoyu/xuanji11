@@ -188,7 +188,7 @@ describe("MCP document_write auto-indexing", () => {
       authHeaders(),
     );
 
-    expect("result" in res && JSON.parse(resultText(res as { result: unknown }))).toEqual({ id: 77, chunks: 3 });
+    expect("result" in res && JSON.parse(resultText(res as { result: unknown }))).toEqual({ id: 77, chunks: 3, indexed: true });
     expect(tryIndexDocumentById).toHaveBeenCalledWith(77);
   });
 
@@ -205,6 +205,7 @@ describe("MCP document_write auto-indexing", () => {
       authHeaders(),
     );
 
+    // 无内容的文档**没有 indexed 字段**：压根没索引过，不该宣称"索引成功"
     expect("result" in res && JSON.parse(resultText(res as { result: unknown }))).toEqual({ id: 77, chunks: 0 });
     expect(tryIndexDocumentById).not.toHaveBeenCalled();
   });
@@ -223,7 +224,7 @@ describe("MCP document_write auto-indexing", () => {
       authHeaders(),
     );
 
-    expect("result" in res && JSON.parse(resultText(res as { result: unknown }))).toEqual({ success: true, id: 55, chunks: 5 });
+    expect("result" in res && JSON.parse(resultText(res as { result: unknown }))).toEqual({ success: true, id: 55, chunks: 5, indexed: true });
     expect(tryIndexDocumentById).toHaveBeenCalledWith(55);
   });
 
@@ -240,6 +241,7 @@ describe("MCP document_write auto-indexing", () => {
       authHeaders(),
     );
 
+    // 仅改标题：没碰内容 → 没有索引动作 → 无 indexed 字段
     expect("result" in res && JSON.parse(resultText(res as { result: unknown }))).toEqual({ success: true, id: 55, chunks: 0 });
     expect(tryIndexDocumentById).not.toHaveBeenCalled();
   });

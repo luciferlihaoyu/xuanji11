@@ -98,12 +98,18 @@ describe("MCP ZVec tools", () => {
     expect(vectorService.listCollections).toHaveBeenCalled();
   });
 
-  it("adds documents with write scope", async () => {
+  // 新契约（诚实化）：sqlite-vec 是全局单表索引，集合只是元数据登记，
+  // zvec.addDocuments 必须把 supported:false 与 reason 原样透出给调用方，不得只回 { added: 0 }。
+  it("adds documents with write scope and surfaces supported:false honestly", async () => {
     const { handleMcpRequest } = await import("./mcp-server");
     const user = fakeUser();
     vi.mocked(authenticateApiKey).mockResolvedValue({ user, auth: writeAuth() });
     vi.mocked(authenticateLocalRequest).mockResolvedValue(undefined);
-    vi.mocked(vectorService.addDocumentsToCollection).mockResolvedValue({ added: 2 });
+    vi.mocked(vectorService.addDocumentsToCollection).mockResolvedValue({
+      added: 0,
+      supported: false,
+      reason: "sqlite-vec 为全局单表索引，集合仅为元数据登记；请用知识库上传/重建索引写入向量",
+    });
 
     const res = await handleMcpRequest(
       {
@@ -122,7 +128,10 @@ describe("MCP ZVec tools", () => {
     );
 
     expect(res).toMatchObject({ jsonrpc: "2.0", id: 2 });
-    expect("result" in res && JSON.parse(resultText(res as { result: unknown }))).toEqual({ added: 2 });
+    const payload = JSON.parse(resultText(res as { result: unknown })) as { added: number; supported: boolean; reason?: string };
+    expect(payload.added).toBe(0);
+    expect(payload.supported).toBe(false);
+    expect(payload.reason).toContain("元数据登记");
     expect(vectorService.addDocumentsToCollection).toHaveBeenCalledWith("docs", [
       { content: "hello world" },
       { content: "foo bar", metadata: { tag: "test" } },

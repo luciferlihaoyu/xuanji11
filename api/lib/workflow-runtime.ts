@@ -12,7 +12,7 @@ import {
   workflowRunNodes,
 } from "@db/schema";
 import { McpClient, type McpServerConfig } from "./mcp-client";
-import { embedTexts } from "./vector-service";
+import { embedTextsStrict, getLastEmbeddingIdentity } from "./vector-service";
 import { executeHybridSearch } from "./hybrid-search";
 import { extractKeywords } from "./keyword-extractor";
 import { chatCompletion } from "./llm-chat";
@@ -54,31 +54,64 @@ function recordFromToolResult(result: unknown): Record<string, unknown> {
 }
 
 function hasRawMcpServerInfo(config: Record<string, unknown>): boolean {
-  return typeof config.serverId === "number" || typeof config.serverUrl === "string";
+  return typeof config.serverId === "number" || directServerUrl(config) !== undefined;
 }
 
+/**
+ * 节点的「直连 URL」——只有在填了**非空字符串**时才算数。
+ * 前端面板清空「直连 URL」输入框时写入的是空串（不是删掉该字段），空串必须视为「没填」。
+ */
+function directServerUrl(config: Record<string, unknown>): string | undefined {
+  const raw = config.serverUrl;
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/** 把空串 serverUrl 归一成「未配置」，让 schema 校验与后续分支只看真填了没。 */
+function normalizeCallAgentConfig(config: Record<string, unknown>): Record<string, unknown> {
+  if (directServerUrl(config) !== undefined) return config;
+  if (typeof config.serverUrl !== "string") return config;
+  const rest = { ...config };
+  delete rest.serverUrl;
+  return rest;
+}
+
+/**
+ * 解析 call-agent 节点的 MCP 连接配置。
+ *
+ * 优先级必须与前端面板文案一致（src/pages/WorkflowBuilder.tsx：「直连 URL（可选，覆盖上方选择）」）：
+ *   ① 填了非空 serverUrl（直连 URL）→ 连这个 URL，**凭据也用节点自己填的 config.authToken**；
+ *      直连就是直连：不回查 mcp_servers（既不取服务器表里的 authToken，也不要求 serverId 存在）。
+ *   ② 没填 serverUrl 但给了 serverId → 查 mcp_servers 取 url + authToken（既有语义保持）。
+ *   ③ 两者都没有 → 抛错（executeCallAgent 的 hasRawMcpServerInfo/hasToolName 校验通常已先拦下）。
+ *
+ * 旧实现把 serverId 排在前面，导致用户填的直连 URL 被静默忽略、还配上服务器表里的 token（凭据错配）。
+ */
 async function resolveCallAgentConfig(input: CallAgentConfig): Promise<McpServerConfig> {
-  if (input.serverId !== undefined) {
-    const [server] = await getDb().select().from(mcpServers).where(eq(mcpServers.id, input.serverId));
-    if (!server) throw new WorkflowMcpConfigError("MCP server not found");
-    if (!server.enabled) throw new WorkflowMcpConfigError("MCP server is disabled");
-    return server.authToken ? { url: server.url, authToken: server.authToken } : { url: server.url };
+  const directUrl = directServerUrl({ serverUrl: input.serverUrl });
+  if (directUrl !== undefined) {
+    return input.authToken ? { url: directUrl, authToken: input.authToken } : { url: directUrl };
   }
-  if (input.serverUrl === undefined) {
+  if (input.serverId === undefined) {
     throw new WorkflowMcpConfigError("call-agent requires serverId or serverUrl when toolName is provided");
   }
-  return input.authToken ? { url: input.serverUrl, authToken: input.authToken } : { url: input.serverUrl };
+  const [server] = await getDb().select().from(mcpServers).where(eq(mcpServers.id, input.serverId));
+  if (!server) throw new WorkflowMcpConfigError("MCP server not found");
+  if (!server.enabled) throw new WorkflowMcpConfigError("MCP server is disabled");
+  return server.authToken ? { url: server.url, authToken: server.authToken } : { url: server.url };
 }
 
 export async function executeCallAgent(config: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const hasServerInfo = hasRawMcpServerInfo(config);
+  const normalizedConfig = normalizeCallAgentConfig(config);
+  const hasServerInfo = hasRawMcpServerInfo(normalizedConfig);
   const hasToolName = typeof config.toolName === "string" && config.toolName.length > 0;
   if (!hasServerInfo && !hasToolName) return placeholderCallAgent(config);
   if (!hasServerInfo || !hasToolName) {
     throw new WorkflowMcpConfigError("call-agent MCP config requires server info and toolName");
   }
 
-  const parsed = callAgentConfigSchema.safeParse(config);
+  const parsed = callAgentConfigSchema.safeParse(normalizedConfig);
   if (!parsed.success) throw new WorkflowMcpConfigError("Invalid call-agent MCP configuration");
   const client = new McpClient(await resolveCallAgentConfig(parsed.data));
   const toolName = parsed.data.toolName;
@@ -226,19 +259,20 @@ const nodeExecutors: Record<string, NodeExecutor> = {
   vectorize: async (config) => {
     const text = String(config.text ?? '');
     if (!text.trim()) return skipped('vectorize 需要配置 text');
-    try {
-      // 真实调用嵌入服务生成向量（入库请使用数据摄入流程；此处验证并产出向量维度）
-      const vectors = await embedTexts([text]);
-      return {
-        model: typeof config.model === 'string' ? config.model : undefined,
-        dimensions: vectors[0]?.length ?? 0,
-        vectorized: true,
-      };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (/not configured/i.test(message)) return skipped('未配置嵌入模型，无法向量化');
-      throw err;
-    }
+    // 用户在下拉里选的模型必须真的发给嵌入服务；留空才用系统默认候选
+    const modelOverride =
+      typeof config.model === 'string' && config.model.trim() ? config.model.trim() : undefined;
+    // 严格嵌入：失败即抛错 → 节点 failed。绝不接受 hash 伪向量（旧实现里
+    // embedTexts 内部会用 hashFallbackEmbeddings 生成无语义的假向量，节点照样报 completed，
+    // 下游拿到垃圾向量还以为成功了）。
+    const vectors = await embedTextsStrict([text], modelOverride);
+    const identity = getLastEmbeddingIdentity();
+    return {
+      // 回显【实际使用】的模型身份（不是 config.model 原文回显）
+      model: identity?.model ?? modelOverride ?? 'unknown',
+      dimensions: vectors[0]?.length ?? 0,
+      vectorized: true,
+    };
   },
 
   'send-notification': async () => skipped('send-notification 尚未实现真实通知渠道'),
@@ -510,9 +544,12 @@ export async function executeWorkflow(
     } catch (err) {
       failed = true;
       console.error("[WorkflowRuntime] Node execution failed:", err);
+      // 运行记录里的错误必须能让人看懂失败原因（如嵌入服务返回的原始错误文本），
+      // 一律写 "Internal workflow error" 会让用户只能看到占位文案、无从排查。
+      const message = err instanceof Error ? err.message : String(err);
       await db.update(workflowRunNodes).set({
         status: "failed",
-        error: "Internal workflow error",
+        error: message.trim() ? message.slice(0, 1000) : "Internal workflow error",
         completedAt: new Date(),
       }).where(eq(workflowRunNodes.id, nodeRunId));
     }

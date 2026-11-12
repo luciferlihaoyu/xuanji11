@@ -135,6 +135,11 @@ beforeAll(async () => {
     createdAt: new Date("2026-01-01T00:00:00Z"),
     updatedAt: new Date("2026-01-01T00:00:00Z"),
   });
+  // t17 要打 POST /api/upload：`uploaded_files.uploadedBy` 有指向 users(id) 的外键，而
+  // authenticateLocalRequest 查不到 local_accounts 行时会回退 user.id = 1（local-auth.ts:228）。
+  // 不种这一行，真实链路会在 saveUploadedFile 落库处 FOREIGN KEY constraint failed（500）——
+  // 那是**测试脚手架**缺口（本容器里没人登录过，users 表空），不是被测行为，故在此补齐。
+  raw.prepare(`INSERT OR IGNORE INTO users (id, unionId, name, role) VALUES (1, 'local_admin', 'admin', 'admin')`).run();
   sessionCookie = await signLocalToken("admin");
 });
 
@@ -238,5 +243,123 @@ describe("t16 端到端：GET /api/upload/:id/ingestion 必须真的命中（真
     const source = fs.readFileSync(new URL("./boot.ts", import.meta.url), "utf8");
     expect(source).toMatch(/CAST\(json_extract\(\$\{ingestionItems\.metadata\},\s*'\$\.uploadedFileId'\)\s*AS TEXT\)/);
     expect(source).not.toMatch(/json_extract\(\$\{ingestionItems\.metadata\},\s*'\$\.uploadedFileId'\)\s*=\s*\$\{String/);
+  });
+});
+
+/**
+ * t17 —— `POST /api/upload`（api/boot.ts）的上传页假成功。
+ *
+ * 为什么这个文件里必须再加这一组：
+ *   ingestion.ts 的 `ingestFile()` 对「文档已入库但索引失败」**不再抛错**，而是如实回报
+ *   `{ indexed: false, indexError }`（嵌入服务挂掉、格式不支持、正文为空……）。而 boot.ts 的
+ *   /api/upload 旧实现只 catch 抛错、**完全忽略返回值** → 索引失败这条路一声不响地漏掉了：
+ *   上传页弹「成功上传 N 个文件」，那份文档却检索不到。这正是本项目要消灭的头号假成功。
+ *
+ * 口径（务必分清，别把两种误导对调）：
+ *   · `success` 语义仍是「文件已接收」——文件确实落盘了，不能因为索引失败判 success:false
+ *     （那会让前端弹「上传失败」而文件其实在，属另一种误导）；
+ *   · 索引失败走 `ingestionErrors` 数组，元素形如 `{ file, error: "索引失败：<原因>" }`，
+ *     由前端展示（UploadPage.tsx 现有字段，未改名）。
+ *
+ * 覆盖边界：真 app + 真 SQLite + 真 ingestFile（不 mock），但**不等于**跑过浏览器 ——
+ * UploadPage.tsx 里 ingestionErrors 的渲染是人工核验项（见交付汇报的人工核验清单）。
+ */
+describe("t17 端到端：POST /api/upload 必须如实回报索引失败（消灭上传页假成功）", () => {
+  type UploadError = { file: string; error: string };
+  type UploadBody = {
+    success: boolean;
+    files?: { id: number; originalName: string; url?: string }[];
+    count?: number;
+    ingestionErrors?: UploadError[];
+    error?: string;
+  };
+
+  /**
+   * 真 HTTP 请求：POST /api/upload。
+   * CSRF 与 UploadPage.tsx:159 同口径 —— 带 `X-Requested-With: XMLHttpRequest`（csrf.ts:44 的免检头）。
+   */
+  async function postUpload(
+    files: readonly { name: string; content: string; type: string }[],
+    authed = true,
+  ): Promise<{ status: number; body: UploadBody }> {
+    const form = new FormData();
+    for (const f of files) form.append("files", new File([f.content], f.name, { type: f.type }));
+    const headers = new Headers();
+    if (authed) headers.set("cookie", `${Session.cookieName}=${sessionCookie}`);
+    headers.set("x-requested-with", "XMLHttpRequest");
+    const res = await app.request("http://localhost/api/upload", { method: "POST", headers, body: form });
+    return { status: res.status, body: (await res.json()) as UploadBody };
+  }
+
+  /** 取某次上传在 ingestion_items 里留下的行（证明"文件真进了入库流程"）。 */
+  function itemRowOf(name: string): { status: string; error: string | null } | undefined {
+    return raw.prepare(`SELECT status, error FROM ingestion_items WHERE name = ? ORDER BY id DESC LIMIT 1`).get(name) as
+      | { status: string; error: string | null }
+      | undefined;
+  }
+
+  it("主用例：文档入库但索引失败 → success 仍为 true（文件确实收到），但 ingestionErrors 必须写明「索引失败：<原因>」", async () => {
+    // Given: 一个上传目录收下、但解析器不支持的二进制文件（octet-stream → parseFileToText 返回 supported:false）。
+    //        真链路：saveUploadedFile 落盘 + 落库 → ingestFile 建 job/item → 回报 indexed:false。
+    const { status, body } = await postUpload([
+      { name: "无法解析.bin", content: "not text at all", type: "application/octet-stream" },
+    ]);
+
+    // Then: HTTP 200、文件已接收（success:true / count:1），字段名与状态码都没被改动。
+    expect(status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.count).toBe(1);
+    expect(body.files?.[0]?.originalName).toBe("无法解析.bin");
+
+    // And: 索引失败必须出现在 ingestionErrors 里（修复前这里是 undefined —— 假成功）。
+    expect(body.ingestionErrors).toHaveLength(1);
+    expect(body.ingestionErrors?.[0]?.file).toBe("无法解析.bin");
+    // 措辞按真实原因分档（评审 B3）：格式不支持 ≠ 我们的索引挂了，
+    // 说成"索引失败"会把用户引向错误的排查方向。
+    expect(String(body.ingestionErrors?.[0]?.error)).toMatch(/^格式不支持/);
+    expect(String(body.ingestionErrors?.[0]?.error)).toContain("Unsupported format");
+
+    // And: 入库流程真的走过（item 行存在且状态为 unsupported），不是靠提前 return 蒙出来的。
+    expect(itemRowOf("无法解析.bin")).toMatchObject({ status: "unsupported" });
+  });
+
+  it("「解析后正文为空」同样是索引失败（能解析但没有可索引内容），也必须出现在 ingestionErrors", async () => {
+    // Given: 一个 MIME 合法、内容为空（只有空白）的 markdown。
+    const { body } = await postUpload([{ name: "空白.md", content: "   \n\n  ", type: "text/markdown" }]);
+
+    // Then: 文件收下了，但"无可索引内容"要如实说出来，别让用户以为检索得到。
+    expect(body.success).toBe(true);
+    expect(body.ingestionErrors).toHaveLength(1);
+    expect(String(body.ingestionErrors?.[0]?.error)).toBe("未生成可索引文档：解析后正文为空");
+  });
+
+  it("多个文件各失败各报，不合并成一条笼统错误", async () => {
+    const { body } = await postUpload([
+      { name: "坏-1.bin", content: "x", type: "application/octet-stream" },
+      { name: "坏-2.bin", content: "y", type: "application/octet-stream" },
+    ]);
+
+    expect(body.success).toBe(true);
+    expect(body.count).toBe(2);
+    expect(body.ingestionErrors?.map((e) => e.file).sort()).toEqual(["坏-1.bin", "坏-2.bin"]);
+    for (const e of body.ingestionErrors ?? []) expect(e.error).toMatch(/^格式不支持/);
+  });
+
+  it("源码守卫：boot.ts 的 /api/upload 必须消费 ingestFile 的返回值（防再次忽略而复发假成功）", async () => {
+    const source = fs.readFileSync(new URL("./boot.ts", import.meta.url), "utf8");
+    // 必须接住返回值并读 indexed —— 裸 `await ingestFile({...})` 就是这轮修复前的形态。
+    expect(source).toMatch(/const\s+ingested\s*=\s*await\s+ingestFile\(/);
+    expect(source).toMatch(/if\s*\(!ingested\.indexed\)/);
+    // 既有的"抛错"分支保留不变：入库彻底失败仍然只有这一句文案。
+    expect(source).toContain('error: "文件入库失败"');
+  });
+
+  it("未登录仍然 401（新逻辑没有绕过鉴权中间件）", async () => {
+    const { status, body } = await postUpload(
+      [{ name: "无法解析-未登录.bin", content: "z", type: "application/octet-stream" }],
+      false,
+    );
+    expect(status).toBe(401);
+    expect(body.success).toBe(false);
   });
 });

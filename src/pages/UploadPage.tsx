@@ -164,6 +164,16 @@ export default function UploadPage() {
       const data = await res.json();
 
       if (data.success) {
+        // ② 文件已接收 ≠ 已可检索：后端把「索引失败」的文件如实列在 ingestionErrors（{file, error}[]）里。
+        // 旧实现不看这份名单，一律把卡片置成 completed/100% —— 用户在卡片上看不出哪个文件压根进不了索引。
+        // 这里先按文件名建索引（后端 file 字段 = 原始文件名 originalName），再在下面的 map 里逐卡判定。
+        const ingestionErrors = (data.ingestionErrors ?? []) as { file: string; error: string }[];
+        const indexErrorByFile = new Map<string, string>();
+        for (const e of ingestionErrors) {
+          // 同名文件重复上传时保留第一条原因（不覆盖，避免把更精确的说明冲掉）
+          if (!indexErrorByFile.has(e.file)) indexErrorByFile.set(e.file, e.error);
+        }
+
         // 更新为完成状态
         setTasks((prev) =>
           prev.map((t) => {
@@ -171,6 +181,19 @@ export default function UploadPage() {
               const matched = data.files.find(
                 (f: Record<string, unknown>) => f.originalName === t.fileName
               );
+              const indexError = indexErrorByFile.get(t.fileName);
+              if (indexError) {
+                // 命中 ingestionErrors：这张卡不能显示"成功"。置为既有失败的 failed 态（不引入新状态），
+                // 进度不推满、不再往上爬，原因留在卡上（见下方 Failed 区的 ingestionError 小字）。
+                return {
+                  ...t,
+                  status: 'failed' as const,
+                  id: matched?.id,
+                  url: matched?.url,
+                  ingestionStatus: 'failed',
+                  ingestionError: indexError,
+                };
+              }
               return {
                 ...t,
                 progress: 100,
@@ -183,6 +206,15 @@ export default function UploadPage() {
           })
         );
         addToast({ type: 'success', title: `成功上传 ${data.count} 个文件` });
+        // 文件已接收 ≠ 已可检索：索引失败（嵌入服务不可用/格式不支持/正文为空）
+        // 由后端在 ingestionErrors 里如实回报，这里必须显式告知，不能让「成功上传」盖掉它。
+        if (ingestionErrors.length > 0) {
+          addToast({
+            type: 'warning',
+            title: `${ingestionErrors.length} 个文件未完成索引（文件已收到，但检索不到）`,
+            description: ingestionErrors.map((e) => `${e.file}：${e.error}`).join('；'),
+          });
+        }
       } else {
         throw new Error(data.error || '上传失败');
       }
@@ -222,6 +254,8 @@ export default function UploadPage() {
   const activeTasks = tasks.filter((t) => t.status === 'uploading' || t.status === 'queued');
   const completedTasks = tasks.filter((t) => t.status === 'completed');
   const failedTasks = tasks.filter((t) => t.status === 'failed');
+  // ② 失败区里有多少张卡是「文件收到了、但没进索引」（后端 ingestionErrors），用于给出准确的区标题
+  const indexFailedCount = failedTasks.filter((t) => t.ingestionError).length;
 
   return (
     <div className="p-3 sm:p-5 lg:p-6 max-w-5xl mx-auto" style={{ backgroundColor: 'var(--bg-primary)' }}>
@@ -349,18 +383,30 @@ export default function UploadPage() {
         </div>
       )}
 
-      {/* Failed */}
+      {/* Failed（含两类：传输层上传失败 + 文件已收到但索引失败） */}
       {failedTasks.length > 0 && (
         <div className="mb-4 sm:mb-6">
-          <h3 className="text-sm font-semibold mb-3" style={{ color: '#ef4444' }}>上传失败 ({failedTasks.length})</h3>
+          <h3 className="text-sm font-semibold mb-3" style={{ color: '#ef4444' }}>
+            {indexFailedCount === 0
+              ? `上传失败 (${failedTasks.length})`
+              : indexFailedCount === failedTasks.length
+                ? `未入索引 (${failedTasks.length})`
+                : `上传失败 / 未入索引 (${failedTasks.length})`}
+          </h3>
           <div className="space-y-1">
             {failedTasks.map((task, i) => (
-              <div key={`fail-${i}`} className="flex items-center gap-2 sm:gap-3 px-2 sm:px-3 py-2 min-h-[44px] rounded-md" style={{ backgroundColor: 'rgba(239,68,68,0.05)' }}>
-                <X className="w-4 h-4 shrink-0" style={{ color: '#ef4444' }} />
+              <div key={`fail-${i}`} className="flex flex-wrap items-center gap-2 sm:gap-3 px-2 sm:px-3 py-2 min-h-[44px] rounded-md" style={{ backgroundColor: task.ingestionError ? 'rgba(251,146,60,0.06)' : 'rgba(239,68,68,0.05)' }}>
+                <X className="w-4 h-4 shrink-0" style={{ color: task.ingestionError ? '#FB923C' : '#ef4444' }} />
                 <span className="text-sm flex-1 min-w-0 truncate" style={{ color: 'var(--text-secondary)' }}>{task.fileName}</span>
                 <button onClick={() => removeTask(task)} className="p-1 rounded hover:bg-white/5 inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0" style={{ color: 'var(--text-muted)' }} aria-label="移除失败记录">
                   <X className="w-3.5 h-3.5" />
                 </button>
+                {/* ② 索引失败的原因留在卡上，不靠 4 秒就消失的 toast */}
+                {task.ingestionError && (
+                  <span className="basis-full text-[11px] break-words pl-6" style={{ color: '#FB923C' }}>
+                    {task.ingestionError}
+                  </span>
+                )}
               </div>
             ))}
           </div>

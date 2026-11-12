@@ -197,9 +197,24 @@ async function handleDocumentWrite(args: Record<string, unknown>, user: User, au
   if (input.id) {
     const { id, ...data } = input;
     await db.update(kbDocuments).set(clean(data)).where(eq(kbDocuments.id, id));
-    // 内容变更时自动重建索引；索引失败不影响文档更新
-    const indexed = input.content !== undefined ? await tryIndexDocumentById(id) : { chunks: 0, skipped: true };
-    return textResult({ success: true, id, chunks: indexed.chunks });
+    // 内容变更时自动重建索引；索引失败不影响文档更新，但**必须如实回报**（评审 E/S5）：
+    // 外部 Agent（天宫）拿到成功回执却检索不到文档，比报错更糟——它会以为知识已入库。
+    // 只在**真的尝试过索引**时才给 indexed 字段：文档压根没内容时，
+    // 说 indexed:true 等于宣称"索引成功"，那是另一种假成功。
+    const attempted = input.content !== undefined;
+    const indexed = attempted
+      ? await tryIndexDocumentById(id)
+      : { chunks: 0, skipped: true, failed: false as const };
+    return textResult({
+      success: true,
+      id,
+      chunks: indexed.chunks,
+      ...(attempted
+        ? indexed.failed
+          ? { indexed: false, indexError: indexed.error }
+          : { indexed: true }
+        : {}),
+    });
   }
   if (!input.title) return { content: [{ type: "text", text: "title is required when creating a document" }], isError: true };
   const result = await db.insert(kbDocuments).values(clean({
@@ -212,9 +227,20 @@ async function handleDocumentWrite(args: Record<string, unknown>, user: User, au
     createdBy: user.id,
   }));
   const id = Number(result.lastInsertRowid);
-  // 自动索引：有内容即入向量库；索引失败不影响文档创建
-  const indexed = input.content ? await tryIndexDocumentById(id) : { chunks: 0, skipped: true };
-  return textResult({ id, chunks: indexed.chunks });
+  // 自动索引：有内容即入向量库；索引失败不影响文档创建，但**必须如实回报**（评审 E/S5）
+  const attempted = Boolean(input.content);
+  const indexed = attempted
+    ? await tryIndexDocumentById(id)
+    : { chunks: 0, skipped: true, failed: false as const };
+  return textResult({
+    id,
+    chunks: indexed.chunks,
+    ...(attempted
+      ? indexed.failed
+        ? { indexed: false, indexError: indexed.error }
+        : { indexed: true }
+      : {}),
+  });
 }
 
 async function handleDocumentDelete(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
@@ -284,10 +310,15 @@ async function handleDocumentUpsert(args: Record<string, unknown>, user: User, a
       format: input.format,
       updatedAt: new Date(),
     })).where(eq(kbDocuments.id, match.id));
+    let indexed: { chunks: number; failed?: boolean; error?: string } | null = null;
     if (input.content !== undefined) {
-      await tryIndexDocumentById(match.id);
+      indexed = await tryIndexDocumentById(match.id);
     }
-    return textResult({ id: match.id, action: "updated" });
+    return textResult({
+      id: match.id,
+      action: "updated",
+      ...(indexed ? { indexed: indexed.failed !== true, ...(indexed.failed ? { indexError: indexed.error } : {}) } : {}),
+    });
   }
   // 未命中：插入新文档（参考 handleDocumentWrite 的 insert 分支）
   const result = await db.insert(kbDocuments).values(clean({
@@ -300,10 +331,15 @@ async function handleDocumentUpsert(args: Record<string, unknown>, user: User, a
     createdBy: user.id,
   }));
   const newId = Number(result.lastInsertRowid);
+  let indexed: { chunks: number; failed?: boolean; error?: string } | null = null;
   if (input.content !== undefined) {
-    await tryIndexDocumentById(newId);
+    indexed = await tryIndexDocumentById(newId);
   }
-  return textResult({ id: newId, action: "created" });
+  return textResult({
+    id: newId,
+    action: "created",
+    ...(indexed ? { indexed: indexed.failed !== true, ...(indexed.failed ? { indexError: indexed.error } : {}) } : {}),
+  });
 }
 
 async function handleFolderCreate(args: Record<string, unknown>, user: User, auth: AuthInfo): Promise<McpToolResult> {

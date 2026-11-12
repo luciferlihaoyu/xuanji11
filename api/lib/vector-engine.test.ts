@@ -167,3 +167,93 @@ describe("countByDocumentId（供破坏性操作 dryRun 预览真实计数）", 
     expect(await engine.countByDocumentId(8)).toBe(2);
   });
 });
+
+/**
+ * 评审 S1：维度不匹配必须**抛错**且**一条都不写**。
+ *
+ * 旧实现在循环里对 `vector.length !== dim` 的条目 `continue` 静默跳过 →
+ * 实际写入 0 条向量，而调用方（document-indexer）拿到"没抛错"就把文档标成
+ * vectorized:true、显示「索引成功」。这就是「vectorized=true 却零向量」的假成功形状：
+ * 用户以为文档已可语义检索，实际向量表里什么都没有，且没有任何异常信号。
+ * 现在改为**前置全量校验**：任一条不符就抛错、整批中止。
+ */
+describe("insertBatch 维度校验（评审 S1：不许静默丢向量）", () => {
+  it("维度不符 → 抛错，且向量表/元数据表一条都没写（原有行数不变）", async () => {
+    const { getVectorEngine, _resetVectorEngineForTests } = await import("./vector-engine");
+    const { getRawDb } = await import("../queries/connection");
+    _resetVectorEngineForTests();
+    const engine = getVectorEngine(dim); // 本文件基座 dim = 8
+    engine.clear();
+    // 先放一条"既有"向量，用来证明失败批次既没新增也没破坏既有数据
+    await engine.insertBatch([
+      { id: "keep-1", vector: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1], metadata: { documentId: "1" } },
+    ]);
+    const raw = getRawDb();
+    const before = raw.prepare("SELECT COUNT(*) AS n FROM vec_chunks").get() as { n: number };
+    expect(before.n).toBe(1);
+
+    // 一批两条：一条维度正确、一条少一维（旧实现会静默丢掉那条，只写另一条）
+    await expect(
+      engine.insertBatch([
+        { id: "ok-1", vector: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2], metadata: { documentId: "2" } },
+        { id: "bad-1", vector: [0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3], metadata: { documentId: "2" } },
+      ]),
+    ).rejects.toThrow(/向量维度不匹配/);
+
+    // ① 整批中止：连那条"维度正确"的也不许写（否则调用方分不清写了几条）
+    const after = raw.prepare("SELECT COUNT(*) AS n FROM vec_chunks").get() as { n: number };
+    expect(after.n).toBe(1);
+    expect(engine.size).toBe(1);
+    expect(await engine.countByDocumentId("2")).toBe(0);
+    expect(await engine.countByDocumentId("1")).toBe(1);
+    const metaBad = raw.prepare("SELECT COUNT(*) AS n FROM vec_chunk_meta WHERE id = ?").get("bad-1") as { n: number };
+    const metaOk = raw.prepare("SELECT COUNT(*) AS n FROM vec_chunk_meta WHERE id = ?").get("ok-1") as { n: number };
+    expect(metaBad.n).toBe(0);
+    expect(metaOk.n).toBe(0);
+  });
+
+  it("全是零长度向量的空壳批次同样被拒（0 向量 ≠ 索引成功）", async () => {
+    const { getVectorEngine, _resetVectorEngineForTests } = await import("./vector-engine");
+    const { getRawDb } = await import("../queries/connection");
+    _resetVectorEngineForTests();
+    const engine = getVectorEngine(dim);
+    engine.clear();
+    const raw = getRawDb();
+
+    // 这正是旧实现里"嵌入服务失败 → 返回 [] → 静默 continue → 0 条向量但 vectorized:true"的形状
+    await expect(
+      engine.insertBatch([
+        { id: "empty-0", vector: [], metadata: { documentId: "3" } },
+        { id: "empty-1", vector: [], metadata: { documentId: "3" } },
+      ]),
+    ).rejects.toThrow(/向量维度不匹配/);
+
+    const rows = raw.prepare("SELECT COUNT(*) AS n FROM vec_chunks").get() as { n: number };
+    expect(rows.n).toBe(0);
+    expect(engine.size).toBe(0);
+  });
+
+  it("维度相符 → 正常写入，且行数与元数据一致", async () => {
+    const { getVectorEngine, _resetVectorEngineForTests } = await import("./vector-engine");
+    const { getRawDb } = await import("../queries/connection");
+    _resetVectorEngineForTests();
+    const engine = getVectorEngine(dim);
+    engine.clear();
+    const v = [0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4];
+
+    await expect(
+      engine.insertBatch([
+        { id: "chunk-5-0", vector: v, metadata: { documentId: "5", chunkIndex: 0 } },
+        { id: "chunk-5-1", vector: v, metadata: { documentId: "5", chunkIndex: 1 } },
+      ]),
+    ).resolves.toBeUndefined();
+
+    const raw = getRawDb();
+    const vecRows = raw.prepare("SELECT COUNT(*) AS n FROM vec_chunks").get() as { n: number };
+    expect(vecRows.n).toBe(2);
+    expect(engine.size).toBe(2);
+    expect(await engine.countByDocumentId("5")).toBe(2);
+    const meta = raw.prepare("SELECT chunkIndex FROM vec_chunk_meta WHERE id = ?").get("chunk-5-1") as { chunkIndex: number };
+    expect(meta.chunkIndex).toBe(1);
+  });
+});

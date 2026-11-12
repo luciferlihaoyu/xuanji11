@@ -262,7 +262,9 @@ const FRESH: ExistingItemRow[] = [];
 describe("datasourceRouter sync honesty", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(ingestFile).mockResolvedValue({ itemId: 1 });
+    // indexed: true —— ingestFile 现在会回报「文档是否真的完成索引」（切块+FTS+向量）。
+    // 同步计数只认 indexed === true，桩不给这个字段就等于模拟「索引失败」。
+    vi.mocked(ingestFile).mockResolvedValue({ itemId: 1, indexed: true });
     vi.mocked(logAudit).mockResolvedValue();
   });
 
@@ -448,7 +450,7 @@ describe("datasourceRouter sync honesty", () => {
       let existedDuringIngest = false;
       vi.mocked(ingestFile).mockImplementation(async (opts) => {
         existedDuringIngest = typeof opts.storagePath === "string" && fs.existsSync(opts.storagePath);
-        return { itemId: 1 };
+        return { itemId: 1, indexed: true };
       });
       const connector = inlineConnector();
       vi.mocked(getConnector).mockReturnValue(connector);
@@ -717,17 +719,36 @@ describe("datasourceRouter sync honesty", () => {
     // 状态判定只看 processed / failed，不再让 skipped 掺进 processed 里冒充成功。
     // 消息格式：`<同步完成|部分成功|同步失败>: 成功 N, 跳过 N[, 忽略 N], 失败 N`（忽略仅在 >0 时出现）。
 
-    /** 走网盘（无 getContent）通路：可按 id 精确指定哪些条目入库失败。 */
+    /**
+     * 走网盘（无 getContent）通路：可按 id 精确指定哪些条目入库失败 / 索引失败。
+     *
+     * `failingIds` = ingestFile **抛错**（压根没入库）；
+     * `unindexedIds` = ingestFile 正常返回但 `indexed: false`（文档进了库、索引没成 → 检索不到）。
+     * 后者是 2026-11 补的缺口：旧计数只看"有没有抛错"，于是索引失败的条目被统计成成功入库。
+     */
     function driveSync(
       files: readonly CloudFile[],
       existingQueue: readonly (readonly ExistingItemRow[])[] = [],
       failingIds: readonly string[] = [],
+      unindexedIds: readonly string[] = [],
     ) {
       const connector = cloudConnector({ listFiles: vi.fn().mockResolvedValue([...files]) });
       vi.mocked(getConnector).mockReturnValue(connector);
       vi.mocked(ingestFile).mockImplementation(async (opts) => {
         if (failingIds.includes(String(opts.externalId))) throw new Error(`boom: ${String(opts.externalId)}`);
-        return { itemId: 1 };
+        if (unindexedIds.includes(String(opts.externalId))) {
+          // 索引失败不再抛错：ingestFile 如实回报 indexed:false + 原始原因（item.error 里带「索引失败: 」前缀）
+          // reason 必须显式给 "index_failed"（评审 B3 后新增的分类字段）：不给会被归进
+          // 「格式不支持/正文为空」那一桶（未生成文档），也不再算失败 —— 语义完全不同。
+          return {
+            itemId: 1,
+            documentId: 99,
+            indexed: false,
+            indexError: "嵌入服务不可用：已拒绝写入 hash 伪向量",
+            reason: "index_failed" as const,
+          };
+        }
+        return { itemId: 1, indexed: true };
       });
       const { db, caller } = callerWith([seedRow({ id: 1, type: "cloud_drive" })], existingQueue);
       return { db, connector, caller };
@@ -787,6 +808,126 @@ describe("datasourceRouter sync honesty", () => {
       expect(result.message).toBe("同步完成: 成功 3, 跳过 0, 失败 0");
       expect(lastOf(db.jobUpdates)).toMatchObject({ processedItems: 3, failedItems: 0, status: "completed" });
       expect(lastOf(db.dsUpdates)).toMatchObject({ status: "connected", lastError: null });
+    });
+
+    /**
+     * 2026-11 缺口：入库的统计口径必须**只认真索引成功**。
+     *
+     * ingestFile 现在对「文档已入库但索引失败」不再抛错（否则一条坏索引会炸掉整个批次），
+     * 而是置 item.status=failed / error=「索引失败: <原因>」，并正常返回 { itemId, documentId, indexed:false }。
+     * 于是同步流程若只看"有没有抛错"，这条**检索不到**的文档就会被计入"成功入库"：
+     * 界面写「成功入库 N 条」、作业 failedItems=0、dataSources.lastError=null —— 正是本项目要消灭的假成功。
+     */
+    it("把「已入库但索引失败」计入失败，绝不算作成功入库（消灭索引失败假成功）", async () => {
+      // Given: 两个新条目 —— 一条真索引成功，一条文档入库了但索引失败（嵌入服务挂了）。
+      const { db, caller } = driveSync(
+        [driveFile("ok-1"), driveFile("noindex")],
+        [FRESH, FRESH],
+        [],
+        ["noindex"],
+      );
+
+      // When: the user requests a sync.
+      const result = await caller.sync({ id: 1 });
+
+      // Then: 索引失败的那条必须落在 failed 桶、不进 processed 桶。
+      expect(result).toMatchObject({ success: false });
+      expect(result.message).toBe("部分成功: 成功 1, 跳过 0, 失败 1");
+      expect(lastOf(db.jobUpdates)).toMatchObject({ processedItems: 1, failedItems: 1 });
+      // lastError 必须能看出「其中有索引失败」，并带上索引器给的原始原因（而不是笼统一句"入库失败"）。
+      const lastError = String(lastOf(db.dsUpdates).lastError);
+      expect(lastError).toContain("1 个文件入库失败");
+      expect(lastError).toContain("索引失败");
+      expect(lastError).toContain("嵌入服务不可用");
+    });
+
+    /**
+     * 2026-11 第二处缺口：**索引失败 ≠ 数据源故障**。
+     *
+     * 全部条目索引失败时，旧规则（nothingLanded → dataSources.status = "error"）把坏掉的嵌入服务
+     * 报成了「数据源错误」。可源明明完全可达：文件列表拿到了、正文也入库了。用户据此去查网盘配置
+     * 只会白忙。此用例钉住新口径：
+     *   作业 failed（这一批确实没成功）、success false、消息「同步失败」不变；
+     *   但数据源状态改判 connected（源可达），真实故障点写进 lastError。
+     */
+    it("全部条目都是索引失败时：数据源 connected（源可达）、作业 failed、lastError 点明嵌入服务不可用", async () => {
+      // Given: 一条文档已入库但索引失败的条目（旧实现会算成「成功入库 1 条」）。
+      const { db, caller } = driveSync([driveFile("noindex-1")], [FRESH], [], ["noindex-1"]);
+
+      // When: the user requests a sync.
+      const result = await caller.sync({ id: 1 });
+
+      // Then: 这一批没有任何东西能被检索到 → 作业失败、success false、标题「同步失败」。
+      expect(result).toMatchObject({ success: false });
+      expect(result.message).toBe("同步失败: 成功 0, 跳过 0, 失败 1");
+      expect(lastOf(db.jobUpdates)).toMatchObject({ processedItems: 0, failedItems: 1, status: "failed" });
+
+      // And: 数据源本身没坏 —— 判 error 会把「我们的嵌入服务挂了」误报成「你的源坏了」。
+      expect(lastOf(db.dsUpdates).status).toBe("connected");
+      const lastError = String(lastOf(db.dsUpdates).lastError);
+      expect(lastError).toContain("1 个条目已入库但索引失败");
+      expect(lastError).toContain("嵌入服务不可用");
+      expect(lastError).toContain("数据源本身正常");
+      expect(lastError).toContain("可稍后重建索引");
+      // 旧文案在这条通路上不该再出现：它把责任推给"入库失败"，与"已入库、只是检索不到"相反。
+      expect(lastError).not.toContain("个文件入库失败");
+    });
+
+    it("反证：下载/解析失败（非索引失败）时数据源仍判 error —— 源确实是坏的", async () => {
+      const { db, caller } = driveSync([driveFile("boom")], [FRESH], ["boom"]);
+
+      const result = await caller.sync({ id: 1 });
+
+      expect(result).toMatchObject({ success: false });
+      expect(lastOf(db.dsUpdates).status).toBe("error");
+      expect(String(lastOf(db.dsUpdates).lastError)).not.toContain("数据源本身正常");
+    });
+
+    it("混合失败（有抛错 + 有索引失败、且零成功）仍判 error：不许把源的问题藏进索引说明里", async () => {
+      const { db, caller } = driveSync(
+        [driveFile("boom"), driveFile("noindex")],
+        [FRESH, FRESH],
+        ["boom"],
+        ["noindex"],
+      );
+
+      await caller.sync({ id: 1 });
+
+      expect(lastOf(db.dsUpdates).status).toBe("error");
+      const lastError = String(lastOf(db.dsUpdates).lastError);
+      expect(lastError).toContain("2 个文件入库失败");
+      expect(lastError).toContain("其中 1 个索引失败");
+      expect(lastError).not.toContain("数据源本身正常");
+    });
+
+    it("内联正文通路（getContent）同样按索引状态计数，不得绕过", async () => {
+      // Given: 一个 rss 条目走内联正文直发路径，ingestFile 回报索引失败。
+      const connector = cloudConnector({
+        name: "rss",
+        listFiles: vi.fn().mockResolvedValue([
+          { id: "entry-1", name: "Entry One", type: "file" as const, downloadUrl: "https://feed.example.test/p/1" },
+        ]),
+        getContent: vi.fn().mockResolvedValue({ fileName: "e1.md", mimeType: "text/markdown", content: "# body" }),
+      });
+      vi.mocked(getConnector).mockReturnValue(connector);
+      vi.mocked(ingestFile).mockResolvedValue({
+        itemId: 1,
+        documentId: 7,
+        indexed: false,
+        indexError: "嵌入服务不可用",
+        reason: "index_failed",
+      });
+      const { db, caller } = callerWith([seedRow({ id: 1, type: "rss", config: { platform: "rss" } })]);
+
+      // When: the user requests a sync.
+      const result = await caller.sync({ id: 1 });
+
+      // Then: 与网盘通路同口径 —— 计失败，消息里"成功"必须是 0。
+      expect(ingestFile).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ success: false });
+      expect(result.message).toBe("同步失败: 成功 0, 跳过 0, 失败 1");
+      expect(lastOf(db.jobUpdates)).toMatchObject({ processedItems: 0, failedItems: 1 });
+      expect(String(lastOf(db.dsUpdates).lastError)).toContain("索引失败");
     });
 
     it("reports partial success honestly (connected + lastError, success false)", async () => {
@@ -867,6 +1008,133 @@ describe("datasourceRouter sync honesty", () => {
       expect(result.message).toBe("同步完成: 成功 0, 跳过 1, 失败 0");
       expect(lastOf(db.jobUpdates)).toMatchObject({ processedItems: 0, failedItems: 0, status: "completed" });
       expect(lastOf(db.dsUpdates).status).toBe("connected");
+    });
+  });
+
+  /**
+   * 评审 B3（sync 侧）：**格式不支持 / 正文为空必须单列一桶**。
+   *
+   * 旧实现的桶只有 processed / skipped / ignored / failed 四个，`ingestFile` 回报
+   * `indexed:false` 的一切情形都往 failed 里塞 —— 于是「这个文件我们解析不了」（用户侧问题、
+   * 源完全正常）与「我们的嵌入服务挂了」（平台侧故障）混在同一个红字里，
+   * 数据源被染红、lastError 写着错的归因，用户会去查网盘配置而白忙。
+   *
+   * 覆盖缺口：既有夹具 `driveFile()` 恒用 `mimeType:"text/markdown"`，
+   * 「连接器给不出 mime（NAS 就是这样）→ octet-stream → 解析不了」这条真实通路零覆盖。
+   */
+  describe("unsupported 单列一桶（评审 B3）", () => {
+    /** 新夹具：只给 octet-stream、扩展名也不可解析 —— 走到「格式不支持」分支的真实形状。 */
+    function binaryFile(id: string): CloudFile {
+      return {
+        id,
+        name: `${id}.bin`,
+        type: "file",
+        mimeType: "application/octet-stream",
+        size: 6,
+        modifiedAt: new Date("2026-01-02T00:00:00Z"),
+        downloadUrl: `https://dl.example.test/${id}`,
+      };
+    }
+
+    it("格式不支持的条目：不进失败桶、不算成功、源不染红，消息单列「格式不支持 N」", async () => {
+      const connector = cloudConnector({ listFiles: vi.fn().mockResolvedValue([binaryFile("pk")]) });
+      vi.mocked(getConnector).mockReturnValue(connector);
+      // ingestFile 的契约：没生成文档 → indexed:false + reason:"unsupported"（原文在 indexError）
+      const seenMimes: string[] = [];
+      vi.mocked(ingestFile).mockImplementation(async (opts) => {
+        seenMimes.push(opts.mimeType);
+        return {
+          itemId: 1,
+          indexed: false,
+          indexError: "Unsupported format: application/octet-stream",
+          reason: "unsupported" as const,
+        };
+      });
+      const { db, caller } = callerWith([seedRow({ id: 1, type: "cloud_drive" })], [FRESH]);
+
+      const result = await caller.sync({ id: 1 });
+
+      // ① 夹具真的把「没有 mime」这件事传到了 ingestFile（否则这条用例测的是别的东西）
+      expect(seenMimes).toEqual(["application/octet-stream"]);
+      expect(ingestFile).toHaveBeenCalledTimes(1);
+      // ② 作业计数：失败桶里没有它，成功桶里也没有它
+      expect(lastOf(db.jobUpdates)).toMatchObject({ processedItems: 0, failedItems: 0, status: "completed" });
+      expect(lastOf(db.jobUpdates).failedItems).not.toBe(1);
+      // ③ 数据源不被染红（既不是 error，lastError 也必须保持 null）
+      expect(lastOf(db.dsUpdates)).toMatchObject({ status: "connected", lastError: null });
+      // ④ 消息如实：这批既没有成功、也没有失败（"格式不支持"既不是成功也不是失败），
+      //    但用户必须看得见"到底发生了什么" → 消息里单列「格式不支持 N（原因）」
+      expect(result.message).toBe("同步完成: 成功 0, 跳过 0, 失败 0, 格式不支持 1（Unsupported format: application/octet-stream）");
+      expect(result.message).toMatch(/^同步完成: 成功 0, 跳过 0, 失败 0/);
+      expect(result.message).not.toContain("失败 1");
+      expect(result.message).toContain("格式不支持 1");
+    });
+
+    it("混合场景：成功 1 + 格式不支持 1 → 各自归桶，消息两段都在", async () => {
+      const connector = cloudConnector({ listFiles: vi.fn().mockResolvedValue([driveFile("ok"), binaryFile("pk")]) });
+      vi.mocked(getConnector).mockReturnValue(connector);
+      vi.mocked(ingestFile).mockImplementation(async (opts) => (
+        opts.fileName.endsWith(".bin")
+          ? { itemId: 1, indexed: false, indexError: "Unsupported format: application/octet-stream", reason: "unsupported" as const }
+          : { itemId: 1, indexed: true }
+      ));
+      const { db, caller } = callerWith([seedRow({ id: 1, type: "cloud_drive" })], [FRESH, FRESH]);
+
+      const result = await caller.sync({ id: 1 });
+
+      // 成功 1、失败 0、不支持 1 —— 三段各归各的，消息里两段都要看得见
+      expect(result.message).toBe("同步完成: 成功 1, 跳过 0, 失败 0, 格式不支持 1（Unsupported format: application/octet-stream）");
+      expect(result.message).not.toContain("失败 1");
+      expect(lastOf(db.jobUpdates)).toMatchObject({ processedItems: 1, failedItems: 0, status: "completed" });
+      expect(lastOf(db.dsUpdates)).toMatchObject({ status: "connected", lastError: null });
+    });
+
+    it("索引失败仍然算失败（既有语义别被改坏）：failedItems=1、lastError 含「索引失败」、作业 failed", async () => {
+      const connector = cloudConnector({ listFiles: vi.fn().mockResolvedValue([driveFile("noindex")]) });
+      vi.mocked(getConnector).mockReturnValue(connector);
+      vi.mocked(ingestFile).mockResolvedValue({
+        itemId: 1,
+        documentId: 9,
+        indexed: false,
+        indexError: "嵌入服务不可用：已拒绝写入 hash 伪向量",
+        reason: "index_failed",
+      });
+      const { db, caller } = callerWith([seedRow({ id: 1, type: "cloud_drive" })], [FRESH]);
+
+      const result = await caller.sync({ id: 1 });
+
+      // ① 一条都没能让内容可检索 → 作业 failed
+      expect(lastOf(db.jobUpdates)).toMatchObject({ processedItems: 0, failedItems: 1, status: "failed" });
+      // ② 归因必须点名索引/嵌入服务，而不是笼统一句"入库失败"
+      const lastError = String(lastOf(db.dsUpdates).lastError);
+      expect(lastError).toContain("索引失败");
+      expect(lastError).toContain("嵌入服务不可用");
+      // ③ 消息：失败 1，且没有"格式不支持"（两条通路不许混）
+      expect(result.message).toBe("同步失败: 成功 0, 跳过 0, 失败 1");
+      expect(result.message).not.toContain("格式不支持");
+      expect(result).toMatchObject({ success: false });
+    });
+
+    it("两条通路同时出现：失败 1 + 格式不支持 1 分别计数，源判 error（真有故障）", async () => {
+      const connector = cloudConnector({ listFiles: vi.fn().mockResolvedValue([driveFile("noindex"), binaryFile("pk")]) });
+      vi.mocked(getConnector).mockReturnValue(connector);
+      vi.mocked(ingestFile).mockImplementation(async (opts) => (
+        opts.fileName.endsWith(".bin")
+          ? { itemId: 1, indexed: false, indexError: "Unsupported format: application/octet-stream", reason: "unsupported" as const }
+          : { itemId: 1, documentId: 9, indexed: false, indexError: "嵌入服务不可用", reason: "index_failed" as const }
+      ));
+      const { db, caller } = callerWith([seedRow({ id: 1, type: "cloud_drive" })], [FRESH, FRESH]);
+
+      const result = await caller.sync({ id: 1 });
+
+      // 失败桶只装那条真索引失败（1），unsupported 那条不进失败桶（消息里单列一段）
+      expect(result.message).toBe("同步失败: 成功 0, 跳过 0, 失败 1, 格式不支持 1（Unsupported format: application/octet-stream）");
+      expect(result.message).not.toContain("失败 2");
+      expect(lastOf(db.jobUpdates)).toMatchObject({ processedItems: 0, failedItems: 1, status: "failed" });
+      // 有真索引失败在场 → lastError 必须点它（"格式不支持"不写进 lastError，它不会把源染红）
+      const lastError = String(lastOf(db.dsUpdates).lastError);
+      expect(lastError).toContain("索引失败");
+      expect(lastError).not.toContain("格式不支持");
     });
   });
 
@@ -1314,7 +1582,7 @@ describe("sync cross-run dedup on real sqlite (t14 M-2/M-3)", () => {
           metadata: JSON.stringify({ ...(opts.metadata ?? {}), uploadedFileId: null }),
           ts: (clock += 1),
         });
-      return { itemId: landedThisRun };
+      return { itemId: landedThisRun, indexed: true };
     });
 
     vi.mocked(getDb).mockReturnValue(drizzle(raw, { schema: fullSchema }) as never);
@@ -1730,7 +1998,7 @@ describe("datasourceRouter · sync 按源归档到知识库文件夹", () => {
           metadata: JSON.stringify({ ...(opts.metadata ?? {}), uploadedFileId: null }),
           ts: (clock += 1),
         });
-      return { itemId };
+      return { itemId, indexed: true };
     });
 
     vi.mocked(getDb).mockReturnValue(drizzle(raw, { schema: fullSchema }) as never);

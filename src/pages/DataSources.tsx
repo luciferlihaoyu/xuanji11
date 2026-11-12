@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Cloud, HardDrive, Link2, FolderOpen, RefreshCw, Plus, X, Check, Trash2, Pencil, Upload, Newspaper, ExternalLink } from 'lucide-react';
 import { useDataSources } from '@/hooks/useDataSources';
+import { useAppStore } from '@/store/useAppStore';
 import MobileDrawer from '@/components/MobileDrawer';
 import { trpc } from '@/providers/trpc';
 import { runSequential, toggleAllIds, toggleId } from '@/lib/batch';
@@ -22,22 +23,45 @@ const PLATFORM_CONFIG: Record<string, { icon: typeof Cloud; color: string; label
 };
 
 // 类型选项
-const TYPE_OPTIONS = [
-  { value: 'cloud_drive', label: '云盘' },
-  { value: 'nas', label: 'NAS' },
-  { value: 'database', label: '数据库' },
-  { value: 'api', label: 'API' },
-  { value: 'webhook', label: 'Webhook' },
-  { value: 'rss', label: 'RSS' },
-  { value: 'obsidian', label: 'Obsidian' },
-  { value: 'notion', label: 'Notion' },
+// implemented = 后端 datasource-router.ts 的 IMPLEMENTED_DATA_SOURCE_TYPES（cloud_drive / nas / rss）是否真正实现同步。
+// 未实现的类型不禁用（允许先建档、留个意向记录），但三处必须让用户在建档前就看见：
+// ①下拉显示名追加「（暂未实现）」；②下拉下方一行说明；③列表卡片灰色小标签。
+const TYPE_OPTIONS: { value: string; label: string; implemented: boolean }[] = [
+  { value: 'cloud_drive', label: '云盘', implemented: true },
+  { value: 'nas', label: 'NAS', implemented: true },
+  { value: 'database', label: '数据库', implemented: false },
+  { value: 'api', label: 'API', implemented: false },
+  { value: 'webhook', label: 'Webhook', implemented: false },
+  { value: 'rss', label: 'RSS', implemented: true },
+  { value: 'obsidian', label: 'Obsidian', implemented: false },
+  { value: 'notion', label: 'Notion', implemented: false },
 ];
+
+/** 同步尚未实现的类型集合（列表卡片据此打灰标；不在表内的未知类型不算，避免把脏数据误标） */
+const NOT_IMPLEMENTED_TYPES: ReadonlySet<string> = new Set(
+  TYPE_OPTIONS.filter((o) => !o.implemented).map((o) => o.value),
+);
+
+/** 下拉显示名：未实现类型打上后缀，选型那一刻即可见 */
+function typeOptionLabel(opt: { label: string; implemented: boolean }): string {
+  return opt.implemented ? opt.label : `${opt.label}（暂未实现）`;
+}
 
 // 云盘平台选项
 const CLOUD_PLATFORMS = [
   { value: '115', label: '115网盘' },
   { value: 'aliyundrive', label: '阿里云盘' },
 ];
+
+// 同步模式选项（t7）：后端调度器尚未实现自动同步，hourly / daily 只做占位记录 ——
+// 按钮灰置不可选 + title 说明，避免用户以为设了就会自动跑。manual 为默认且始终可用。
+const SYNC_MODE_OPTIONS = [
+  { value: 'manual', label: '手动', available: true },
+  { value: 'hourly', label: '每小时', available: false },
+  { value: 'daily', label: '每天', available: false },
+] as const;
+
+const AUTO_SYNC_DISABLED_HINT = '自动调度尚未实现，请用手动同步';
 
 // t2：后端读侧出参统一掩码（config.apiKey === "***masked***"，与 api/lib/setting-mask 的 MASK 同字面量）。
 // 编辑表单不得把掩码当真值回填——见 handleOpenEdit / handleSave。
@@ -154,10 +178,12 @@ export default function DataSources() {
     sync,
     organizeExisting,
   } = useDataSources();
+  // 只订阅 addToast（引用稳定），避免整店订阅导致每次弹 toast 都重渲染整页
+  const addToast = useAppStore((s) => s.addToast);
 
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [form, setForm] = useState({ name: '', type: 'api' as string, platform: '' as string, url: '', apiKey: '', refreshToken: '', syncInterval: 'manual' });
+  const [form, setForm] = useState({ name: '', type: 'rss' as string, platform: '' as string, url: '', apiKey: '', refreshToken: '', syncInterval: 'manual' });
   const [saveError, setSaveError] = useState('');
   const [syncingIds, setSyncingIds] = useState<Set<number>>(new Set());
   const [testingIds, setTestingIds] = useState<Set<number>>(new Set());
@@ -181,7 +207,7 @@ export default function DataSources() {
   const handleOpenCreate = () => {
     setEditingId(null);
     setSaveError('');
-    setForm({ name: '', type: 'api', platform: '', url: '', apiKey: '', refreshToken: '', syncInterval: 'manual' });
+    setForm({ name: '', type: 'rss', platform: '', url: '', apiKey: '', refreshToken: '', syncInterval: 'manual' });
     setShowModal(true);
   };
 
@@ -198,7 +224,11 @@ export default function DataSources() {
     };
     setForm({
       name: (ds.name as string) || '',
-      type: (ds.type as string) || 'api',
+      // ④ 编辑态**保留原值**，绝不做实现性回填。
+      // 旧写法 `(ds.type as string) || 'rss'`：库里若存着不在 TYPE_OPTIONS 里的历史类型（数据由更早版本/导入写入），
+      // 会被静默回填成 rss —— 用户一保存虽不改 type，但表单已展示成 RSS，用户以为类型就是 RSS，
+      // 下次同步就会按 RSS 连接器去跑一个网盘源。这里原样回填，由表单给出提示。
+      type: typeof ds.type === 'string' ? ds.type : '',
       platform: (config.platform as string) || '',
       url: (config.url as string) || '',
       apiKey: secretOrMasked('apiKey', config.apiKey),
@@ -306,9 +336,25 @@ export default function DataSources() {
     if (syncingIds.has(id)) return; // 同上：同一源不许并发同步
     setSyncingIds((prev) => new Set(prev).add(id));
     try {
-      await sync({ id });
+      // ① 必须接住后端返回值：sync 会如实回报本轮结果（全成功 / 部分成功 / 索引失败 / 类型未实现 …），
+      // success 与 message 里带着精确计数与原因。旧实现裸 await、只用 console.error 兜异常，
+      // 等于把后端写好的 message 全扔掉，用户只能从卡片红色 lastError 倒推发生了什么。
+      const result = await sync({ id });
+      const sourceName = dataSources.find((s) => s.id === id)?.name;
+      const message = String(result.message ?? '').trim() || (result.success ? '同步完成' : '同步失败');
+      addToast({
+        type: result.success ? 'success' : 'error',
+        title: message,
+        description: sourceName ? `数据源：${sourceName}` : undefined,
+      });
     } catch (err) {
       console.error('同步失败:', err);
+      // 网络/HTTP 层失败：后端 message 拿不到，如实说"请求失败"，不要伪装成"同步完成"。
+      addToast({
+        type: 'error',
+        title: '同步请求失败',
+        description: err instanceof Error && err.message ? err.message : '请检查网络连接后重试',
+      });
     } finally {
       setSyncingIds((prev) => {
         const next = new Set(prev);
@@ -404,6 +450,14 @@ export default function DataSources() {
 
   const batchPct = batchParse.valid.length ? Math.round((batchProgress / batchParse.valid.length) * 100) : 0;
 
+  // 当前所选类型是否真能同步（决定「类型」下方那行说明的强调色；未实现项用橙色提醒）
+  const selectedTypeImplemented = TYPE_OPTIONS.find((o) => o.value === form.type)?.implemented ?? true;
+
+  // ④ 当前表单里的类型是否在本页的 TYPE_OPTIONS 里。
+  // 为 false = 编辑态打开了一个「历史类型」（库里的值不在下拉列表中）：
+  // 下拉要把它作为一个原值选项显示出来，并明确告诉用户保存不会改写它。
+  const formTypeInOptions = TYPE_OPTIONS.some((o) => o.value === form.type);
+
   // ── 数据源表单字段（桌面居中弹窗与移动端右侧抽屉共用同一份，避免两处走样）──
   const formFields = (
     <div className="space-y-4">
@@ -425,10 +479,29 @@ export default function DataSources() {
           onChange={(e) => setForm((p) => ({ ...p, type: e.target.value, platform: e.target.value === 'cloud_drive' ? p.platform : '' }))}
           className="input-base text-xs w-full"
         >
+          {/* ④ 历史类型不在列表中时，把它原样放进选项，让下拉显示"真实值"而不是空白/错位 */}
+          {!formTypeInOptions && (
+            <option value={form.type}>
+              {form.type ? `${form.type}（历史类型，保存保持原值）` : '（未设置，保存保持原值）'}
+            </option>
+          )}
           {TYPE_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>{opt.label}</option>
+            <option key={opt.value} value={opt.value}>{typeOptionLabel(opt)}</option>
           ))}
         </select>
+        {/* ④ 历史类型提示：保存不会把它改写成 RSS 之类的已实现类型 */}
+        {!formTypeInOptions && (
+          <p className="text-[11px] mt-1 break-words" style={{ color: '#FB923C' }}>
+            该数据源的历史类型「{form.type || '未设置'}」不在当前列表中，保存将保持原值（不会被改写成其他类型）。
+          </p>
+        )}
+        {/* 选型即知情：哪几种真能同步、哪几种只是建档占位（未实现项不禁用，仅标注） */}
+        <p
+          className="text-[11px] mt-1 break-words"
+          style={{ color: selectedTypeImplemented ? 'var(--text-muted)' : '#FB923C' }}
+        >
+          云盘 / NAS / RSS 已支持实际同步；其余类型（数据库 / API / Webhook / Obsidian / Notion）当前仅可建档保存，同步时会提示尚未实现。
+        </p>
       </div>
 
       {/* 云盘平台选择 */}
@@ -506,28 +579,44 @@ export default function DataSources() {
       <div>
         <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-primary)' }}>同步模式</label>
         <div className="flex flex-wrap gap-2">
-          {['manual', 'hourly', 'daily'].map((m) => (
-            <button
-              key={m}
-              onClick={() => setForm((p) => ({ ...p, syncInterval: m }))}
-              className="chip text-xs py-1 px-3 transition-colors min-h-10 sm:min-h-0 inline-flex items-center"
-              style={{
-                backgroundColor: form.syncInterval === m ? 'var(--accent)' : undefined,
-                color: form.syncInterval === m ? '#0a0f1e' : undefined,
-              }}
-            >
-              {m === 'manual' ? '手动' : m === 'hourly' ? '每小时' : '每天'}
-            </button>
-          ))}
+          {SYNC_MODE_OPTIONS.map((m) => {
+            const active = form.syncInterval === m.value;
+            return (
+              <button
+                key={m.value}
+                type="button"
+                onClick={() => setForm((p) => ({ ...p, syncInterval: m.value }))}
+                disabled={!m.available}
+                aria-disabled={!m.available}
+                title={m.available ? undefined : AUTO_SYNC_DISABLED_HINT}
+                className="chip text-xs py-1 px-3 transition-colors min-h-10 sm:min-h-0 inline-flex items-center disabled:cursor-not-allowed"
+                style={
+                  m.available
+                    ? {
+                        backgroundColor: active ? 'var(--accent)' : undefined,
+                        color: active ? '#0a0f1e' : undefined,
+                      }
+                    : {
+                        // 灰置占位：不用 opacity 压暗（浅色下会糊成一片），改用主题灰底 + 次级文字保证深浅色都可读
+                        backgroundColor: 'var(--bg-tertiary)',
+                        color: 'var(--text-secondary)',
+                        borderColor: 'var(--border-subtle)',
+                      }
+                }
+              >
+                {m.label}
+              </button>
+            );
+          })}
         </div>
-        {/* 诚实提示：与后端 datasource-router 的 notice 口径一致 */}
+        {/* 诚实提示：与后端 datasource-router 的 syncIntervalNotice 口径一致 */}
         {form.syncInterval !== 'manual' ? (
           <p className="text-[11px] mt-1.5 break-words" style={{ color: '#FB923C' }}>
-            自动同步尚未启用，将仅保存配置——「每小时 / 每天」目前只是记录偏好，仍需手动点击「同步」触发。
+            这条数据源存的是「{form.syncInterval === 'hourly' ? '每小时' : '每天'}」偏好，但自动调度尚未实现——仍只能手动点卡片上的「同步」，建议改选「手动」。
           </p>
         ) : (
           <p className="text-[11px] mt-1.5 break-words" style={{ color: 'var(--text-muted)' }}>
-            手动模式：创建后需自行点击卡片上的「同步」按钮拉取内容。
+            手动模式：创建后需自行点击卡片上的「同步」按钮拉取内容。「每小时 / 每天」为灰置占位——自动调度尚未实现。
           </p>
         )}
       </div>
@@ -684,12 +773,40 @@ export default function DataSources() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="chip text-[10px] py-0.5 px-2" style={{ backgroundColor: `${config.color}20`, color: config.color }}>{config.label}</span>
                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{source.type}</span>
+                    {/* 未实现类型才打灰标；已实现的 cloud_drive / nas / rss 保持清爽无标签 */}
+                    {NOT_IMPLEMENTED_TYPES.has(source.type) && (
+                      <span
+                        className="chip text-[10px] py-0.5 px-2 shrink-0"
+                        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', borderColor: 'var(--border-subtle)' }}
+                        title="该类型的同步尚未实现，仅保存了配置；点「同步」会提示尚未实现"
+                      >
+                        暂未实现
+                      </span>
+                    )}
                   </div>
                   {dsConfig.url && typeof dsConfig.url === 'string' && (
                     <code className="text-xs sm:text-[11px] block break-all sm:truncate min-w-0" style={{ color: 'var(--text-muted)' }}>{dsConfig.url}</code>
                   )}
                   {source.lastError && (
-                    <p className="text-xs sm:text-[11px] break-all sm:truncate min-w-0" style={{ color: '#EF4444' }}>{source.lastError}</p>
+                    // ① 颜色按 source.status 分档，不要一律红：
+                    //   · status==='error'        → 红：源本身不可达（连不上/配置错），是真故障；
+                    //   · status==='connected'    → 琥珀：源可达，只是这批索引失败（后端新口径 indexOnlyFailure），
+                    //                              报红会让用户跑去查网盘配置而白忙一场；
+                    //   · 其他状态（syncing / disconnected）→ 次级灰，避免在同步中把旧错误喊成故障。
+                    <p
+                      className="text-xs sm:text-[11px] break-all sm:truncate min-w-0"
+                      style={{
+                        color:
+                          source.status === 'error'
+                            ? '#EF4444'
+                            : source.status === 'connected'
+                              ? '#FB923C'
+                              : 'var(--text-muted)',
+                      }}
+                      title={source.lastError}
+                    >
+                      {source.lastError}
+                    </p>
                   )}
                 </div>
 

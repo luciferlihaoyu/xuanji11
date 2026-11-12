@@ -9,7 +9,7 @@ import { dataSources, ingestionJobs, ingestionItems, kbFolders, kbDocuments } fr
 import { clean } from "./lib/clean";
 import { env } from "./lib/env";
 import { getConnector, type CloudConnector } from "./connectors";
-import { ingestFile } from "./lib/ingestion";
+import { ingestFile, type IngestFileResult } from "./lib/ingestion";
 import { logAudit } from "./lib/audit";
 import { maskConnectorConfig, stripMaskedSecrets, redactAuditInput, isSecretKey, deepMergeObjects } from "./lib/setting-mask";
 
@@ -157,7 +157,15 @@ function syncIntervalNotice(config: Record<string, unknown> | null | undefined):
  *  —— 两个入口互相打脸。故 entryCount === 0 时换成点名"源没有可同步条目"的消息。
  *  注意这只改措辞：status 仍按"源可达且合法"判 connected（见 sync 内注释），
  *  但绝不在消息里把零条目说成有任何内容入库。 */
-function syncSummaryMessage(entryCount: number, processed: number, skipped: number, ignored: number, failed: number): string {
+function syncSummaryMessage(
+  entryCount: number,
+  processed: number,
+  skipped: number,
+  ignored: number,
+  failed: number,
+  unsupported = 0,
+  unsupportedDetail?: string | null,
+): string {
   if (entryCount === 0) {
     return "同步完成: 源当前没有可同步的条目（0 条）—— 本轮没有任何内容入库；若这是订阅源，可能是它暂时没有发布内容";
   }
@@ -165,6 +173,11 @@ function syncSummaryMessage(entryCount: number, processed: number, skipped: numb
   const parts = [`成功 ${processed}`, `跳过 ${skipped}`];
   if (ignored > 0) parts.push(`忽略 ${ignored}`); // 只在真有其事时出现，避免日常噪音
   parts.push(`失败 ${failed}`);
+  // 格式不支持/正文为空单列一桶（评审 B3）：它们既不是失败、也不是入库，
+  // 混进"失败"会把数据源整体染红，混进"成功"又是假成功。
+  if (unsupported > 0) {
+    parts.push(`格式不支持 ${unsupported}${unsupportedDetail ? `（${unsupportedDetail}）` : ""}`);
+  }
   return `${headline}: ${parts.join(", ")}`;
 }
 
@@ -396,6 +409,15 @@ export const datasourceRouter = createRouter({
         let failed = 0;
         let skipped = 0;
         let ignored = 0;
+        // 2026-11：failed 里要能区分「下载/解析失败」（抛错）与「索引失败」（文档已入库、但检索不到）。
+        // ingestFile 对后者不再抛错，只回报 indexed:false —— 只埋条数与首条原因，供 lastError 用。
+        let indexFailed = 0;
+        let firstIndexError: string | null = null;
+        // 2026-11（评审 B3）：「格式不支持 / 正文为空」单列一桶 ——
+        // 这些文件压根没生成文档，既不是"入库成功"，也不是"入库失败"（把源染红是错归因）；
+        // 更不该被说成"嵌入服务不可用"（那是另一种故障，排查方向完全不同）。
+        let unsupported = 0;
+        let firstUnsupportedReason: string | null = null;
 
         for (const file of files) {
           if (file.type !== "file") {
@@ -449,6 +471,8 @@ export const datasourceRouter = createRouter({
           // **未**实现 getContent 的连接器（115/aliyundrive/nas/alist 网盘类）维持原 downloadUrl 抓取，行为零回归。
           let inlineTempPath: string | undefined;
           try {
+            // 两条通路（内联正文 / 网盘下载）都要接住返回值：入库统计只认「真索引成功」。
+            let ingested: IngestFileResult;
             if (connector.getContent) {
               const inline = await connector.getContent(config, file.id);
               if (!inline) {
@@ -463,7 +487,7 @@ export const datasourceRouter = createRouter({
               if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
               inlineTempPath = path.join(dir, `ds-feed-${Date.now()}-${randomUUID().slice(0, 8)}.md`);
               fs.writeFileSync(inlineTempPath, inline.content, "utf-8");
-              await ingestFile({
+              ingested = await ingestFile({
                 sourceType: "datasource",
                 sourceId: String(ds.id),
                 fileName: inline.fileName,
@@ -484,7 +508,7 @@ export const datasourceRouter = createRouter({
               });
             } else {
               const downloadUrl = file.downloadUrl ?? (await connector.getDownloadUrl(config, file.id));
-              await ingestFile({
+              ingested = await ingestFile({
                 sourceType: "datasource",
                 sourceId: String(ds.id),
                 fileName: file.name,
@@ -501,7 +525,27 @@ export const datasourceRouter = createRouter({
                 folderId: await archiveFolder(),
               });
             }
-            processed++;
+            // 口径（2026-11）：processed 只代表「真的能检索到」。
+            // ingestFile 对「文档已入库但索引失败」（嵌入服务挂掉、向量写不进去…）不再抛错，
+            // 只回报 indexed:false。旧实现此处无条件 processed++，于是这类检索不到的文档被报成
+            // 「成功入库 N 条」、作业 failedItems=0、数据源 lastError=null —— 假成功。
+            if (!ingested.indexed) {
+              const reason = ingested.indexError ?? "未知原因";
+              if (ingested.reason === "index_failed") {
+                // 文档已入库但索引失败 → 检索不到，算失败（口径：processed 只代表"真的能检索到"）
+                failed++;
+                indexFailed++;
+                if (firstIndexError === null) firstIndexError = reason;
+                console.error(`[DataSource] Indexing failed for ${file.name}: ${reason}`);
+              } else {
+                // 格式不支持 / 正文为空 → 压根没生成文档：单列一桶，不算失败、不算成功（评审 B3）
+                unsupported++;
+                if (firstUnsupportedReason === null) firstUnsupportedReason = reason;
+                console.warn(`[DataSource] Unsupported/empty content for ${file.name}: ${reason}`);
+              }
+            } else {
+              processed++;
+            }
           } catch (err) {
             failed++;
             console.error(`[DataSource] Ingest failed for ${file.name}:`, err);
@@ -536,22 +580,52 @@ export const datasourceRouter = createRouter({
         //   与 testConnection 的"没有可同步的内容"同调，绝不写出任何入库量。
         const nothingLanded = failed > 0 && processed === 0;
 
+        // 2026-11：索引失败 ≠ 源故障。
+        // 全部条目都只是「索引失败」时（indexFailed === failed），源其实完全可达 —— 文件列表拿到了、
+        // 正文下来了、文档也入库了，坏的是我们自己的嵌入服务。此时仍把 dataSources.status 写成 error，
+        // 就是把「嵌入服务挂了」误报成「你的数据源坏了」，用户会去查网盘配置而白忙一场。
+        // 故：这批仍算失败（作业 failed、success false、消息"同步失败"），但数据源判 connected，
+        // 真实故障点由 lastError 承担。其余情形（下载/解析抛错）保持既有规则，一律 error。
+        const indexOnlyFailure = nothingLanded && indexFailed === failed;
+
         await db.update(ingestionJobs)
           .set({ processedItems: processed, failedItems: failed, status: nothingLanded ? "failed" : "completed" })
           .where(eq(ingestionJobs.id, Number(jobId)));
 
         await db.update(dataSources)
           .set({
-            status: nothingLanded ? "error" : "connected",
+            status: nothingLanded && !indexOnlyFailure ? "error" : "connected",
             lastSyncAt: new Date(),
             config,
-            lastError: failed > 0 ? `${failed} 个文件入库失败` : null,
+            // 三条口径互斥（评审 B3：归因必须与真实原因一致）：
+            //   · 只有索引失败（indexOnlyFailure）→ 明确写「已入库但索引失败」+ 嵌入/向量侧说明；
+            //   · 有索引失败也有其它失败      → 以「N 个文件入库失败」起头，追加可分辨的索引说明；
+            //   · 全是下载/解析失败          → 维持原样「N 个文件入库失败」。
+            // 「格式不支持」不在这里出现：它既没生成文档、也不是故障，写进 lastError 会把源染红。
+            lastError:
+              failed > 0
+                ? indexOnlyFailure
+                  ? `${failed} 个条目已入库但索引失败：${firstIndexError ?? "未知原因"}（嵌入服务或向量写入不可用，数据源本身正常，可稍后重建索引）`
+                  : indexFailed > 0
+                    ? `${failed} 个文件入库失败（其中 ${indexFailed} 个索引失败：${firstIndexError}）`
+                    : `${failed} 个文件入库失败`
+                : null,
           })
           .where(eq(dataSources.id, input.id));
 
         return {
           success: failed === 0,
-          message: syncSummaryMessage(files.length, processed, skipped, ignored, failed),
+          // 第 6 个实参 unsupported 必须传（此前漏传 → 消息里永远缺「格式不支持 N」，
+          // 桶计数对了但用户看不到，诚实性断在最后一步）。
+          message: syncSummaryMessage(
+            files.length,
+            processed,
+            skipped,
+            ignored,
+            failed,
+            unsupported,
+            firstUnsupportedReason,
+          ),
         };
       } catch (err) {
         console.error("[DataSource] sync failed:", err);

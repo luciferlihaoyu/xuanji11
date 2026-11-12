@@ -17,7 +17,6 @@ const fakeSearchByText = vi.fn(async () => []);
 const fakeInsert = vi.fn();
 const fakeInsertBatch = vi.fn();
 const fakeDeleteByDocumentId = vi.fn();
-const fakeIndexDocumentChunks = vi.fn();
 const fakeEmbedText = vi.fn();
 const fakeAddDocuments = vi.fn();
 const fakeHealthCheck = vi.fn();
@@ -46,7 +45,6 @@ const fakeEngine = {
   insert: fakeInsert,
   insertBatch: fakeInsertBatch,
   deleteByDocumentId: fakeDeleteByDocumentId,
-  indexDocumentChunks: fakeIndexDocumentChunks,
   search: fakeSearch,
   searchByText: fakeSearchByText,
   embedText: fakeEmbedText,

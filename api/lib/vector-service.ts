@@ -385,9 +385,27 @@ export function getLastEmbeddingIdentity(): { model: string; dimension: number; 
   return lastEmbeddingIdentity;
 }
 
-async function embedWithFallback(texts: string[]): Promise<number[][]> {
+/**
+ * 一次嵌入调用的**结果与身份**。
+ *
+ * 为什么要有它（2026-11-11 评审 B2）：此前调用方要判断"这次嵌入是不是降级产物"，
+ * 只能去读模块级单例 `getLastEmbeddingIdentity()` —— 那是**进程全局最后写入值**，
+ * 与本次调用没有因果绑定：并发场景下语义检索（searchVectors）写的身份可能把
+ * 本次的真嵌入身份覆盖掉（假阳性：好向量被当降级丢弃），反之亦然（假阴性：
+ * hash 伪向量被当真向量写进 vec 表 —— 正是 2026-09-21 事故的形状）。
+ * 正确做法是让身份随返回值一起回来。
+ */
+export interface EmbedOutcome {
+  readonly vectors: number[][];
+  /** 本次嵌入实际使用的模型身份（降级时为 __hash_fallback__） */
+  readonly identity: { model: string; dimension: number; templateName?: string } | null;
+  /** true = 嵌入服务全挂，返回的是 hash 伪向量，**不可写入向量表** */
+  readonly degraded: boolean;
+}
+
+async function embedWithFallbackOutcome(texts: string[]): Promise<EmbedOutcome> {
   const candidates = await embeddingCandidates();
-  if (texts.length === 0) return [];
+  if (texts.length === 0) return { vectors: [], identity: null, degraded: false };
   for (const cfg of candidates) {
     try {
       // 分批（≤EMBED_BATCH_MAX/批）调用：单配置整批超出上限会被 API 拒绝
@@ -397,12 +415,14 @@ async function embedWithFallback(texts: string[]): Promise<number[][]> {
         const slice = texts.slice(i, i + EMBED_BATCH_MAX);
         results.push(...(await fetchEmbeddingsWithConfig(slice, cfg)));
       }
-      lastEmbeddingIdentity = {
+      const identity = {
         model: cfg.model,
         dimension: cfg.dimension,
         ...(cfg.templateName ? { templateName: cfg.templateName } : {}),
       };
-      return results;
+      // 全局单例仍照旧写一份（供巡检/展示用），但**正确性判断不再依赖它**。
+      lastEmbeddingIdentity = identity;
+      return { vectors: results, identity, degraded: false };
     } catch (err) {
       const label = cfg.templateName ?? cfg.model;
       console.warn(`[VectorEngine] Embedding model ${label} failed, trying fallback:`, err instanceof Error ? err.message : String(err));
@@ -411,8 +431,17 @@ async function embedWithFallback(texts: string[]): Promise<number[][]> {
   // 兜底：用候选配置的 dimension 生成 hash 向量（而非固定 64 维），
   // 保证与 vec0 表维度一致、能真正写入——embedding API 不可用时检索仍可用
   // （hash 相似度，语义质量低于真实 embedding，但不会 0 向量）。
+  // 注意：**写侧**（document-indexer）会凭 degraded=true 拒绝把它写进向量表；
+  // 读侧（searchVectors 等）仍可能拿到它，那里靠 identity 字段自行判断。
   const first = candidates.find((c) => c.dimension > 0);
-  return hashFallbackEmbeddings(texts, first?.dimension ?? 64);
+  const dim = first?.dimension ?? 64;
+  const identity = { model: HASH_FALLBACK_MODEL, dimension: dim };
+  lastEmbeddingIdentity = identity;
+  return { vectors: hashFallbackEmbeddings(texts, dim), identity, degraded: true };
+}
+
+async function embedWithFallback(texts: string[]): Promise<number[][]> {
+  return (await embedWithFallbackOutcome(texts)).vectors;
 }
 
 /** 兜底向量写入向量表时使用的模型身份标记。**必须能一眼认出来**，否则
@@ -435,6 +464,57 @@ export function hashFallbackEmbeddings(texts: string[], dim: number): number[][]
  */
 export async function embedTextsWithFallback(texts: string[]): Promise<number[][]> {
   return embedWithFallback(texts);
+}
+
+/**
+ * 需要判断"本次嵌入是否降级"的调用方用这个入口（身份随结果一起返回，不依赖全局单例）。
+ */
+export async function embedTextsWithOutcome(texts: string[]): Promise<EmbedOutcome> {
+  return embedWithFallbackOutcome(texts);
+}
+
+/**
+ * 严格嵌入：可按调用方指定模型覆盖候选配置；所有候选失败时抛错，绝不走 hash 兜底。
+ *
+ * 与 embedWithFallback 的区别只有两点，都是「诚实性」要求：
+ *   ① modelOverride 非空时，每个候选配置的 model 都被覆盖成调用方指定的模型
+ *      （工作流 vectorize 节点用户在下拉里选的模型必须真的发给嵌入服务，
+ *       而不是静默用系统全局配置 + 把 config.model 原样回显）；
+ *   ② 所有候选都失败时抛错，**绝不生成 hash 伪向量**——调用方据此把节点标记失败，
+ *      而不是拿到一堆无语义的假向量还显示成功。
+ * 成功时仍照常写入 lastEmbeddingIdentity，供巡检识别实际使用的模型身份。
+ */
+export async function embedTextsStrict(texts: string[], modelOverride?: string): Promise<number[][]> {
+  const override = typeof modelOverride === "string" && modelOverride.trim() ? modelOverride.trim() : undefined;
+  const candidates = await embeddingCandidates();
+  if (texts.length === 0) return [];
+  if (candidates.length === 0) throw new Error("Embedding provider not configured");
+  let lastError: unknown;
+  for (const candidate of candidates) {
+    const cfg = override ? { ...candidate, model: override } : candidate;
+    try {
+      // 与 embedWithFallback 同样的分批调用（单配置整批超出 input 上限会被 API 拒绝）
+      const results: number[][] = [];
+      for (let i = 0; i < texts.length; i += EMBED_BATCH_MAX) {
+        const slice = texts.slice(i, i + EMBED_BATCH_MAX);
+        results.push(...(await fetchEmbeddingsWithConfig(slice, cfg)));
+      }
+      lastEmbeddingIdentity = {
+        model: cfg.model,
+        // 维度以真实返回的向量长度为准（覆盖模型时候选里记的维度可能不再匹配）
+        dimension: results[0]?.length || cfg.dimension,
+        ...(cfg.templateName ? { templateName: cfg.templateName } : {}),
+      };
+      return results;
+    } catch (err) {
+      lastError = err;
+      const label = cfg.templateName ?? cfg.model;
+      console.warn(`[VectorEngine] (strict) Embedding model ${label} failed, trying next candidate:`, err instanceof Error ? err.message : String(err));
+    }
+  }
+  // 全部候选失败：抛错，不做 hash 兜底（hashFallbackEmbeddings 只能由显式调用方主动使用）
+  const detail = lastError instanceof Error ? lastError.message : String(lastError ?? "unknown error");
+  throw new Error(`嵌入服务不可用（所有候选模型均失败），最后一次错误: ${detail}`);
 }
 
 export interface SearchResult {
@@ -665,7 +745,14 @@ export interface AddDocumentInput {
 
 export interface AddDocumentsResult {
   readonly added: number;
+  /** false 表示当前引擎不支持"按集合写入"（sqlite-vec 为全局单表索引） */
+  readonly supported: boolean;
+  readonly reason?: string;
 }
+
+/** 「按集合写入」不成立的统一话术：外部调用方（天宫等 Agent）必须能直接看懂为什么没写。 */
+export const ADD_DOCUMENTS_UNSUPPORTED_REASON =
+  "sqlite-vec 为全局单表索引，集合仅为元数据登记；请用知识库上传/重建索引写入向量";
 
 export interface CollectionStats {
   readonly name: string;
@@ -677,9 +764,13 @@ export async function addDocumentsToCollection(name: string, docs: AddDocumentIn
   const db = getDb();
   const [collection] = await db.select().from(vectorCollections).where(eq(vectorCollections.name, name));
   if (!collection) throw new Error(`Collection not found: ${name}`);
-  const added = await vectorEngine.addDocuments(docs.map((doc) => ({ ...doc, metadata: { ...doc.metadata, collectionName: name } })));
-  await db.update(vectorCollections).set({ documentCount: (collection.documentCount ?? 0) + added }).where(eq(vectorCollections.name, name));
-  return { added };
+  // 诚实化（2026-11-12）：原实现在这里调 vectorEngine.addDocuments，但两个引擎实现都是
+  // `async (_docs) { return 0; }` 的空壳 → 永远 added=0、documentCount 纹丝不动，
+  // 调用方只拿到 { added: 0 }，看起来像"没加进去"，实际是"这个功能不成立"。
+  // 现改为：不调引擎、不写任何向量、不动 documentCount，明确回报 supported:false + 原因。
+  // 真正入库统一走知识库上传 / 重建索引（document-indexer 的全局单表 vec_chunks）。
+  void docs; // 入参保留以维持既有调用契约；本轮不落任何写入
+  return { added: 0, supported: false, reason: ADD_DOCUMENTS_UNSUPPORTED_REASON };
 }
 
 export async function getCollectionStats(name: string): Promise<CollectionStats> {

@@ -16,20 +16,32 @@ vi.mock("../queries/connection", () => ({
 
 vi.mock("./vector", () => ({
   vectorEngine: {
-    indexDocumentChunks: vi.fn(),
+    // 原空壳分块索引方法已删除（2026-11 清理死代码）：它只删旧向量、不 embed、不写 FTS，
+    // 正是「入库成功但检索查不到」那次假成功的源头。写向量的唯一路径是 insertBatch。
     deleteByDocumentId: vi.fn(),
     insertBatch: vi.fn(async () => {}),
     size: 0,
   },
 }));
 
-// 模拟 embed：每个文本返回固定维度向量
+// 嵌入服务是**边界**（网络调用 + 模型），按仓库惯例整体 mock。
+// 关键变化（评审 B2）：生产 indexer 现在只认 `embedTextsWithOutcome` —— 模型身份随**本次调用**
+// 的结果一起返回（{vectors, identity, degraded}），不再去读进程级单例。
+// `getLastEmbeddingIdentity` 仍保留桩，但用途反转了：本文件用它证明「索引器的降级判定**不看**它」
+// （单例说什么都不影响本次结果，见 A4 的两个方向）。
 vi.mock("./vector-service", () => ({
-  embedTextsWithFallback: vi.fn(async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3])),
+  embedTextsWithOutcome: vi.fn(async (texts: string[]) => ({
+    vectors: texts.map(() => [0.1, 0.2, 0.3]),
+    identity: { model: "test-embedding-model", dimension: 3 },
+    degraded: false,
+  })),
   ensureCorrectDimension: vi.fn(async () => {}),
+  getLastEmbeddingIdentity: vi.fn((): { model: string; dimension: number } | null => null),
+  HASH_FALLBACK_MODEL: "__hash_fallback__",
 }));
 
 import { chunkText, indexDocumentById, tryIndexDocumentById, startReindexAll, getReindexProgress } from "./document-indexer";
+import { embedTextsWithOutcome, getLastEmbeddingIdentity, HASH_FALLBACK_MODEL } from "./vector-service";
 
 function fakeDocument(overrides: Partial<KbDocument> = {}): KbDocument {
   return {
@@ -52,28 +64,50 @@ function fakeDocument(overrides: Partial<KbDocument> = {}): KbDocument {
 
 function createFakeDb(docs: readonly KbDocument[]) {
   const inserted: unknown[] = [];
+  /** 捕获每次 update().set(payload) 的载荷，供断言 metadata 落库内容 */
+  const updates: Array<Record<string, unknown>> = [];
+  /**
+   * 内存行（会随 update 真实变化）——为了钉住 ⑥「mergeDocumentMetadata 读最新行再合并」：
+   * 若只是把入口快照整块覆盖，第二次索引就看不到第一次写下的 embeddingDegraded 标记。
+   * select 读的是这里，update 写回的也是这里，语义与真库一致（同 dsh 其他内存库 harness）。
+   */
+  const stored: Array<Record<string, unknown>> = docs.map((doc) => ({ ...doc }));
   const db = {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
-        where: vi.fn(() => Promise.resolve([...docs])),
+        where: vi.fn(() => Promise.resolve(stored.map((row) => ({ ...row })))),
       })),
     })),
     delete: vi.fn(() => ({
       where: vi.fn(() => Promise.resolve()),
     })),
+    // insert 桩：补 .returning() 桩，与生产 drizzle better-sqlite3 对齐。
+    // 生产代码（document-indexer.ts:92-96）走 `db.insert(t).values(rows).returning({ id, content })`
+    // 取回自增主键，供 syncChunkToFts 写 FTS5。旧桩 values() 直接返回 Promise（MySQL 风格的
+    // [{ insertId }]），于是 .returning 不是函数 → 3 个用例在未改动源码上就红。
     insert: vi.fn(() => ({
-      values: vi.fn((rows: unknown) => {
+      values: vi.fn((rows: Array<{ content?: string }>) => {
         inserted.push(rows);
-        return Promise.resolve([{ insertId: 1 }]);
+        return {
+          // 返回 Promise<{id, content}[]>，id 模拟自增主键
+          returning: vi.fn((_cols?: unknown) =>
+            Promise.resolve(rows.map((row, index) => ({ id: index + 1, content: row.content })))
+          ),
+        };
       }),
     })),
     update: vi.fn(() => ({
-      set: vi.fn(() => ({
-        where: vi.fn(() => Promise.resolve()),
-      })),
+      set: vi.fn((payload: Record<string, unknown>) => {
+        updates.push(payload);
+        // 真实落库：metadata 的合并结果写回内存行（生产 indexer 传的已是合并后的整块）
+        if (payload && typeof payload === "object" && "metadata" in payload) {
+          for (const row of stored) row.metadata = payload.metadata;
+        }
+        return { where: vi.fn(() => Promise.resolve()) };
+      }),
     })),
   };
-  return { db, inserted };
+  return { db, inserted, updates, stored };
 }
 
 describe("chunkText", () => {
@@ -183,7 +217,7 @@ describe("indexDocumentById", () => {
     expect(inserted[0]).toEqual([
       { documentId: 7, content: "第一段内容。第二段内容。", chunkIndex: 0 },
     ]);
-    // 新实现：embed 后真正写入 vec 表（insertBatch），不再调空壳 indexDocumentChunks
+    // 新实现：embed 后真正写入 vec 表（insertBatch），不再调那个空壳分块索引方法
     expect(vectorEngine.insertBatch).toHaveBeenCalledTimes(1);
     const [entries] = vi.mocked(vectorEngine.insertBatch).mock.calls[0] as unknown as [
       Array<{ id: string; vector: number[]; metadata: Record<string, unknown> }>,
@@ -194,6 +228,140 @@ describe("indexDocumentById", () => {
     expect(entries[0].metadata.documentId).toBe("7");
     expect(db.update).toHaveBeenCalled();
   });
+
+  // ==== 事故防线：嵌入服务全挂时必须拒绝写 hash 伪向量 ====
+  // 2026-09-21 线上事故：嵌入 API 挂掉 → embedWithFallback 全部失败 → hashFallbackEmbeddings
+  // 生成伪向量且不抛错 → 全库回填两分钟写入 550+ 篇 hash 伪向量，检索质量归零而 failed=0
+  // 毫无异常信号。本用例锁死新语义：宁可不写向量腿，也不让无语义向量污染 vec 表。
+  //
+  // 评审 B1（最严重的一处）：守卫位置前移后，降级路径必须在**任何破坏性写之前**返回。
+  // 旧实现的顺序是「先 deleteByDocumentId 清旧向量 → 再判定降级 → 抛错」，
+  // 于是嵌入服务一挂，重建索引就把旧的真向量删光却不写新的 —— 净损失，比写伪向量更糟。
+  it("B1：降级时旧索引产物一条都不动（不删旧向量、不写 chunks），只落降级标记后抛错", async () => {
+    // Given: 一篇已经索引过的文档（metadata 里 beta 字段用于验证不整块覆盖）。
+    const doc = fakeDocument({ id: 42, content: "第一段内容。第二段内容。" });
+    const { db, inserted, updates, stored } = createFakeDb([doc]);
+    vi.mocked(getDb).mockReturnValue(db as never);
+    // 嵌入服务全挂：本次调用返回 hash 伪向量，身份如实是 __hash_fallback__
+    vi.mocked(embedTextsWithOutcome).mockResolvedValueOnce({
+      vectors: [[0.5, 0.5, 0.5]],
+      identity: { model: HASH_FALLBACK_MODEL, dimension: 1536 },
+      degraded: true,
+    });
+
+    // When / Then: 抛错让调用方看见（消息必须点名「拒绝写入 hash 伪向量」）
+    await expect(indexDocumentById(42)).rejects.toThrow("拒绝写入 hash 伪向量");
+
+    // ① 旧向量必须保住（B1 的核心）：deleteByDocumentId 一次都不许调用
+    expect(vectorEngine.deleteByDocumentId).not.toHaveBeenCalled();
+    // ② 旧 chunks 也不许被清（clearDocumentIndex 里的 db.delete(documentChunks) 没发生过）
+    expect(db.delete).not.toHaveBeenCalled();
+    // ③ 没有新 chunks 落库（既不删旧的，也不插新的 → 既有索引原样可用）
+    expect(inserted).toHaveLength(0);
+    // ④ 向量表零写入
+    expect(vectorEngine.insertBatch).not.toHaveBeenCalled();
+    // ⑤ 只写一次 metadata：如实标注降级（vectorized:false + embeddingDegraded:true）
+    expect(updates).toHaveLength(1);
+    const metadata = updates[0].metadata as Record<string, unknown>;
+    expect(metadata.vectorized).toBe(false);
+    expect(metadata.embeddingDegraded).toBe(true);
+    // 真库落库结果同口径（不是只看 set 载荷）
+    expect(stored[0]!.metadata).toMatchObject({ vectorized: false, embeddingDegraded: true });
+  });
+
+  // ⑥（评审 D）：降级标记必须能被清除——只写不清 = 嵌入服务恢复后文档仍自称降级，反向失真。
+  it("D：降级后重建成功 → metadata 的降级标记被显式清成 false（不是 undefined）", async () => {
+    // Given: 一篇历史上被标过降级的文档（模拟上一轮嵌入服务故障留下的标记）
+    const doc = fakeDocument({ id: 51, content: "第一段内容。", metadata: { source: "upload" } });
+    const { db, stored } = createFakeDb([doc]);
+    vi.mocked(getDb).mockReturnValue(db as never);
+
+    // 第一轮：嵌入服务全挂 → 降级
+    vi.mocked(embedTextsWithOutcome).mockResolvedValueOnce({
+      vectors: [[0.5, 0.5, 0.5]],
+      identity: { model: HASH_FALLBACK_MODEL, dimension: 1536 },
+      degraded: true,
+    });
+    await expect(indexDocumentById(51)).rejects.toThrow("拒绝写入 hash 伪向量");
+    expect(stored[0]!.metadata).toMatchObject({ vectorized: false, embeddingDegraded: true });
+
+    // 第二轮：服务恢复 → 真嵌入，标记必须被清掉
+    vi.mocked(embedTextsWithOutcome).mockResolvedValueOnce({
+      vectors: [[0.1, 0.2, 0.3]],
+      identity: { model: "qwen3.7-text-embedding-flash", dimension: 3 },
+      degraded: false,
+    });
+    await expect(indexDocumentById(51)).resolves.toEqual({ chunks: 1, skipped: false });
+
+    const metadata = stored[0]!.metadata as Record<string, unknown>;
+    expect(metadata.vectorized).toBe(true);
+    expect(metadata.embeddingDegraded).toBe(false); // 是 false，不是 undefined
+    // mergeDocumentMetadata 读最新行再合并：既有键不许被入口快照整块覆盖掉
+    expect(metadata.source).toBe("upload");
+  });
+
+  // 评审 B2（一）：写入向量表的模型身份必须来自**本次调用**，不是进程级单例。
+  it("B2：insertBatch 的 embeddingModel 来自本次 outcome.identity，而不是全局单例", async () => {
+    const doc = fakeDocument({ id: 43, content: "正常内容。" });
+    const { db } = createFakeDb([doc]);
+    vi.mocked(getDb).mockReturnValue(db as never);
+    // 本次真嵌入用的是 A 模型
+    vi.mocked(embedTextsWithOutcome).mockResolvedValueOnce({
+      vectors: [[0.1, 0.2, 0.3]],
+      identity: { model: "qwen3.7-text-embedding-flash", dimension: 1024 },
+      degraded: false,
+    });
+    // 但全局单例此刻被别的嵌入调用（并发语义检索等）覆盖成了 B 模型
+    vi.mocked(getLastEmbeddingIdentity).mockReturnValueOnce({ model: "另一个模型的伪身份", dimension: 1536 });
+
+    await indexDocumentById(43);
+
+    const [entries] = vi.mocked(vectorEngine.insertBatch).mock.calls[0] as unknown as [
+      Array<{ id: string; metadata: Record<string, unknown> }>,
+    ];
+    expect(entries[0]!.metadata.embeddingModel).toBe("qwen3.7-text-embedding-flash");
+    expect(entries[0]!.metadata.embeddingModel).not.toBe("另一个模型的伪身份");
+    expect(entries[0]!.metadata.embeddingDim).toBe(1024);
+  });
+
+  // 评审 B2（二）：降级判定同样不许看单例 —— 单例说是"真嵌入"，本次却是降级 → 仍必须拒绝。
+  it("B2：单例声称是真嵌入也不影响降级判定（本次 degraded=true → 照旧拒写）", async () => {
+    const doc = fakeDocument({ id: 44, content: "第一段内容。" });
+    const { db } = createFakeDb([doc]);
+    vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(embedTextsWithOutcome).mockResolvedValueOnce({
+      vectors: [[0.5, 0.5, 0.5]],
+      identity: { model: HASH_FALLBACK_MODEL, dimension: 1536 },
+      degraded: true,
+    });
+    // 单例此刻是另一路真嵌入写的「好身份」——旧实现会据此把 hash 伪向量当真向量写进库
+    vi.mocked(getLastEmbeddingIdentity).mockReturnValueOnce({ model: "qwen3.7-text-embedding-flash", dimension: 1024 });
+
+    await expect(indexDocumentById(44)).rejects.toThrow("拒绝写入 hash 伪向量");
+    expect(vectorEngine.insertBatch).not.toHaveBeenCalled();
+    expect(vectorEngine.deleteByDocumentId).not.toHaveBeenCalled();
+  });
+
+  // 评审 B2（三）：反方向 —— 单例说是 hash，但本次是真嵌入 → 不许误判降级（好向量被丢）。
+  it("B2：单例声称是 hash 兜底也不影响判定（本次 degraded=false → 正常写入）", async () => {
+    const doc = fakeDocument({ id: 45, content: "正常内容。" });
+    const { db, updates } = createFakeDb([doc]);
+    vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(embedTextsWithOutcome).mockResolvedValueOnce({
+      vectors: [[0.1, 0.2, 0.3]],
+      identity: { model: "qwen3.7-text-embedding-flash", dimension: 3 },
+      degraded: false,
+    });
+    vi.mocked(getLastEmbeddingIdentity).mockReturnValue({ model: HASH_FALLBACK_MODEL, dimension: 1536 });
+
+    try {
+      await expect(indexDocumentById(45)).resolves.toEqual({ chunks: 1, skipped: false });
+      expect(vectorEngine.insertBatch).toHaveBeenCalledTimes(1);
+      expect(updates[0]!.metadata).toMatchObject({ vectorized: true, embeddingDegraded: false });
+    } finally {
+      vi.mocked(getLastEmbeddingIdentity).mockReturnValue(null); // 还原，避免污染后续用例
+    }
+  });
 });
 
 describe("tryIndexDocumentById", () => {
@@ -201,13 +369,37 @@ describe("tryIndexDocumentById", () => {
     vi.clearAllMocks();
   });
 
-  it("swallows indexing errors and reports skip", async () => {
+  // 三态可辨（评审 S5）：文档"不存在"是真失败（failed=true），不是"文档本来就是空的"。
+  it("swallows indexing errors and reports a real failure (not an empty-doc skip)", async () => {
     const { db } = createFakeDb([]);
     vi.mocked(getDb).mockReturnValue(db as never);
 
     const result = await tryIndexDocumentById(999);
 
-    expect(result).toEqual({ chunks: 0, skipped: true });
+    expect(result).toMatchObject({ chunks: 0, skipped: true, failed: true });
+    expect(result.error).toContain("文档不存在");
+  });
+
+  // 同一个降级条件下，写文档路径的兜底钩子必须「不抛、如实报失败」——
+  // 语义是「索引没成但文档还在」，调用方据此照常完成文档写入。
+  it("hash 兜底时返回 failed 而不抛错（文档写入路径不受影响），且旧索引产物零破坏", async () => {
+    const doc = fakeDocument({ id: 46, content: "第一段内容。" });
+    const { db, inserted } = createFakeDb([doc]);
+    vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(embedTextsWithOutcome).mockResolvedValueOnce({
+      vectors: [[0.5, 0.5, 0.5]],
+      identity: { model: HASH_FALLBACK_MODEL, dimension: 1536 },
+      degraded: true,
+    });
+
+    const result = await tryIndexDocumentById(46);
+
+    expect(result).toMatchObject({ chunks: 0, skipped: true, failed: true });
+    expect(result.error).toContain("拒绝写入 hash 伪向量");
+    expect(vectorEngine.insertBatch).not.toHaveBeenCalled();
+    // B1：降级路径在破坏性写之前返回 —— 旧 chunks/向量一条都不删，新 chunks 一条不写
+    expect(db.delete).not.toHaveBeenCalled();
+    expect(inserted).toHaveLength(0);
   });
 });
 
@@ -269,5 +461,49 @@ describe("startReindexAll", () => {
     expect(final.failed).toBe(1);
     expect(final.chunksTotal).toBe(1);
     expect(final.lastError).toContain("embedding API down");
+  }, 15_000);
+});
+
+// 可见性验收：嵌入服务全挂时，全量重建必须把每篇都计入 failed 并留下 lastError，
+// 而不是 09-21 事故那样 failed=0 静默灌入 550+ 篇伪向量。
+describe("startReindexAll 嵌入降级可见性", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("降级时逐篇计入 failed 并写 lastError，向量表零写入、旧索引零破坏", async () => {
+    const docs = [fakeDocument({ id: 1, content: "文档一内容。" }), fakeDocument({ id: 2, content: "文档二内容。" })];
+    const { db } = createFakeDb(docs);
+    vi.mocked(getDb).mockReturnValue(db as never);
+    // 本次每一篇的嵌入调用都降级（身份随结果返回，评审 B2）
+    vi.mocked(embedTextsWithOutcome).mockResolvedValue({
+      vectors: [[0.5, 0.5, 0.5]],
+      identity: { model: HASH_FALLBACK_MODEL, dimension: 1536 },
+      degraded: true,
+    });
+
+    try {
+      startReindexAll();
+      const deadline = Date.now() + 10_000;
+      while (getReindexProgress().running && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+
+      const final = getReindexProgress();
+      expect(final.done).toBe(2);
+      expect(final.failed).toBe(2); // 事故形状是 failed=0，这里必须是 2
+      expect(final.chunksTotal).toBe(0); // 没有成功的索引
+      expect(final.lastError).toContain("拒绝写入 hash 伪向量");
+      expect(vectorEngine.insertBatch).not.toHaveBeenCalled(); // vec 表一颗伪向量都没进
+      // B1：整轮重建一个破坏性动作都没有（旧索引完好，故障期不制造净损失）
+      expect(db.delete).not.toHaveBeenCalled();
+      expect(vectorEngine.deleteByDocumentId).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(embedTextsWithOutcome).mockResolvedValue({
+        vectors: [[0.1, 0.2, 0.3]],
+        identity: { model: "test-embedding-model", dimension: 3 },
+        degraded: false,
+      }); // 还原，避免污染后续用例
+    }
   }, 15_000);
 });
