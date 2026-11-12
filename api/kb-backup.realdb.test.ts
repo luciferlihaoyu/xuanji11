@@ -204,10 +204,13 @@ describe("灾备恢复 · 真库往返（真 drizzle + 真 SQLite）", () => {
     expect(result.edges).toBe(1);
   });
 
-  it("真实规模必须导得回去：边超过 10,000 条也不该被自家 schema 拒收", () => {
+  it("真实规模必须导得回去：边超过 10,000 条 —— 既不被 schema 拒收，也插得进 SQLite", async () => {
     // 生产 knowledge_edges = 11,431 行（2026-11-12 实测），而 schema 限 max(10_000)
     // → **自己导出的备份自己导不回去**：灾备恢复在生产上 100% 失败（ZodError 数组超长）。
     // 旧 mock 测试永远发现不了：假数据只有 1 条边。
+    //
+    // 还有第二道坎（生产实测才暴露）：一条 INSERT 塞 11,431×8 = 91,448 个绑定变量
+    // → SqliteError: too many SQL variables。必须分批插。
     const edges = Array.from({ length: 10_001 }, (_, i) => ({
       id: i + 1,
       sourceId: 1,
@@ -217,6 +220,19 @@ describe("灾备恢复 · 真库往返（真 drizzle + 真 SQLite）", () => {
     }));
     const parsed = kbBackupSchema.parse({ version: "1.0", data: { nodes: [], edges, documents: [] } });
     expect(parsed.data.edges).toHaveLength(10_001);
+
+    // 真插一次：分批插必须能落库，且计数准确
+    sqlite.exec("DELETE FROM knowledge_edges; DELETE FROM knowledge_nodes;");
+    sqlite
+      .prepare(
+        `INSERT INTO knowledge_nodes (id, title, content, type, createdAt, updatedAt)
+         VALUES (1, '节点甲', '内容甲', 'concept', 1704067200000, 1704067200000)`,
+      )
+      .run();
+    const result = await importKnowledgeBase(parsed);
+    expect(result.edges).toBe(10_001);
+    const row = sqlite.prepare("SELECT COUNT(*) c FROM knowledge_edges").get() as { c: number };
+    expect(row.c).toBe(10_001);
   });
 
   it("老备份（无软删三列）仍能导入真库 —— 向后兼容", async () => {    seed();

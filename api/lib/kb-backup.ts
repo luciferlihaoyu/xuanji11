@@ -133,6 +133,34 @@ export async function exportKnowledgeBase(): Promise<KbBackupResult> {
   return payload;
 }
 
+/**
+ * 单条 INSERT 的绑定变量上限：SQLite 老版本 999、新版 32766，取小的最稳。
+ * 一次插 11,431 条边 × 8 列 = **91,448 个变量** → 直接 `SqliteError: too many SQL variables`
+ * （2026-11-12 生产实测：导出成功、导回报 Internal tool error）。
+ * 所以分批插入：50 行 × 13 列 = 650 个变量，两个上限下都安全。
+ */
+const INSERT_BATCH_SIZE = 50;
+
+/**
+ * 分批插入并累计实际写入行数（onConflictDoNothing → 主键冲突的行不算写入）。
+ * 批量大小固定，不做"越大越快"的优化：灾备路径一年跑不了几次，可读性/稳定性优先。
+ */
+async function insertInBatches<TTable extends Parameters<ReturnType<typeof getDb>["insert"]>[0]>(
+  db: ReturnType<typeof getDb>,
+  table: TTable,
+  rows: unknown[],
+): Promise<number> {
+  let changes = 0;
+  for (let i = 0; i < rows.length; i += INSERT_BATCH_SIZE) {
+    const batch = rows.slice(i, i + INSERT_BATCH_SIZE);
+    const result = await (db.insert(table) as { values: (r: unknown[]) => { onConflictDoNothing: () => Promise<{ changes?: number }> } })
+      .values(batch)
+      .onConflictDoNothing();
+    changes += Number(result.changes ?? 0);
+  }
+  return changes;
+}
+
 export async function importKnowledgeBase(input: unknown): Promise<KbImportResult> {
   const parsed = kbBackupSchema.parse(input);
   const db = getDb();
@@ -156,22 +184,10 @@ export async function importKnowledgeBase(input: unknown): Promise<KbImportResul
     deletedAt: doc.deletedAt ? toDate(doc.deletedAt) : null,
   }));
 
-  let nodes = 0;
-  let edges = 0;
-  let documents = 0;
-
-  if (nodeValues.length > 0) {
-    const result = await db.insert(knowledgeNodes).values(nodeValues).onConflictDoNothing();
-    nodes = Number(result.changes ?? 0);
-  }
-  if (edgeValues.length > 0) {
-    const result = await db.insert(knowledgeEdges).values(edgeValues).onConflictDoNothing();
-    edges = Number(result.changes ?? 0);
-  }
-  if (documentValues.length > 0) {
-    const result = await db.insert(kbDocuments).values(documentValues).onConflictDoNothing();
-    documents = Number(result.changes ?? 0);
-  }
+  // 分批插入（SQLite 绑定变量上限，见 INSERT_BATCH_SIZE 注释）
+  const nodes = await insertInBatches(db, knowledgeNodes, nodeValues);
+  const edges = await insertInBatches(db, knowledgeEdges, edgeValues);
+  const documents = await insertInBatches(db, kbDocuments, documentValues);
 
   return {
     nodes,
