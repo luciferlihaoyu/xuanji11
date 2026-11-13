@@ -197,7 +197,10 @@ export async function deleteDocumentCascade(
   try {
     const { deleteDocumentFromFts } = await import("./fts-search");
     deleteDocumentFromFts(id);
-  } catch { /* FTS 清理失败不阻塞删除主流程 */ }
+  } catch (e) {
+    // T1-04：不阻塞删除主流程，但必须留痕 —— 回填只补缺行不清孤儿，吞掉即永久孤儿
+    console.warn(`[document-removal] 文档 ${id} FTS 清理失败（由 pruneFtsOrphans 对账兜底）`, e);
+  }
 
   // 3) SQL 事务：chunks → 图谱边 → 图谱节点 → 文档行
   // 注意：drizzle-orm/better-sqlite3 的 db.transaction 把回调直接传给

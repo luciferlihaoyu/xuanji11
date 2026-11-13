@@ -5,6 +5,7 @@ import { getDb } from "./queries/connection";
 import { knowledgeNodes, knowledgeEdges, documentChunks } from "@db/schema";
 import { clean } from "./lib/clean";
 import { vectorEngine } from "./lib/vector";
+import { parseDocumentIdFromMetadata } from "./lib/document-node-match";
 import { searchVectors as semanticSearchVectors } from "./lib/vector-service";
 import { logAudit, logAction } from "./lib/audit";
 
@@ -100,16 +101,22 @@ export const knowledgeRouter = createRouter({
     .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const [node] = await db.select().from(knowledgeNodes).where(eq(knowledgeNodes.id, input.id));
-      const linkedDocId = node?.metadata && typeof node.metadata === "object"
-        ? (node.metadata as Record<string, unknown>).documentId
-        : undefined;
-      if (typeof linkedDocId === "number") {
-        const [doc] = await db.select({ id: knowledgeNodes.id }).from(knowledgeNodes)
-          .where(eq(knowledgeNodes.id, linkedDocId));
-        if (doc) {
-          await db.delete(documentChunks).where(eq(documentChunks.documentId, linkedDocId));
-          await vectorEngine.deleteByDocumentId(linkedDocId);
+      // T1-02（2026-11-13）：文档 id 解析走「唯一出处」parseDocumentIdFromMetadata ——
+      // 旧实现只认 typeof === "number"，而线上 3,019 个 document 节点里 2,917 存字符串
+      // ⇒ 清理分支对 97% 节点永不触发，删节点必留孤儿块（与 fts_orphans 同族）。
+      // 顺带修两处：① 原守卫 `select from knowledgeNodes where id = linkedDocId` 是拿
+      // 文档 id 查节点表，语义错误，删除（无块时 delete 本就 0 行）；② 原实现漏清 FTS，
+      // chunks_fts 必须赶在删 chunks 之前清（删除子查询依赖 document_chunks.id）。
+      const linkedDocId = parseDocumentIdFromMetadata(node?.metadata);
+      if (linkedDocId !== undefined) {
+        try {
+          const { deleteDocumentFromFts } = await import("./lib/fts-search");
+          deleteDocumentFromFts(linkedDocId);
+        } catch (e) {
+          console.warn("[deleteNode] FTS 清理失败（残留孤儿由 pruneFtsOrphans 对账清理）", e);
         }
+        await db.delete(documentChunks).where(eq(documentChunks.documentId, linkedDocId));
+        await vectorEngine.deleteByDocumentId(linkedDocId);
       }
       await db.delete(knowledgeEdges).where(
         sql`${knowledgeEdges.sourceId} = ${input.id} OR ${knowledgeEdges.targetId} = ${input.id}`

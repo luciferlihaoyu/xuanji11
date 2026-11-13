@@ -4,9 +4,10 @@
  */
 
 import { z } from "zod";
-import { eq, like, desc } from "drizzle-orm";
+import { eq, like, desc, and } from "drizzle-orm";
 import { getDb } from "../queries/connection";
 import { kbDocuments, knowledgeNodes, knowledgeEdges } from "@db/schema";
+import { documentNodeMatch } from "./document-node-match";
 import { executeHybridSearch } from "./hybrid-search";
 import { tryIndexDocumentById } from "./document-indexer";
 import { createIngestionJob, type IngestionSourceType } from "./ingestion";
@@ -275,6 +276,42 @@ export async function linkArtifact(input: z.infer<typeof linkArtifactInputSchema
   const db = getDb();
   const { documentId, artifact } = input;
 
+  // T1-03（2026-11-13）：此前直接 `sourceId: documentId` 建边 —— knowledge_edges.sourceId
+  // 的 FK 指向 knowledge_nodes.id（schema.ts:126），拿 kb_documents.id 当节点 id，
+  // foreign_keys=ON 时该路必然失败（线上 dangling=0 佐证 artifact:link 从未成功过）。
+  // 修法：文档必须存在；节点按「唯一出处」口径反查（数字/数字字符串都认），缺则补建。
+  const [doc] = await db
+    .select({ id: kbDocuments.id })
+    .from(kbDocuments)
+    .where(eq(kbDocuments.id, documentId));
+  if (!doc) {
+    throw new Error(`linkArtifact: document ${documentId} not found`);
+  }
+
+  let [docNode] = await db
+    .select({ id: knowledgeNodes.id })
+    .from(knowledgeNodes)
+    .where(and(documentNodeMatch(documentId), eq(knowledgeNodes.type, "document")))
+    .limit(1);
+  if (!docNode) {
+    const created = await db.insert(knowledgeNodes).values({
+      title: `文档 #${documentId}`,
+      content: null,
+      type: "document",
+      posX: 0,
+      posY: 0,
+      style: {},
+      metadata: {
+        sourceSystem: "tiangong",
+        externalType: "document",
+        documentId: String(documentId),
+      },
+      createdBy: null,
+    });
+    docNode = { id: Number(created.lastInsertRowid) };
+  }
+  const docNodeId = docNode.id;
+
   // 3.1 建 artifact entity 节点
   const nodeResult = await db.insert(knowledgeNodes).values({
     title: artifact.artifactRef,
@@ -297,9 +334,9 @@ export async function linkArtifact(input: z.infer<typeof linkArtifactInputSchema
   });
   const nodeId = Number(nodeResult.lastInsertRowid);
 
-  // 3.2 document -> artifact references 边
+  // 3.2 document -> artifact references 边（sourceId = 图谱节点 id，FK 合法）
   const edgeResult = await db.insert(knowledgeEdges).values({
-    sourceId: documentId,
+    sourceId: docNodeId,
     targetId: nodeId,
     label: "references",
     type: "references",

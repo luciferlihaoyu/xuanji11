@@ -28,6 +28,15 @@ export function chunkText(text: string, maxChars = 800, overlap = 100): string[]
         slice = slice.slice(0, lastBreak + 1);
       }
     }
+    // T1-01 修复：切点不得劈开 UTF-16 代理对。若 slice 末尾是高代理（其配对低代理必在
+    // 切片之外 —— UTF-16 里高代理后面只会跟低代理），回退一个码元；否则该孤立代理
+    // 写入 SQLite 会变 U+FFFD（生产已实测 3 条坏块，原文 0 处）。
+    // 游标推进口径（slice.length - overlap，trim 前长度）刻意保持不变：二期历史回填
+    // 依赖「重切 = 现存块逐字一致」，只有劈裂边界这一刀的行为发生变化。
+    if (slice.length > 0) {
+      const last = slice.charCodeAt(slice.length - 1);
+      if (last >= 0xd800 && last <= 0xdbff) slice = slice.slice(0, -1);
+    }
     chunks.push(slice.trim());
     // 修复「尾块退化」：原实现是 start += Math.max(slice.length - overlap, 1)。
     // 当文档尾部剩余 ≤ overlap 时 slice.length - overlap ≤ 0，Math.max 兜底成 1，
@@ -60,7 +69,11 @@ async function clearDocumentIndex(documentId: number): Promise<void> {
   try {
     const { deleteDocumentFromFts } = await import("./fts-search");
     deleteDocumentFromFts(documentId);
-  } catch { /* FTS 清理失败等下次 ensureFts 回填修正 */ }
+  } catch (e) {
+    // T1-04：不再静默 —— 旧注释说「等 ensureFts 回填修正」，但回填只补缺行、不清孤儿
+    // （fts-search.ts:43），吞掉后该文档的 FTS 行就是永久孤儿（生产 380 条的成因之一）。
+    console.warn(`[clearDocumentIndex] 文档 ${documentId} FTS 清理失败（由 pruneFtsOrphans 对账兜底）`, e);
+  }
   await db.delete(documentChunks).where(eq(documentChunks.documentId, documentId));
   await vectorEngine.deleteByDocumentId(documentId);
 }

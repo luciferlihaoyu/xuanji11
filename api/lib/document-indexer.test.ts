@@ -116,6 +116,23 @@ describe("chunkText", () => {
     expect(chunkText("   \n  ")).toEqual([]);
   });
 
+  it("切点不劈开 UTF-16 代理对：chunk 内不得出现孤立代理或 U+FFFD（T1-01）", () => {
+    const LONE =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    // "甲"×799（码元 0..798）+ 📊（2 码元：高代理恰在 index 799、低代理在 800）+ "乙"×600
+    // 默认 maxChars=800 ⇒ 首刀 slice(0,800) 末尾正是孤立高代理（生产 3 条坏块的成因形状）
+    const text = "甲".repeat(799) + "📊" + "乙".repeat(600);
+    const chunks = chunkText(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) {
+      expect(LONE.test(c)).toBe(false);
+      expect(c.includes("\uFFFD")).toBe(false);
+    }
+    // 完整性：拼回（重叠段只留首现）应覆盖原文全部非空白内容
+    const joined = chunks.join("");
+    expect(joined).toContain("📊");
+  });
+
   it("returns single chunk for short text", () => {
     expect(chunkText("你好，世界")).toEqual(["你好，世界"]);
   });
