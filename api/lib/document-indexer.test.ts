@@ -133,6 +133,27 @@ describe("chunkText", () => {
     expect(joined).toContain("📊");
   });
 
+  it("overlap 窗口起点劈裂：起点落在 emoji 低代理上时，下一块开头不得是孤立低代理（doc 1995 形状，T1-01）", () => {
+    const LONE =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    // 复刻 doc 1995 的精确形状：
+    // "甲"×691 → 📊 占码元 691-692 → "乙"×98（码元 693..790）→ "\n" 在码元 791
+    // 窗口0 [0,800)：lastBreak="\n"@791 ⇒ 截断 [0,792)（emoji 完整在块0 内）
+    // start' = 792-100 = 692 = 恰好落在 📊 的低代理上 ⇒ 旧实现块1 开头即孤立低代理
+    const text =
+      "甲".repeat(691) + "📊" + "乙".repeat(98) + "\n" + "丙".repeat(700);
+    const chunks = chunkText(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) {
+      expect(LONE.test(c)).toBe(false);
+      expect(c.includes("\uFFFD")).toBe(false);
+    }
+    // emoji 内容不丢失：两处 📊 均完整出现
+    expect(chunks.join("")).toContain("📊");
+    // 块1 若以丙开头则说明孤立低代理已被切掉、甲乙段落保留在块0
+    expect(chunks[0]).toContain("📊");
+  });
+
   it("returns single chunk for short text", () => {
     expect(chunkText("你好，世界")).toEqual(["你好，世界"]);
   });

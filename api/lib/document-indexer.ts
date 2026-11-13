@@ -28,14 +28,22 @@ export function chunkText(text: string, maxChars = 800, overlap = 100): string[]
         slice = slice.slice(0, lastBreak + 1);
       }
     }
-    // T1-01 修复：切点不得劈开 UTF-16 代理对。若 slice 末尾是高代理（其配对低代理必在
-    // 切片之外 —— UTF-16 里高代理后面只会跟低代理），回退一个码元；否则该孤立代理
-    // 写入 SQLite 会变 U+FFFD（生产已实测 3 条坏块，原文 0 处）。
+    // T1-01 修复：切点不得劈开 UTF-16 代理对。守卫两个边界（生产 3 条坏块的两种成因形状，
+    // doc 1995 trace 实证）：
+    // ① slice 开头孤立低代理 —— overlap 窗口起点恰落在某 emoji 的低代理上（该 emoji 已
+    //    完整出现在上一块内），本块开头就是孤立低代理；切掉它（内容不丢失，上一块有完整副本）。
+    // ② slice 末尾孤立高代理 —— 满窗切点或 lastBreak 截断点落在高代理上（其配对低代理在
+    //    切片之外）；回退一个码元。
+    // 两种孤立代理写入 SQLite 都会变 U+FFFD。
     // 游标推进口径（slice.length - overlap，trim 前长度）刻意保持不变：二期历史回填
     // 依赖「重切 = 现存块逐字一致」，只有劈裂边界这一刀的行为发生变化。
     if (slice.length > 0) {
-      const last = slice.charCodeAt(slice.length - 1);
-      if (last >= 0xd800 && last <= 0xdbff) slice = slice.slice(0, -1);
+      const first = slice.charCodeAt(0);
+      if (first >= 0xdc00 && first <= 0xdfff) slice = slice.slice(1);
+      if (slice.length > 0) {
+        const last = slice.charCodeAt(slice.length - 1);
+        if (last >= 0xd800 && last <= 0xdbff) slice = slice.slice(0, -1);
+      }
     }
     chunks.push(slice.trim());
     // 修复「尾块退化」：原实现是 start += Math.max(slice.length - overlap, 1)。
