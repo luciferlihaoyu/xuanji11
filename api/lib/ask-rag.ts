@@ -10,6 +10,54 @@ import { executeHybridSearch } from "./hybrid-search";
 import { chatCompletionStream, hasLlmAvailable, type ChatMessage } from "./llm-chat";
 import { buildAnchor, resolveLatestVersions, type CitationAnchor } from "./citation-anchor";
 
+/** 证据块的库级溯源（T2-04）：key = `${documentId}:${chunkIndex}` */
+interface ChunkProvenance {
+  readonly rowId: number;
+  readonly sectionPath: string | null;
+  readonly charStart: number | null;
+  readonly charEnd: number | null;
+}
+
+/** 批量读证据块的溯源列。任何失败都返回空 Map（诚实口径：拿不到就缺省，问答不被阻塞）。 */
+async function loadChunkProvenance(
+  docs: ReadonlyArray<{ id: unknown; evidence?: ReadonlyArray<{ chunkIndex?: number }> }>,
+): Promise<Map<string, ChunkProvenance>> {
+  const map = new Map<string, ChunkProvenance>();
+  try {
+    const pairs = docs
+      .map((d) => ({ docId: Number(d.id), ci: d.evidence?.[0]?.chunkIndex }))
+      .filter((p): p is { docId: number; ci: number } => Number.isFinite(p.docId) && typeof p.ci === "number");
+    if (pairs.length === 0) return map;
+    const { getDb } = await import("../queries/connection");
+    const { documentChunks } = await import("@db/schema");
+    const { and, inArray } = await import("drizzle-orm");
+    const docIds = [...new Set(pairs.map((p) => p.docId))];
+    const chunkIndexes = [...new Set(pairs.map((p) => p.ci))];
+    const rows = await getDb()
+      .select({
+        id: documentChunks.id,
+        documentId: documentChunks.documentId,
+        chunkIndex: documentChunks.chunkIndex,
+        sectionPath: documentChunks.sectionPath,
+        charStart: documentChunks.charStart,
+        charEnd: documentChunks.charEnd,
+      })
+      .from(documentChunks)
+      .where(and(inArray(documentChunks.documentId, docIds), inArray(documentChunks.chunkIndex, chunkIndexes)));
+    for (const r of rows) {
+      map.set(`${r.documentId}:${r.chunkIndex}`, {
+        rowId: r.id,
+        sectionPath: r.sectionPath ?? null,
+        charStart: r.charStart ?? null,
+        charEnd: r.charEnd ?? null,
+      });
+    }
+  } catch {
+    /* 溯源读取失败：字段留空（不伪造），问答主流程继续 */
+  }
+  return map;
+}
+
 export interface AskCitation {
   readonly n: number;
   readonly documentId: string;
@@ -110,12 +158,16 @@ export async function askKnowledgeBase(
   const latestVersions = await resolveLatestVersions(
     docs.map((d) => Number(d.id)).filter((n) => Number.isFinite(n)),
   );
+  // T2-04：批量读证据块的库级溯源列（sectionPath/charStart/charEnd/行 id），失败留空不阻塞问答
+  const provByKey = await loadChunkProvenance(docs);
   const citations: AskCitation[] = docs.map((d, i) => {
     const topEvidence = d.evidence?.[0];
     const chunkText = topEvidence?.snippet ?? "";
     const chunkIndex = typeof topEvidence?.chunkIndex === "number" ? topEvidence.chunkIndex : null;
     const numericId = Number(d.id);
     const version = Number.isFinite(numericId) ? latestVersions.get(numericId) : undefined;
+    // 库级溯源（有 chunkIndex 且命中块行才有；诚实口径：拿不到就缺省，不伪造 0 或空串）
+    const prov = chunkIndex !== null ? provByKey.get(`${numericId}:${chunkIndex}`) : undefined;
     return {
       n: i + 1,
       documentId: d.id,
@@ -123,14 +175,28 @@ export async function askKnowledgeBase(
       snippet: d.snippet,
       versionId: version?.id ?? null,
       versionNumber: version?.versionNumber ?? null,
-      anchor: buildAnchor(chunkText, query, chunkIndex),
+      // T2-04：库级溯源并入锚点（chunkRowId = document_chunks.id 主键；sectionPath 章节路径；
+      // charRange = 块在全文中的 [charStart, charEnd) —— 与 buildAnchor 的块内 query 命中区间并存）
+      anchor: {
+        ...buildAnchor(chunkText, query, chunkIndex),
+        ...(prov
+          ? {
+              chunkRowId: prov.rowId,
+              ...(prov.sectionPath ? { sectionPath: prov.sectionPath } : {}),
+              ...(prov.charStart !== null && prov.charEnd !== null
+                ? { charRange: [prov.charStart, prov.charEnd] as const }
+                : {}),
+            }
+          : {}),
+      },
       score: d.score,
       retrievedBy: [...(d.sources ?? [])],
     };
   });
 
+  // T2-04：evidenceText 附章节路径（有才附，没有不加占位）
   const evidenceText = citations
-    .map((c) => `[${c.n}] ${c.title}\n${c.snippet}`)
+    .map((c) => `[${c.n}] ${c.title}${c.anchor.sectionPath ? `（§ ${c.anchor.sectionPath}）` : ""}\n${c.snippet}`)
     .join("\n\n---\n\n");
 
   // 3. LLM 生成（强制引用格式）

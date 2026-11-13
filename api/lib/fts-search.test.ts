@@ -30,8 +30,15 @@ describe("fts-search BM25", () => {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         documentId INTEGER NOT NULL,
         content TEXT NOT NULL,
-        chunkIndex INTEGER DEFAULT 0
-      );
+        chunkIndex INTEGER DEFAULT 0,
+      
+      charStart INTEGER,
+      charEnd INTEGER,
+      pageStart INTEGER,
+      pageEnd INTEGER,
+      sectionPath TEXT,
+      contentHash TEXT
+    );
       INSERT INTO document_chunks(documentId, content, chunkIndex) VALUES
         (1, '中华人民共和国土地管理法规定土地使用权可以依法转让', 0),
         (1, '城市房地产管理法规定房屋所有权登记制度', 1),

@@ -114,7 +114,14 @@ function createTestDb() {
       embedding TEXT,
       embeddingModel TEXT,
       metadata TEXT,
-      createdAt INTEGER NOT NULL DEFAULT 0
+      createdAt INTEGER NOT NULL DEFAULT 0,
+    
+      charStart INTEGER,
+      charEnd INTEGER,
+      pageStart INTEGER,
+      pageEnd INTEGER,
+      sectionPath TEXT,
+      contentHash TEXT
     );
     CREATE TABLE knowledge_nodes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

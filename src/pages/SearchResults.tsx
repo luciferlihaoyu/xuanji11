@@ -105,7 +105,8 @@ export default function SearchResults() {
     versionNumber?: number | null;
     score?: number;
     retrievedBy?: readonly string[];
-    anchor?: { chunkIndex: number | null; heading?: string; charStart?: number; charEnd?: number };
+    anchor?: { chunkIndex: number | null; heading?: string; charStart?: number; charEnd?: number;
+      sectionPath?: string; charRange?: readonly [number, number]; chunkRowId?: number };
   }> } | null>(null);
   const handleAsk = () => {
     if (trimmed.length < 2 || asking) return;
@@ -320,7 +321,8 @@ export default function SearchResults() {
                       </Link>
                       <span className="ml-2 text-[11px] sm:text-[10px] break-words" style={{ color: 'var(--text-muted)' }}>
                         {hasChunk ? `第 ${chunk + 1} 块` : '文档级'}
-                        {c.anchor?.heading ? ` · ${c.anchor.heading}` : ''}
+                        {c.anchor?.sectionPath ? ` · § ${c.anchor.sectionPath}` : (c.anchor?.heading ? ` · ${c.anchor.heading}` : '')}
+                        {c.anchor?.charRange ? ` · 字符 ${c.anchor.charRange[0]}–${c.anchor.charRange[1]}` : ''}
                         {typeof c.score === 'number' ? ` · 分 ${c.score.toFixed(3)}` : ''}
                         {c.versionNumber != null ? ` · v${c.versionNumber}` : ''}
                         {c.retrievedBy && c.retrievedBy.length > 0 ? ` · ${c.retrievedBy.join('+')}` : ''}

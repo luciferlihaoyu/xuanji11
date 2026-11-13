@@ -73,7 +73,14 @@ function createDb() {
     CREATE TABLE document_chunks (
       id INTEGER PRIMARY KEY AUTOINCREMENT, documentId INTEGER NOT NULL REFERENCES kb_documents(id), itemId INTEGER, content TEXT NOT NULL,
       chunkIndex INTEGER NOT NULL DEFAULT 0, embedding TEXT, embeddingModel TEXT, metadata TEXT,
-      createdAt INTEGER NOT NULL DEFAULT 0
+      createdAt INTEGER NOT NULL DEFAULT 0,
+    
+      charStart INTEGER,
+      charEnd INTEGER,
+      pageStart INTEGER,
+      pageEnd INTEGER,
+      sectionPath TEXT,
+      contentHash TEXT
     );
     CREATE TABLE knowledge_nodes (
       id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, content TEXT, type TEXT NOT NULL DEFAULT 'concept',
@@ -85,7 +92,11 @@ function createDb() {
       sourceId INTEGER NOT NULL REFERENCES knowledge_nodes(id),
       targetId INTEGER NOT NULL REFERENCES knowledge_nodes(id), label TEXT,
       type TEXT NOT NULL DEFAULT 'related', weight REAL DEFAULT 1, createdBy INTEGER,
-      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0,
+    
+      evidence TEXT,
+      evidenceDocumentId INTEGER,
+      evidenceChunkId INTEGER
     );
     CREATE TABLE audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT, entityType TEXT NOT NULL, entityId INTEGER NOT NULL,

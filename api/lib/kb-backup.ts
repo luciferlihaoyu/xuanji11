@@ -38,6 +38,10 @@ export const knowledgeEdgeSchema = z.object({
   weight: z.number().nullable().optional(),
   createdBy: z.number().int().positive().nullable().optional(),
   createdAt: dateOrStringSchema,
+  // 二期证据链列（T2-02）：灾备 schema 与 db/schema.ts 同步声明，否则导出/导入静默丢证据（审查 D4）
+  evidence: z.string().nullable().optional(),
+  evidenceDocumentId: z.number().int().positive().nullable().optional(),
+  evidenceChunkId: z.number().int().positive().nullable().optional(),
 });
 
 export const kbDocumentSchema = z.object({

@@ -40,7 +40,7 @@ vi.mock("./vector-service", () => ({
   HASH_FALLBACK_MODEL: "__hash_fallback__",
 }));
 
-import { chunkText, indexDocumentById, tryIndexDocumentById, startReindexAll, getReindexProgress } from "./document-indexer";
+import { chunkText, chunkTextWithOffsets, indexDocumentById, tryIndexDocumentById, startReindexAll, getReindexProgress } from "./document-indexer";
 import { embedTextsWithOutcome, getLastEmbeddingIdentity, HASH_FALLBACK_MODEL } from "./vector-service";
 
 function fakeDocument(overrides: Partial<KbDocument> = {}): KbDocument {
@@ -220,6 +220,67 @@ describe("chunkText", () => {
   });
 });
 
+describe("chunkTextWithOffsets（T2-01：切块带 [charStart, charEnd) 偏移）", () => {
+  // 与生产 normalized 口径一致的辅助：normalize 后用于不变式断言
+  const norm = (t: string) => t.replace(/\r\n/g, "\n").trim();
+
+  // 四组 fixture：短文 / 无标点长文 / 含标题长文 / 含 emoji（doc 1995 形状）
+  const fixtures: Array<[string, string]> = [
+    ["短文", "你好，世界。这是一段很短的文本。"],
+    ["无标点长文", "甲".repeat(2000)],
+    [
+      "含标题长文",
+      "# 第一章 总论\n\n" + "甲".repeat(500) + "。\n\n## 1.1 背景\n\n" + "乙".repeat(900) + "。\n\n### 1.1.1 细则\n\n" + "丙".repeat(1200) + "。",
+    ],
+    [
+      "含emoji长文（doc1995形状）",
+      "甲".repeat(691) + "📊" + "乙".repeat(98) + "\n" + "丙".repeat(2000),
+    ],
+  ];
+
+  it("核心不变式：normalizedText.slice(charStart, charEnd) === content（四组 fixture 全过）", () => {
+    for (const [name, text] of fixtures) {
+      const normalized = norm(text);
+      const parts = chunkTextWithOffsets(text);
+      expect(parts.length).toBeGreaterThan(0);
+      for (const p of parts) {
+        expect(p.end - p.start).toBe(p.content.length);
+        expect(normalized.slice(p.start, p.end)).toBe(p.content);
+      }
+    }
+  });
+
+  it("等价性：map(content) 深等于 chunkText(text)（单一实现，防止两套口径漂移）", () => {
+    for (const [name, text] of fixtures) {
+      const withOffsets = chunkTextWithOffsets(text).map((p) => p.content);
+      expect(withOffsets).toEqual(chunkText(text));
+    }
+  });
+
+  it("偏移单调不回退且落在 [0, normalized.length] 内；trim 边界被正确偏移", () => {
+    // 前导/尾随空白 + 首块带空白开头：trim 后 start 必须越过空白
+    const text = "   \n\n  开头有空白。内容填充。" + "丁".repeat(1000) + "\n\n尾部空白   ";
+    const normalized = norm(text);
+    const parts = chunkTextWithOffsets(text);
+    let prevStart = -1;
+    for (const p of parts) {
+      expect(p.start).toBeGreaterThanOrEqual(0);
+      expect(p.end).toBeLessThanOrEqual(normalized.length);
+      expect(p.start).toBeGreaterThanOrEqual(prevStart);
+      prevStart = p.start;
+      expect(normalized.slice(p.start, p.end)).toBe(p.content);
+    }
+    // 首块不应以空白开头（trim 语义保留）
+    expect(parts[0].content[0]).not.toBe(" ");
+    expect(parts[0].content[0]).not.toBe("\n");
+  });
+
+  it("空文本返回空数组（与 chunkText 口径一致）", () => {
+    expect(chunkTextWithOffsets("")).toEqual([]);
+    expect(chunkTextWithOffsets("   \n  ")).toEqual([]);
+  });
+});
+
 describe("indexDocumentById", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -252,8 +313,17 @@ describe("indexDocumentById", () => {
     expect(result).toEqual({ chunks: 1, skipped: false });
     expect(db.delete).toHaveBeenCalled();
     expect(inserted).toHaveLength(1);
+    // T2-03 后行内新增 charStart/charEnd/sectionPath/contentHash（页码列不写），核心键仍须齐
     expect(inserted[0]).toEqual([
-      { documentId: 7, content: "第一段内容。第二段内容。", chunkIndex: 0 },
+      {
+        documentId: 7,
+        content: "第一段内容。第二段内容。",
+        chunkIndex: 0,
+        charStart: 0,
+        charEnd: 12,
+        sectionPath: undefined,
+        contentHash: expect.stringMatching(/^[0-9a-f]{16}$/),
+      },
     ]);
     // 新实现：embed 后真正写入 vec 表（insertBatch），不再调那个空壳分块索引方法
     expect(vectorEngine.insertBatch).toHaveBeenCalledTimes(1);
@@ -398,6 +468,58 @@ describe("indexDocumentById", () => {
       expect(updates[0]!.metadata).toMatchObject({ vectorized: true, embeddingDegraded: false });
     } finally {
       vi.mocked(getLastEmbeddingIdentity).mockReturnValue(null); // 还原，避免污染后续用例
+    }
+  });
+
+  // T2-03：索引路径写入位置元数据（charStart/charEnd/sectionPath/contentHash；页码恒不写）
+  it("T2-03：块写入 charStart/charEnd/sectionPath/contentHash，且 contentHash 稳定", async () => {
+    const heading = "# 第一章 总论\n\n## 1.1 背景\n\n";
+    const body = "正文内容填充。".repeat(200); // 足够长触发多块
+    const doc = fakeDocument({ id: 50, content: heading + body });
+    const { db, inserted } = createFakeDb([doc]);
+    vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(embedTextsWithOutcome).mockResolvedValueOnce({
+      vectors: body.length > 800 ? [] : [[]], // 多块时由实现决定数量
+      identity: { model: "qwen3.7-text-embedding-flash", dimension: 3 },
+      degraded: false,
+    });
+
+    await indexDocumentById(50);
+
+    const rows = inserted[0] as Array<Record<string, unknown>>;
+    expect(rows.length).toBeGreaterThan(0);
+    const normalized = (heading + body).replace(/\r\n/g, "\n").trim();
+    for (const row of rows) {
+      expect(typeof row.charStart).toBe("number");
+      expect(typeof row.charEnd).toBe("number");
+      expect((row.charEnd as number) - (row.charStart as number)).toBe((row.content as string).length);
+      // 核心不变式在库行级别也成立
+      expect(normalized.slice(row.charStart as number, row.charEnd as number)).toBe(row.content);
+      expect(row.contentHash).toMatch(/^[0-9a-f]{16}$/);
+      // 章节路径：标题在前 → 全部块都在 "第一章 总论 > 1.1 背景" 之下
+      expect(row.sectionPath).toBe("第一章 总论 > 1.1 背景");
+    }
+    // contentHash 稳定：同内容两次计算一致（同 row 内无随机性）
+    expect(new Set(rows.map((r) => r.contentHash)).size).toBe(new Set(rows.map((r) => r.content)).size);
+  });
+
+  it("T2-03：无标题文档 → sectionPath 为 undefined（NULL），页码列不写", async () => {
+    const doc = fakeDocument({ id: 51, content: "没有标题的纯正文。" + "甲".repeat(1000) });
+    const { db, inserted } = createFakeDb([doc]);
+    vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(embedTextsWithOutcome).mockResolvedValueOnce({
+      vectors: [],
+      identity: { model: "qwen3.7-text-embedding-flash", dimension: 3 },
+      degraded: false,
+    });
+
+    await indexDocumentById(51);
+
+    const rows = inserted[0] as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      expect(row.sectionPath).toBeUndefined();
+      expect("pageStart" in row).toBe(false); // 页码列不写（保持 NULL，等未来 PDF）
+      expect("pageEnd" in row).toBe(false);
     }
   });
 });

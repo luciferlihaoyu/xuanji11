@@ -38,7 +38,11 @@ beforeAll(() => {
     CREATE TABLE knowledge_edges (
       id INTEGER PRIMARY KEY AUTOINCREMENT, sourceId INTEGER NOT NULL, targetId INTEGER NOT NULL,
       label TEXT, type TEXT NOT NULL DEFAULT 'related', weight REAL DEFAULT 1, createdBy INTEGER,
-      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0,
+    
+      evidence TEXT,
+      evidenceDocumentId INTEGER,
+      evidenceChunkId INTEGER
     );
     INSERT INTO kb_documents(id, title, content, createdAt, updatedAt) VALUES (10, '存活文档', 'x', 0, 0);
     -- 存活文档的图谱节点（必须保留）

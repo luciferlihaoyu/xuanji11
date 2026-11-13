@@ -17,7 +17,7 @@ import { askKnowledgeBase, resolveAskRetrievalOptions } from "./lib/ask-rag";
 import { executeHybridSearch } from "./lib/hybrid-search";
 import { chatCompletionStream } from "./lib/llm-chat";
 import { getDb } from "./queries/connection";
-import { systemSettings, kbDocumentVersions } from "@db/schema";
+import { systemSettings, kbDocumentVersions, documentChunks } from "@db/schema";
 
 function twoDocs() {
   const mk = (id: string, t: string, chunkIndex: number) => ({
@@ -32,16 +32,22 @@ function twoDocs() {
   };
 }
 
-/** 同时服务「设置读取」与「版本查询」两类查询的假 DB */
-function fakeDb(opts: { setting?: string; versions?: Array<{ id: number; documentId: number; versionNumber: number }> } = {}) {
+/** 同时服务「设置读取」「版本查询」「块溯源查询」三类查询的假 DB */
+function fakeDb(opts: {
+  setting?: string;
+  versions?: Array<{ id: number; documentId: number; versionNumber: number }>;
+  chunks?: Array<{ id: number; documentId: number; chunkIndex: number; sectionPath: string | null; charStart: number | null; charEnd: number | null }>;
+} = {}) {
   const settings = opts.setting === undefined ? [] : [{ value: opts.setting }];
   const versions = opts.versions ?? [];
+  const chunks = opts.chunks ?? [];
   return {
     select: vi.fn(() => ({
       from: vi.fn((table: unknown) => ({
         where: vi.fn(async () => {
           if (table === systemSettings) return settings;
           if (table === kbDocumentVersions) return versions;
+          if (table === documentChunks) return chunks;
           return [];
         }),
       })),
@@ -192,6 +198,41 @@ describe("Citation 2.0（引用可定位）", () => {
     const c = r.citations[0];
     expect(c.anchor.chunkIndex).toBe(3);
     expect(c.anchor.charStart).toBeUndefined();
+  });
+
+  it("T2-04：块行存在 → anchor 带库级溯源 chunkRowId/sectionPath/charRange，evidenceText 附章节", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb({
+      chunks: [
+        { id: 901, documentId: 1922, chunkIndex: 3, sectionPath: "第一章 总论 > 1.1 背景", charStart: 1200, charEnd: 1800 },
+        { id: 902, documentId: 1923, chunkIndex: 7, sectionPath: null, charStart: 50, charEnd: 700 },
+      ],
+    }) as never);
+    // 答案引用两条，避免「只保留被引用条目」把 [2] 过滤掉
+    vi.mocked(chatCompletionStream).mockResolvedValueOnce({ content: "答案：综合方案[1][2]", model: "test-model" } as never);
+    const r = await askKnowledgeBase("引用可定位说明");
+    const c0 = r.citations[0];
+    expect(c0.anchor.chunkRowId).toBe(901);
+    expect(c0.anchor.sectionPath).toBe("第一章 总论 > 1.1 背景");
+    expect(c0.anchor.charRange).toEqual([1200, 1800]);
+    // evidenceText 附章节路径（发给 LLM 的证据文本）
+    expect(chatCompletionStream).toHaveBeenCalledTimes(1);
+    const messages = vi.mocked(chatCompletionStream).mock.calls[0]?.[0] as ReadonlyArray<{ content: string }>;
+    const evidenceInPrompt = (messages ?? []).find((m) => m.content.includes("[1] 路线图"))?.content ?? "";
+    expect(evidenceInPrompt).toContain("§ 第一章 总论 > 1.1 背景");
+    // 无章节的块：不附 § 占位（诚实口径），但 charRange 仍有值
+    const c1 = r.citations[1];
+    expect(c1.anchor.sectionPath).toBeUndefined();
+    expect(c1.anchor.charRange).toEqual([50, 700]);
+    expect(c1.anchor.chunkRowId).toBe(902);
+  });
+
+  it("T2-04：块行不存在（历史块/查询失败）→ 库级溯源字段全部缺省（不伪造 0）", async () => {
+    vi.mocked(getDb).mockReturnValue(fakeDb({}) as never);
+    const r = await askKnowledgeBase("引用可定位说明");
+    const c = r.citations[0];
+    expect(c.anchor.chunkRowId).toBeUndefined();
+    expect(c.anchor.sectionPath).toBeUndefined();
+    expect(c.anchor.charRange).toBeUndefined();
   });
 
   it("向后兼容：n / documentId / title / snippet 字段保留", async () => {

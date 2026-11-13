@@ -46,7 +46,11 @@ function createTestDb() {
       sourceId INTEGER NOT NULL, targetId INTEGER NOT NULL,
       label TEXT, type TEXT NOT NULL DEFAULT 'related',
       weight REAL DEFAULT 1, createdBy INTEGER,
-      createdAt INTEGER NOT NULL DEFAULT 0
+      createdAt INTEGER NOT NULL DEFAULT 0,
+    
+      evidence TEXT,
+      evidenceDocumentId INTEGER,
+      evidenceChunkId INTEGER
     );
   `);
   return sqlite;

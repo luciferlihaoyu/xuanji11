@@ -7,17 +7,36 @@
  */
 
 import { eq, isNotNull } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import { getDb } from "../queries/connection";
 import { kbDocuments, documentChunks } from "@db/schema";
+import { buildSectionPath } from "./section-path";
 import { vectorEngine } from "./vector";
 import { embedTextsWithOutcome, ensureCorrectDimension } from "./vector-service";
 import { finishTask, isCancelRequested, updateTaskProgress } from "./task-registry";
 import { decideReindexOutcome } from "./task-sync";
 
-export function chunkText(text: string, maxChars = 800, overlap = 100): string[] {
+/** 块内容溯源指纹：sha256 前 16 hex（T2-03；幂等键与引用校验共用，稳定不随机） */
+function sha256Hex16(s: string): string {
+  return createHash("sha256").update(s, "utf8").digest("hex").slice(0, 16);
+}
+
+/** 带来源偏移的块：content 是 trim 后文本，[start, end) 是它在 normalized 文本中的码元区间 */
+export interface ChunkWithOffset {
+  content: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * T2-01：切块同时给出 [charStart, charEnd)（UTF-16 码元，基于 normalized 文本
+ * `text.replace(/\r\n/g,"\n").trim()`）。不变式：`normalized.slice(start, end) === content`。
+ * chunkText 是本函数的映射（单一实现，防两套口径漂移）；二期回填与引用锚点都吃这里。
+ */
+export function chunkTextWithOffsets(text: string, maxChars = 800, overlap = 100): ChunkWithOffset[] {
   const normalized = text.replace(/\r\n/g, "\n").trim();
-  if (normalized.length <= maxChars) return normalized ? [normalized] : [];
-  const chunks: string[] = [];
+  if (normalized.length <= maxChars) return normalized ? [{ content: normalized, start: 0, end: normalized.length }] : [];
+  const chunks: ChunkWithOffset[] = [];
   let start = 0;
   while (start < normalized.length) {
     const end = Math.min(start + maxChars, normalized.length);
@@ -37,15 +56,20 @@ export function chunkText(text: string, maxChars = 800, overlap = 100): string[]
     // 两种孤立代理写入 SQLite 都会变 U+FFFD。
     // 游标推进口径（slice.length - overlap，trim 前长度）刻意保持不变：二期历史回填
     // 依赖「重切 = 现存块逐字一致」，只有劈裂边界这一刀的行为发生变化。
+    let guardCut = 0;
     if (slice.length > 0) {
       const first = slice.charCodeAt(0);
-      if (first >= 0xdc00 && first <= 0xdfff) slice = slice.slice(1);
+      if (first >= 0xdc00 && first <= 0xdfff) { slice = slice.slice(1); guardCut = 1; }
       if (slice.length > 0) {
         const last = slice.charCodeAt(slice.length - 1);
         if (last >= 0xd800 && last <= 0xdbff) slice = slice.slice(0, -1);
       }
     }
-    chunks.push(slice.trim());
+    const content = slice.trim();
+    // 偏移按 trim 后边界计：窗口起点 + guard 切掉的开头低代理 + trimStart 前导空白；
+    // end = start + content.length（末尾高代理回退已反映在 content 长度里，无需另算）
+    const contentStart = start + guardCut + (slice.length - slice.trimStart().length);
+    chunks.push({ content, start: contentStart, end: contentStart + content.length });
     // 修复「尾块退化」：原实现是 start += Math.max(slice.length - overlap, 1)。
     // 当文档尾部剩余 ≤ overlap 时 slice.length - overlap ≤ 0，Math.max 兜底成 1，
     // 游标每轮只前进 1 个字符，于是把尾部每一个后缀都当独立 chunk 吐出
@@ -56,7 +80,12 @@ export function chunkText(text: string, maxChars = 800, overlap = 100): string[]
     if (end >= normalized.length || slice.length <= overlap) break;
     start += slice.length - overlap;
   }
-  return chunks.filter((c) => c.length > 0);
+  return chunks.filter((c) => c.content.length > 0);
+}
+
+/** 纯内容口径（历史签名保持不变）：chunkTextWithOffsets 的映射，单一实现 */
+export function chunkText(text: string, maxChars = 800, overlap = 100): string[] {
+  return chunkTextWithOffsets(text, maxChars, overlap).map((c) => c.content);
 }
 
 export interface IndexDocumentResult {
@@ -112,8 +141,12 @@ export async function indexDocumentById(documentId: number): Promise<IndexDocume
   const [doc] = await db.select().from(kbDocuments).where(eq(kbDocuments.id, documentId));
   if (!doc) throw new Error(`文档不存在: ${documentId}`);
 
-  const content = doc.content?.trim() ?? "";
-  const chunks = content.length === 0 ? [] : chunkText(content);
+  // T2-03：与 chunkTextWithOffsets 完全同口径的 normalized 文本（\r\n→\n + trim），
+  // 供 buildSectionPath 的 offset 定位（不同口径的 offset 会错位——doc 1995 教训）。
+  const content = (doc.content ?? "").replace(/\r\n/g, "\n").trim();
+  // 带偏移切块（chunkTextWithOffsets），charStart/charEnd/sectionPath/contentHash 随块写入
+  const chunksWithOffsets = content.length === 0 ? [] : chunkTextWithOffsets(content);
+  const chunks = chunksWithOffsets.map((c) => c.content);
 
   // 空文档：没有可索引内容，把旧索引产物清干净即可（这里没有"降级"概念）
   if (chunks.length === 0) {
@@ -125,8 +158,9 @@ export async function indexDocumentById(documentId: number): Promise<IndexDocume
   await ensureCorrectDimension();
 
   // 真正 embed 每个 chunk（修复 R3 空壳：此前从不 embed/写入向量表）
-  const chunkContents = chunks.map((content, index) => ({ content, index }));
-  // 身份随本次调用的结果一起返回（评审 B2）：不读进程级单例，避免并发下被别的
+  // 真正 embed 每个 chunk（修复 R3 空壳：此前从不 embed/写入向量表）
+  // chunkContents 携带来源偏移与章节路径（T2-03），insert 时一并写入 document_chunks
+  const chunkContents = chunksWithOffsets.map((c, index) => ({ ...c, index }));  // 身份随本次调用的结果一起返回（评审 B2）：不读进程级单例，避免并发下被别的
   // 嵌入调用（语义检索等）覆盖，导致"好向量当降级丢"或"伪向量当真向量写"。
   const outcome = await embedTextsWithOutcome(chunkContents.map((c) => c.content));
 
@@ -146,10 +180,17 @@ export async function indexDocumentById(documentId: number): Promise<IndexDocume
   await clearDocumentIndex(documentId);
 
   // 插入 document_chunks（embedding 列无人读取，不写大 JSON，向量只存 vec 表）
+  // T2-03：位置元数据随块写入（charStart/charEnd/sectionPath/contentHash；页码列无 PDF 入口恒不写 = NULL）
   const insertedChunks = await db.insert(documentChunks).values(chunkContents.map((c) => ({
     documentId,
     content: c.content,
     chunkIndex: c.index,
+    charStart: c.start,
+    charEnd: c.end,
+    sectionPath: buildSectionPath(content, c.end),
+    // sectionPath 口径：块**末尾**（c.end）之前的标题层级 —— 块自带标题（块0 从 0 开始）
+    // 也能取到自己开头的标题行；纯正文块取到前文全部标题。c.start<=0 会漏掉块内标题。
+    contentHash: sha256Hex16(c.content),
   }))).returning({ id: documentChunks.id, content: documentChunks.content });
 
   // 同步进 FTS5（混合检索的 BM25 路；失败不阻塞主流程）

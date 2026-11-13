@@ -16,18 +16,18 @@ export interface CitationAnchor {
   readonly heading?: string;
   readonly charStart?: number;
   readonly charEnd?: number;
+  // ===== T2-04：库级溯源（ask-rag 组装时从 document_chunks 行读取；buildAnchor 不产这些字段） =====
+  /** 块所在章节路径（document_chunks.sectionPath；无标题文档缺省） */
+  readonly sectionPath?: string;
+  /** 块在 normalized 全文中的 [charStart, charEnd) 码元区间（与上方块内 query 命中区间语义不同） */
+  readonly charRange?: readonly [number, number];
+  /** document_chunks.id 主键（行级深链/回表定位；区别于 chunkIndex 序号） */
+  readonly chunkRowId?: number;
 }
 
-/** 返回 offset 之前最近的 markdown 标题文本（不含 # 号）；没有则 undefined */
-export function findHeadingBefore(text: string, offset: number): string | undefined {
-  if (offset <= 0) return undefined;
-  const lines = text.slice(0, offset).split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const m = /^#{1,6}\s+(.+?)\s*$/.exec(lines[i]);
-    if (m) return m[1];
-  }
-  return undefined;
-}
+// T2-03：heading 解析迁至 section-path.ts（单一实现），此处 re-export 保持既有引用方不变
+import { findHeadingBefore } from "./section-path";
+export { findHeadingBefore };
 
 /** 构造定位锚点：块序号 + （能定位时）块内字符区间与所属标题 */
 export function buildAnchor(chunkText: string, query: string, chunkIndex: number | null): CitationAnchor {

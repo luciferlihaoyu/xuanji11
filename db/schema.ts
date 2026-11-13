@@ -120,9 +120,16 @@ export const knowledgeEdges = sqliteTable("knowledge_edges", {
   weight: real("weight").default(1),
   createdBy: integer("createdBy", { mode: "number" }),
   createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  // ===== 二期证据链列（T2-02，迁移 0008）。全部可空：历史边无证据，不回填 =====
+  // evidence：建边依据的原文摘录（截断存储）；evidenceDocumentId/evidenceChunkId：
+  // 指向 kb_documents / document_chunks（chunkRowId = document_chunks.id 主键，非 chunkIndex）
+  evidence: text("evidence"),
+  evidenceDocumentId: integer("evidenceDocumentId", { mode: "number" }),
+  evidenceChunkId: integer("evidenceChunkId", { mode: "number" }),
 }, (table) => [
   index("knowledgeEdges_targetId_idx").on(table.targetId),
   index("knowledgeEdges_sourceId_idx").on(table.sourceId),
+  index("knowledgeEdges_evidenceChunk_idx").on(table.evidenceChunkId),
   foreignKey({
     columns: [table.sourceId],
     foreignColumns: [knowledgeNodes.id],
@@ -559,9 +566,23 @@ export const documentChunks = sqliteTable("document_chunks", {
   embeddingModel: text("embeddingModel"),
   metadata: text("metadata", { mode: "json" }).$type<Record<string, unknown>>(),
   createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  // ===== 二期溯源列（T2-02，迁移 0008）。全部可空：历史块由回填（T2-05）补齐 =====
+  // charStart/charEnd：块在 normalized（\r\n→\n + trim）文本中的 UTF-16 码元区间，
+  // 不变式 normalized.slice(charStart, charEnd) === content（引用锚点地基）
+  charStart: integer("charStart", { mode: "number" }),
+  charEnd: integer("charEnd", { mode: "number" }),
+  // pageStart/pageEnd：页码锚点，当前恒 NULL（无 PDF 入口；未来 PDF 接入后启用，列保留）
+  pageStart: integer("pageStart", { mode: "number" }),
+  pageEnd: integer("pageEnd", { mode: "number" }),
+  // sectionPath：所在章节路径（如 "第一章 总论 > 1.1 背景"），无标题文档 NULL
+  sectionPath: text("sectionPath"),
+  // contentHash：块内容 sha256 前 16 hex（幂等键 / 溯源指纹）
+  contentHash: text("contentHash"),
 }, (table) => [
   index("documentChunks_documentId_idx").on(table.documentId),
   index("documentChunks_itemId_idx").on(table.itemId),
+  index("documentChunks_doc_page_idx").on(table.documentId, table.pageStart),
+  index("documentChunks_doc_hash_idx").on(table.documentId, table.contentHash),
   foreignKey({
     columns: [table.documentId],
     foreignColumns: [kbDocuments.id],

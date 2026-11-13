@@ -68,7 +68,14 @@ function createTestDb() {
       embedding TEXT,
       embeddingModel TEXT,
       metadata TEXT,
-      createdAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      createdAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    
+      charStart INTEGER,
+      charEnd INTEGER,
+      pageStart INTEGER,
+      pageEnd INTEGER,
+      sectionPath TEXT,
+      contentHash TEXT
     );
   `);
   const db = drizzle(sqlite, { schema: { ...schema, ...relations } });

@@ -137,6 +137,10 @@ function sampleEdge(): KnowledgeEdge {
     weight: 1,
     createdBy: 1,
     createdAt: new Date("2024-01-01T00:00:00Z"),
+    // 二期证据链列（T2-02）：存量边无证据，一律 null
+    evidence: null,
+    evidenceDocumentId: null,
+    evidenceChunkId: null,
   };
 }
 

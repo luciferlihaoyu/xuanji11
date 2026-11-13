@@ -39,7 +39,14 @@ function createHealthDb(docs: readonly DocFixture[]): Database.Database {
   const sqlite = new Database(":memory:");
   sqlite.exec(`
     CREATE TABLE kb_documents (id INTEGER PRIMARY KEY, content TEXT, metadata TEXT, deletedAt INTEGER);
-    CREATE TABLE document_chunks (id INTEGER PRIMARY KEY, documentId INTEGER, chunkIndex INTEGER, content TEXT);
+    CREATE TABLE document_chunks (id INTEGER PRIMARY KEY, documentId INTEGER, chunkIndex INTEGER, content TEXT,
+      charStart INTEGER,
+      charEnd INTEGER,
+      pageStart INTEGER,
+      pageEnd INTEGER,
+      sectionPath TEXT,
+      contentHash TEXT
+    );
     CREATE TABLE chunks_fts (rowid INTEGER PRIMARY KEY, content TEXT);
     CREATE TABLE vec_chunk_meta (rowid INTEGER PRIMARY KEY, id TEXT, documentId TEXT, chunkIndex INTEGER, metadataJson TEXT);
     CREATE TABLE knowledge_nodes (id INTEGER PRIMARY KEY, type TEXT, metadata TEXT);
