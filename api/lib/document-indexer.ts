@@ -8,7 +8,7 @@
 
 import { eq, isNotNull } from "drizzle-orm";
 import { createHash } from "node:crypto";
-import { getDb } from "../queries/connection";
+import { getDb, getRawDb } from "../queries/connection";
 import { kbDocuments, documentChunks } from "@db/schema";
 import { buildSectionPath } from "./section-path";
 import { vectorEngine } from "./vector";
@@ -102,16 +102,22 @@ export interface IndexDocumentResult {
  *  只在**确定要重写**时调用——先删后写，一旦后续失败就会净损失既有索引。 */
 async function clearDocumentIndex(documentId: number): Promise<void> {
   const db = getDb();
-  // 先清 FTS（deleteDocumentFromFts 依赖 document_chunks 的 id 子查询，必须赶在删 chunks 之前）
-  try {
-    const { deleteDocumentFromFts } = await import("./fts-search");
-    deleteDocumentFromFts(documentId);
-  } catch (e) {
-    // T1-04：不再静默 —— 旧注释说「等 ensureFts 回填修正」，但回填只补缺行、不清孤儿
-    // （fts-search.ts:43），吞掉后该文档的 FTS 行就是永久孤儿（生产 380 条的成因之一）。
-    console.warn(`[clearDocumentIndex] 文档 ${documentId} FTS 清理失败（由 pruneFtsOrphans 对账兜底）`, e);
-  }
-  await db.delete(documentChunks).where(eq(documentChunks.documentId, documentId));
+  const raw = getRawDb();
+  // P2 根治（碧霄 2026-11-14）：FTS 行与 chunks 行**同生共死**。
+  // 旧形：deleteDocumentFromFts 炸了只 warn 吞掉、chunks 照删——FTS 行成永久孤儿
+  // （reindexDocument 每篇残留 0.8 条的源头，AGENTS.md 待派单根治项）。
+  // 新形：先把 id 拿到手（之后 chunks 删了子查询就找不到它们了），再在一个事务里
+  // 删两边；FTS 炸 → 整体回滚 → 调用方看见失败，索引产物原样可重试，零孤儿。
+  const rows = await db
+    .select({ id: documentChunks.id })
+    .from(documentChunks)
+    .where(eq(documentChunks.documentId, documentId));
+  const chunkIds = rows.map((r) => Number(r.id));
+  const { deleteChunksFromFtsByIds } = await import("./fts-search");
+  raw.transaction(() => {
+    deleteChunksFromFtsByIds(chunkIds);
+    db.delete(documentChunks).where(eq(documentChunks.documentId, documentId)).run();
+  })();
   await vectorEngine.deleteByDocumentId(documentId);
 }
 

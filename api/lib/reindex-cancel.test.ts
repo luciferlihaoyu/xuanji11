@@ -15,7 +15,7 @@ vi.hoisted(() => {
   process.env.JWT_SECRET = "fixed-test-jwt-secret-with-32-chars";
 });
 
-vi.mock("../queries/connection", () => ({ getDb: vi.fn() }));
+vi.mock("../queries/connection", () => ({ getDb: vi.fn(), getRawDb: vi.fn() }));
 vi.mock("./vector", () => ({
   vectorEngine: {
     size: 0,
@@ -37,7 +37,7 @@ vi.mock("./vector-service", () => ({
   })),
 }));
 
-import { getDb } from "../queries/connection";
+import { getDb, getRawDb } from "../queries/connection";
 import { getActiveReindexTaskId, getReindexProgress, startReindexAll } from "./document-indexer";
 import { createTask, getTask, requestCancel, resetTaskRegistryForTest } from "./task-registry";
 
@@ -82,13 +82,15 @@ function createTestDb() {
   for (const t of ["甲", "乙", "丙"]) {
     db.insert(schema.kbDocuments).values({ title: t, content: `${t}的正文内容` }).run();
   }
-  return db;
+  return { db, sqlite };
 }
 
 beforeEach(() => {
   vi.clearAllMocks(); // 只清调用记录（保留替身实现），避免跨用例计数污染
   resetTaskRegistryForTest();
-  vi.mocked(getDb).mockReturnValue(createTestDb() as never);
+  const { db, sqlite } = createTestDb();
+  vi.mocked(getDb).mockReturnValue(db as never);
+  vi.mocked(getRawDb).mockReturnValue(sqlite);
 });
 
 describe("全库回填取消（P0-4）", () => {

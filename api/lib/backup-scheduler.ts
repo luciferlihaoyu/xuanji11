@@ -1,6 +1,6 @@
 import { eq, and, inArray, lte, desc } from "drizzle-orm";
 import { getDb } from "../queries/connection";
-import { backupJobs, backupJobFiles } from "@db/schema";
+import { backupJobs, backupJobFiles, restoreJobs } from "@db/schema";
 import { executeBackup, effectiveRepoConfig } from "../backup-repositories/execution";
 import { getBackupRepository } from "../backup-repositories/base";
 import type { BackupJob } from "@db/schema";
@@ -140,11 +140,31 @@ export async function applyRetention(scheduleJobId: number): Promise<void> {
 
   const toDelete = completed.slice(schedule.keepLastN);
   const jobIds = toDelete.map((job) => job.id);
-  console.log(`[BackupScheduler] Applying retention for schedule ${scheduleJobId}: deleting ${jobIds.length} old backups`);
-  // N+1 优化：单次 inArray 批量删除关联文件与作业
   if (jobIds.length === 0) return;
-  await db.delete(backupJobFiles).where(inArray(backupJobFiles.jobId, jobIds));
-  await db.delete(backupJobs).where(inArray(backupJobs.id, jobIds));
+
+  // P2 根治（碧霄 2026-11-14，run 692 FK 事故）：restore_jobs.backupJobId 的 FK 无级联，
+  // 删掉被恢复引用过的老 run 会 FOREIGN KEY constraint failed 整批炸。
+  // 被引用 = 这份备份有历史痕迹（真被恢复用过），**保留不删**，只删无引用的。
+  let referenced = new Set<number>();
+  try {
+    const rows = await db
+      .select({ backupJobId: restoreJobs.backupJobId })
+      .from(restoreJobs)
+      .where(inArray(restoreJobs.backupJobId, jobIds));
+    referenced = new Set(rows.map((r) => Number(r.backupJobId)));
+  } catch (refErr) {
+    // lite 库没有 restore_jobs 表：无引用可言，按原计划删（查询失败≠存在引用，保守放行删除）
+    console.warn(`[BackupScheduler] restore_jobs 引用查询失败，按无引用处理：${refErr instanceof Error ? refErr.message : String(refErr)}`);
+  }
+  const deletable = jobIds.filter((id) => !referenced.has(id));
+  if (referenced.size > 0) {
+    console.log(`[BackupScheduler] retention 跳过 ${referenced.size} 份被恢复作业引用的老备份（保留历史痕迹）`);
+  }
+  console.log(`[BackupScheduler] Applying retention for schedule ${scheduleJobId}: deleting ${deletable.length} old backups`);
+  if (deletable.length === 0) return;
+  // N+1 优化：单次 inArray 批量删除关联文件与作业
+  await db.delete(backupJobFiles).where(inArray(backupJobFiles.jobId, deletable));
+  await db.delete(backupJobs).where(inArray(backupJobs.id, deletable));
 }
 
 export async function runDueBackupSchedules(
@@ -201,11 +221,14 @@ export async function runDueBackupSchedules(
     });
     handles.push({ scheduleId: schedule.id, runJobId, taskId: task.taskId });
 
-    // 计算下次运行时间
+    // 计算下次运行时间。
+    // P2 根治（碧霄 2026-11-14）：这里**不清零 retryCount**——旧代码每次拾取都清零，
+    // 失败分支读到的永远是 0，于是永远排"retry 1/3"、backoff 永远 1 分钟，
+    // maxRetries 形同虚设（生产 runs 687→691 连炸五轮、每轮日志都是 1/3 的实录）。
+    // retryCount 是**连续失败计数**，只在运行成功时清零（见 settle 的 completed 分支）。
     const nextRun = schedule.cron ? nextCronTime(schedule.cron, now) : null;
     await db.update(backupJobs).set({
       nextRunAt: nextRun,
-      retryCount: 0,
     }).where(eq(backupJobs.id, schedule.id));
     console.log(`[BackupScheduler] Schedule ${schedule.id} next run at: ${nextRun?.toISOString() ?? 'none'}`);
 
@@ -217,7 +240,19 @@ export async function runDueBackupSchedules(
       finishTaskFromRunRow(task.taskId, finished);
       // cancelled 也进 retention：连续取消会留下部分快照，不纳入 keepLastN 会无声堆积（审查 Q10）
       if (finished?.status === "completed" || finished?.status === "cancelled") {
-        await applyRetention(schedule.id);
+        // retryCount 是连续失败计数：成功一次才归零（取消不洗白，历史失败仍作数）
+        if (finished?.status === "completed") {
+          await db.update(backupJobs).set({ retryCount: 0 }).where(eq(backupJobs.id, schedule.id));
+        }
+        // P2 根治：retention 是善后，它炸了不许污染已经 completed 的备份
+        //（生产 run 692 实录：FK 约束失败顺着链尾 .catch 把 completed 改判 failed）
+        try {
+          await applyRetention(schedule.id);
+        } catch (retErr) {
+          console.warn(
+            `[BackupScheduler] 保留清理失败（不影响备份结果，下轮巡检会再试）：${retErr instanceof Error ? retErr.message : String(retErr)}`
+          );
+        }
       } else if (finished?.status === "failed") {
         // 重试处理
         const [updatedSchedule] = await db.select().from(backupJobs).where(eq(backupJobs.id, schedule.id));

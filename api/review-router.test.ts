@@ -172,3 +172,41 @@ describe("T3-02 backlogStats（积压可见：数量 + 最老时长，不许再�
     expect(await caller().backlogStats()).toEqual([]);
   });
 });
+
+describe("P2 dedup 处置护栏（碧霄 2026-11-14，43 条积压清理前的代码前提）", () => {
+  it("副本早已软删：不重写它的 deletedAt/mergedIntoId，报告 alreadyDeleted", async () => {
+    const keepId = seedDoc(db, null);
+    const dupId = seedDoc(db, null);
+    const DEAD_AT = 1_000_000; // 一个远古的删除时刻
+    db.update(schema.kbDocuments).set({ deletedAt: new Date(DEAD_AT), deletedReason: "manual" })
+      .where(eq(schema.kbDocuments.id, dupId)).run();
+    const res = db.insert(schema.kbReviewItems)
+      .values({ kind: "dedup", documentId: keepId, relatedDocumentId: dupId, title: "疑似重复（副本已死）", payload: {} })
+      .run() as unknown as { lastInsertRowid: number | bigint };
+
+    const r = await caller().resolve({ id: Number(res.lastInsertRowid), action: "approved" });
+
+    expect(r.actionResult).toEqual({ alreadyDeleted: dupId, kept: keepId });
+    const [dup] = await db.select().from(schema.kbDocuments).where(eq(schema.kbDocuments.id, dupId));
+    expect((dup.deletedAt as unknown as Date).getTime()).toBe(DEAD_AT); // 现行代码会用 new Date() 覆盖真实删除历史
+    expect(dup.mergedIntoId ?? null).toBeNull();                        // 死者不补写合并指针（历史就是历史）
+  });
+
+  it("保留篇已死、副本还活：拒绝 approve（照现有配置会净丢内容），条目留在 pending 等人工", async () => {
+    const keepId = seedDoc(db, null);
+    const dupId = seedDoc(db, null);
+    db.update(schema.kbDocuments).set({ deletedAt: new Date(1_000), deletedReason: "manual" })
+      .where(eq(schema.kbDocuments.id, keepId)).run();
+    const res = db.insert(schema.kbReviewItems)
+      .values({ kind: "dedup", documentId: keepId, relatedDocumentId: dupId, title: "疑似重复（保留方已死）", payload: {} })
+      .run() as unknown as { lastInsertRowid: number | bigint };
+    const itemId = Number(res.lastInsertRowid);
+
+    await expect(caller().resolve({ id: itemId, action: "approved" })).rejects.toThrow(/保留/);
+
+    const [dup] = await db.select().from(schema.kbDocuments).where(eq(schema.kbDocuments.id, dupId));
+    expect(dup.deletedAt).toBeNull(); // 现行代码会把活的那份也软删 → 双死 = 内容净丢失
+    const [item] = await db.select().from(schema.kbReviewItems).where(eq(schema.kbReviewItems.id, itemId));
+    expect(item.status).toBe("pending");
+  });
+});

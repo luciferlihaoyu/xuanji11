@@ -12,6 +12,18 @@ vi.hoisted(() => {
 
 vi.mock("../queries/connection", () => ({
   getDb: vi.fn(),
+  // P2：clearDocumentIndex 改用 raw 事务（FTS+chunks 同生共死）。桩件与真库语义对齐：
+  // transaction 即时同步执行、prepare 链 no-op——FTS 细节本文件不考（fts-atomic-clear.test 专测），
+  // 这里只保证既有 embed/元数据用例穿过真实代码路径不炸。
+  getRawDb: vi.fn(() => ({
+    transaction: (fn: () => void) => fn,
+    exec: vi.fn(),
+    prepare: vi.fn(() => ({
+      run: vi.fn(() => ({ changes: 0 })),
+      get: vi.fn(() => undefined),
+      all: vi.fn(() => []),
+    })),
+  })),
 }));
 
 vi.mock("./vector", () => ({
@@ -79,7 +91,8 @@ function createFakeDb(docs: readonly KbDocument[]) {
       })),
     })),
     delete: vi.fn(() => ({
-      where: vi.fn(() => Promise.resolve()),
+      // P2 后生产在同步事务里走 .run()；同时保留 thenable 兼容 await 形态
+      where: vi.fn(() => Object.assign(Promise.resolve(), { run: vi.fn(() => undefined) })),
     })),
     // insert 桩：补 .returning() 桩，与生产 drizzle better-sqlite3 对齐。
     // 生产代码（document-indexer.ts:92-96）走 `db.insert(t).values(rows).returning({ id, content })`

@@ -91,6 +91,18 @@ export function deleteDocumentFromFts(documentId: number): void {
     .run(documentId);
 }
 
+/** 按 chunk id 列表直删 FTS 行（P2 根治：与删 chunks 同一事务，失败即中止，不留孤儿）。
+ *  与 deleteDocumentFromFts 的区别：不依赖 document_chunks 里的行还活着——
+ *  调用方先取回 id，再在事务里删两边。空数组无害（不产生非法 IN () SQL）。 */
+export function deleteChunksFromFtsByIds(chunkIds: number[]): void {
+  if (chunkIds.length === 0) return;
+  ensureFts();
+  const placeholders = chunkIds.map(() => "?").join(",");
+  getRawDb()
+    .prepare(`DELETE FROM ${FTS_TABLE} WHERE rowid IN (${placeholders})`)
+    .run(...chunkIds);
+}
+
 export interface Bm25Hit {
   readonly chunkId: number;
   readonly documentId: number;

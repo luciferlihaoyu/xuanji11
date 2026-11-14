@@ -298,10 +298,24 @@ const nodeExecutors: Record<string, NodeExecutor> = {
     };
   },
 
-  /** 索引一致性巡检：对账 docs/chunks/FTS/vector/图谱，输出健康报告 */
+  /** 索引一致性巡检：先清扫 FTS 孤儿（对账兜底，P2 接线 2026-11-14——pruneFtsOrphans
+   *  自 T1 就有实现和测试，但**没有任何路径真的调它**，「由对账兜底」全靠注释兑现），
+   *  再做只读体检；清扫计数进报告（ftsOrphansPruned），每天扫掉多少一目了然。
+   *  lite 库等 fts 不可用场景降级为 null，不影响体检。 */
   'index-health': async () => {
     const { checkIndexHealth } = await import("./index-health");
-    return checkIndexHealth() as unknown as Record<string, unknown>;
+    const { pruneFtsOrphans } = await import("./fts-search");
+    let ftsOrphansPruned: number | null = null;
+    try {
+      ftsOrphansPruned = pruneFtsOrphans().pruned;
+      if (ftsOrphansPruned > 0) {
+        console.log(`[workflow:index-health] FTS 孤儿对账清扫：删除 ${ftsOrphansPruned} 行`);
+      }
+    } catch (e) {
+      console.warn(`[workflow:index-health] FTS 孤儿清扫跳过：${e instanceof Error ? e.message : String(e)}`);
+    }
+    const health = checkIndexHealth() as unknown as Record<string, unknown>;
+    return { ...health, ftsOrphansPruned };
   },
 
   /** 去重扫描：发现疑似重复组写入收件箱（只建议不删除） */
