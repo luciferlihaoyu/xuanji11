@@ -46,7 +46,8 @@ CREATE TABLE knowledge_edges (
   type TEXT NOT NULL DEFAULT 'related',
   weight REAL DEFAULT 1,
   createdBy INTEGER,
-  createdAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  createdAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  evidence TEXT, evidenceDocumentId INTEGER, evidenceChunkId INTEGER
 );
 CREATE TABLE kb_documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

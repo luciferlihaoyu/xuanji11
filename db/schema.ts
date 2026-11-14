@@ -197,6 +197,14 @@ export const kbDocuments = sqliteTable("kb_documents", {
     lastOpenedAt?: string;
     /** 嵌入服务不可用、被拒绝写入 hash 伪向量（2026-09-21 事故防线，见 api/lib/document-indexer.ts） */
     embeddingDegraded?: boolean;
+    /** 质量门评分快照（T3-01，入库时即时计算，见 api/lib/quality-scorer.ts） */
+    quality?: {
+      score: number;
+      level: "good" | "review" | "poor";
+      issues: Array<{ code: string; severity: "warning" | "error"; message: string }>;
+    };
+    /** poor 级文档退出默认搜索（T3-01；人工复核 approve/reject 后可翻转，见 review-router quality 分支） */
+    excludeFromDefaultSearch?: boolean;
   }>(),
   createdBy: integer("createdBy", { mode: "number" }),
   createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull().default(nowMs),

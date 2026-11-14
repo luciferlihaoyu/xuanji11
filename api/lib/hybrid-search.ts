@@ -2,6 +2,12 @@ import { z } from "zod";
 import { desc, inArray, isNull, sql } from "drizzle-orm";
 import { getDb } from "../queries/connection";
 import { kbDocuments, knowledgeNodes } from "@db/schema";
+
+/**
+ * T3-01 质量门：poor 级文档打标后退出默认搜索（关键词腿两条 + 向量回表一条全部生效）。
+ * metadata 无该字段（NULL）或非 1 时保留——排除只对显式 true 生效，人工复核清除标记即回 searchable。
+ */
+const NOT_EXCLUDED_FROM_SEARCH = sql`CAST(json_extract(${kbDocuments.metadata}, '$.excludeFromDefaultSearch') AS INTEGER) IS NOT 1`;
 import type { KbDocument, KnowledgeNode } from "@db/schema";
 import * as vectorService from "./vector-service";
 import {
@@ -180,7 +186,7 @@ async function fetchKeywordResults(query: string, limit: number): Promise<Intern
       const docs = (await db
         .select()
         .from(kbDocuments)
-        .where(sql`${inArray(kbDocuments.id, docIds)} AND ${isNull(kbDocuments.deletedAt)}`)) as KbDocument[];
+        .where(sql`${inArray(kbDocuments.id, docIds)} AND ${isNull(kbDocuments.deletedAt)} AND ${NOT_EXCLUDED_FROM_SEARCH}`)) as KbDocument[];
       const docMap = new Map(docs.map((d) => [d.id, d]));
       docHits = docIds
         .sort((a, b) => (byDoc.get(a)?.rank ?? 0) - (byDoc.get(b)?.rank ?? 0))
@@ -208,7 +214,7 @@ async function fetchKeywordResults(query: string, limit: number): Promise<Intern
     const docRows = (await db
       .select()
       .from(kbDocuments)
-      .where(sql`(${kbDocuments.title} LIKE ${q} OR ${kbDocuments.content} LIKE ${q}) AND ${isNull(kbDocuments.deletedAt)}`)
+      .where(sql`(${kbDocuments.title} LIKE ${q} OR ${kbDocuments.content} LIKE ${q}) AND ${isNull(kbDocuments.deletedAt)} AND ${NOT_EXCLUDED_FROM_SEARCH}`)
       .orderBy(desc(kbDocuments.updatedAt))
       .limit(limit)) as KbDocument[];
 
@@ -275,7 +281,7 @@ async function enrichWithKbDocuments(hits: MergedHit[]): Promise<MergedHit[]> {
   const db = getDb();
   // 软删文档不进搜索结果（deletedAt 非 null 直接排除）
   const docs = (await db.select().from(kbDocuments)
-    .where(sql`${inArray(kbDocuments.id, docIds)} AND ${isNull(kbDocuments.deletedAt)}`)) as KbDocument[];
+    .where(sql`${inArray(kbDocuments.id, docIds)} AND ${isNull(kbDocuments.deletedAt)} AND ${NOT_EXCLUDED_FROM_SEARCH}`)) as KbDocument[];
   const map = new Map(docs.map((doc) => [String(doc.id), doc]));
 
   const kept: MergedHit[] = [];

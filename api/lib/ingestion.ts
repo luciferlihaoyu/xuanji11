@@ -1,7 +1,8 @@
 import { eq } from "drizzle-orm";
-import { getDb } from "../queries/connection";
+import { getDb, getRawDb } from "../queries/connection";
 import {
   kbDocuments,
+  kbReviewItems,
   ingestionJobs,
   ingestionItems,
   knowledgeNodes,
@@ -10,6 +11,9 @@ import {
   type InsertKbDocument,
 } from "@db/schema";
 import { safeFetch } from "./safe-fetch";
+import { scoreDocumentQuality } from "./quality-scorer";
+import { hashContent } from "./doc-versioning";
+import { buildAcceptanceSample } from "./ingestion-sampling";
 import * as fs from "fs";
 import * as path from "path";
 import { env } from "./env";
@@ -283,6 +287,16 @@ export async function ingestFile(options: IngestFileOptions): Promise<IngestFile
 
   await db.update(ingestionItems).set({ status: "parsing" }).where(eq(ingestionItems.id, itemId));
 
+  // ==== T3-01 质量门：写库前评分（确定性规则，不依赖 LLM）====
+  // 分级：good 正常入库；review 进收件箱等人工确认；poor 保留原文但打标退出默认搜索。
+  // 「空正文→poor」在这一支不可达（上面 empty 提前 return），该行为由 scorer 单测直调钉住。
+  const quality = await scoreDocumentQuality({
+    title: path.basename(fileName, ext),
+    content: text,
+    source: sourceType,
+    createdAt: new Date(),
+  });
+
   const docValues: InsertKbDocument = {
     // 归档文件夹由调用方决定（2026-10-01）：数据源同步会传"数据源/源名"子夹，
     // 其余调用方不传 → null（悬空），行为与此前一致。
@@ -291,11 +305,41 @@ export async function ingestFile(options: IngestFileOptions): Promise<IngestFile
     content: text,
     format: mimeTypeToFormat(effectiveMime),
     tags: [],
-    metadata: { source: sourceType, vectorized: false },
+    metadata: {
+      source: sourceType,
+      vectorized: false,
+      // 评分快照随文档落库（排障与统计不用翻日志）
+      quality: { score: quality.score, level: quality.level, issues: quality.issues },
+      // poor 只打标不排队（<40 的噪声不该灌进收件箱——R5「档案柜」教训）
+      ...(quality.level === "poor" ? { excludeFromDefaultSearch: true } : {}),
+    },
     createdBy: createdBy ?? null,
   };
   const docResult = await db.insert(kbDocuments).values(docValues);
   const documentId = Number(docResult.lastInsertRowid);
+
+  // review 级 → 收件箱。幂等：同 contentHash 已有 pending quality 项就跳过——
+  // 同一篇被重复入库（新建第二行文档）也只留一条待办，队列不随重复膨胀。
+  if (quality.level === "review") {
+    const contentHash = hashContent(text);
+    const raw = getRawDb();
+    const existing = raw
+      .prepare(
+        `SELECT COUNT(*) c FROM kb_review_items
+         WHERE kind = 'quality' AND status = 'pending'
+           AND CAST(json_extract(payload, '$.contentHash') AS TEXT) = ?`,
+      )
+      .get(contentHash) as { c: number };
+    if (existing.c === 0) {
+      await db.insert(kbReviewItems).values({
+        kind: "quality",
+        documentId,
+        title: `质量复核（${quality.score} 分）：${docValues.title.slice(0, 60)}`,
+        payload: { score: quality.score, level: quality.level, issues: quality.issues, contentHash },
+        confidence: quality.score / 100,
+      });
+    }
+  }
 
   // 图谱节点与"是否建成向量"无关（评审 B4）：
   // 索引失败时若不建节点，文档会永久缺失图谱节点（重建索引不会补建 knowledge_nodes），
@@ -340,6 +384,8 @@ export async function ingestFile(options: IngestFileOptions): Promise<IngestFile
       .update(ingestionJobs)
       .set({ processedItems: 1, failedItems: 1, status: "completed" })
       .where(eq(ingestionJobs.id, jobId));
+    // T3-03：失败样本也在验收清单里（人工要确认失败归因，不是只看成功件）
+    await attachAcceptanceSample(jobId, [{ itemId, source: sourceType, status: "failed" }]);
     return { itemId, documentId, indexed: false, indexError: msg, reason: "index_failed" };
   }
 
@@ -348,8 +394,28 @@ export async function ingestFile(options: IngestFileOptions): Promise<IngestFile
     .update(ingestionJobs)
     .set({ processedItems: 1, failedItems: 0, status: "completed" })
     .where(eq(ingestionJobs.id, jobId));
+  // T3-03：确定性验收清单挂进 job.metadata（单文件 job 即本条；批量聚合方按同键覆盖成整表清单）
+  await attachAcceptanceSample(jobId, [{ itemId, source: sourceType, status: "completed" }]);
 
   return { itemId, documentId, indexed: true };
+}
+
+/** 把分层抽样结果写入 job.metadata.acceptanceSample（确定性，见 ingestion-sampling.ts） */
+async function attachAcceptanceSample(
+  jobId: number,
+  items: ReadonlyArray<{ itemId: number; source: string; status: string }>,
+): Promise<void> {
+  try {
+    const db = getDb();
+    const sample = buildAcceptanceSample(items);
+    await db
+      .update(ingestionJobs)
+      .set({ metadata: { acceptanceSample: sample } })
+      .where(eq(ingestionJobs.id, jobId));
+  } catch (err) {
+    // 验收清单是辅助产物：写失败绝不把成功入库反向拖成失败
+    console.warn("[Ingestion] acceptanceSample 写入失败:", err);
+  }
 }
 
 function mimeTypeToFormat(mimeType: string): InsertKbDocument["format"] {

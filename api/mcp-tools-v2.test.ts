@@ -151,7 +151,13 @@ function createTestDb() {
       embedding TEXT,
       embeddingModel TEXT,
       metadata TEXT,
-      createdAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      createdAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      charStart INTEGER,
+      charEnd INTEGER,
+      pageStart INTEGER,
+      pageEnd INTEGER,
+      sectionPath TEXT,
+      contentHash TEXT
     );
     CREATE TABLE knowledge_nodes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,7 +181,8 @@ function createTestDb() {
       weight REAL DEFAULT 1,
       createdBy INTEGER,
       createdAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      updatedAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      updatedAt INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      evidence TEXT, evidenceDocumentId INTEGER, evidenceChunkId INTEGER
     );
     CREATE TABLE backup_jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

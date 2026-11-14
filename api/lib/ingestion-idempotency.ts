@@ -5,9 +5,9 @@
  * 根治「每次同步新建文档」类重复（场景膨胀组 x14 的同类问题）。
  */
 import { createHash } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { getDb } from "../queries/connection";
-import { kbIngestionKeys } from "@db/schema";
+import { kbDocuments, kbDocumentVersions, kbIngestionKeys } from "@db/schema";
 
 export function makeIdempotencyKey(source: string, externalId: string | null, contentHash: string): string {
   return createHash("sha256")
@@ -50,13 +50,36 @@ export async function checkIngestionKey(
   return { existing: false, documentId: documentIdIfNew };
 }
 
-/** 按内容 hash 查是否已有文档（去重候选探测） */
-export async function findDocumentByContentHash(contentHash: string): Promise<number | null> {
+/**
+ * 按内容查是否已有未删除文档（质量门「重复程度」维度）。
+ *
+ * T3-01 新口径：**不再查 kb_ingestion_keys**——该表生产 0 行、checkIngestionKey 零调用者
+ * （死路径），旧实现下「重复程度」恒 null。改为两查：
+ * ① kb_document_versions.contentHash（走 kb_doc_versions_hash_idx；被更新过的文档必有快照）；
+ * ② kb_documents.content 直查（新建文档没有版本行，只能等值扫；约 6k 行、每次入库一次，可接受）。
+ * content 参数可选：不传则仅走 hash（兼容旧调用形态）。
+ */
+export async function findDocumentByContentHash(contentHash: string, content?: string): Promise<number | null> {
   const db = getDb();
-  const [row] = await db
-    .select({ documentId: kbIngestionKeys.documentId })
-    .from(kbIngestionKeys)
-    .where(eq(kbIngestionKeys.contentHash, contentHash))
-    .limit(1);
-  return row?.documentId ?? null;
+  // ① 版本 hash 路：表缺失/查询失败不应废掉②路（测试库常见无版本表）
+  try {
+    const [versionHit] = await db
+      .select({ documentId: kbDocumentVersions.documentId })
+      .from(kbDocumentVersions)
+      .innerJoin(kbDocuments, eq(kbDocuments.id, kbDocumentVersions.documentId))
+      .where(and(eq(kbDocumentVersions.contentHash, contentHash), isNull(kbDocuments.deletedAt)))
+      .limit(1);
+    if (versionHit) return versionHit.documentId;
+  } catch { /* 继续走正文直查 */ }
+
+  // ② 正文直查路
+  if (content !== undefined && content.length > 0) {
+    const [contentHit] = await db
+      .select({ id: kbDocuments.id })
+      .from(kbDocuments)
+      .where(and(isNull(kbDocuments.deletedAt), eq(kbDocuments.content, content)))
+      .limit(1);
+    return contentHit?.id ?? null;
+  }
+  return null;
 }

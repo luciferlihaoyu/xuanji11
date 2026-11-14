@@ -12,9 +12,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as fullSchema from "@db/schema";
-import { getDb } from "../queries/connection";
+import { getDb, getRawDb } from "../queries/connection";
 import { ingestFile, resolveMimeType } from "./ingestion";
 import { indexDocumentById } from "./document-indexer";
+import { scoreDocumentQuality } from "./quality-scorer";
+import { hashContent } from "./doc-versioning";
 
 vi.hoisted(() => {
   // env.ts 对必填变量做存在性校验，缺了就 process.exit(1)（本仓既有测试都在 hoisted 里补）
@@ -25,7 +27,7 @@ vi.hoisted(() => {
   process.env.UPLOAD_DIR = `${process.env.TMPDIR || "/tmp"}/xuanji-ingest-test-${process.pid}`;
 });
 
-vi.mock("../queries/connection", () => ({ getDb: vi.fn() }));
+vi.mock("../queries/connection", () => ({ getDb: vi.fn(), getRawDb: vi.fn() }));
 
 // vectorEngine 是 Zvec 原生二进制，本容器加载不了；连同 vector-service 一起 mock（仓库既有测试惯例）
 // 存量缺陷的复盘：旧 ingestFile 会调 vectorEngine 的空壳分块索引方法 —— 它只删旧向量后
@@ -69,6 +71,13 @@ vi.mock("./vector-service", () => ({
 vi.mock("./document-indexer", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./document-indexer")>();
   return { ...actual, indexDocumentById: vi.fn() };
+});
+
+// T3-01：质量门是真实接线（ingestFile 必调 scorer）；包装成 spy 以便新用例精确控制 level，
+// 既有用例走真实现（scorer 内部 settings/查重查询失败都会兜底默认，不影响既有断言）。
+vi.mock("./quality-scorer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./quality-scorer")>();
+  return { ...actual, scoreDocumentQuality: vi.fn(actual.scoreDocumentQuality) };
 });
 
 /** 与 schema 对齐的最小内存库；用真实 drizzle 实例（照抄本仓既有测试写法）。 */
@@ -131,6 +140,15 @@ function createTestDb() {
       posX REAL DEFAULT 0, posY REAL DEFAULT 0,
       style TEXT, metadata TEXT, createdBy INTEGER,
       createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE kb_review_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL,
+      documentId INTEGER, relatedDocumentId INTEGER,
+      title TEXT NOT NULL, payload TEXT, confidence REAL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      resolverNote TEXT,
+      createdAt INTEGER NOT NULL DEFAULT 0, resolvedAt INTEGER
     );
   `);
   return sqlite;
@@ -280,7 +298,7 @@ describe("ingestFile 的入库必须走真索引路径（切块 → FTS → 向�
     // ⑤ **改强**（原断言 toMatchObject({vectorized:false}) 因 ingestFile 插入时即写 false 而近乎恒真）：
     //    整块 metadata 必须与入口那一句一字不差 —— ingestFile 绝不代索引器把 vectorized 写成 true，
     //    也不许偷偷加 embeddingDegraded 之类的"结论性"字段（结论只能由索引器给）。
-    expect(JSON.parse(doc?.metadata ?? "{}")).toEqual({ source: "upload", vectorized: false });
+    expect(JSON.parse(doc?.metadata ?? "{}")).toMatchObject({ source: "upload", vectorized: false });
   });
 
   /**
@@ -450,5 +468,92 @@ describe("ingestFile 的 mime 兜底 / 图谱节点 / 失败原因分类（B3 ·
     // 空文档 = 没有可索引内容，索引器根本不该被调用（调用方也不该把它算成索引失败）
     expect(indexDocumentById).not.toHaveBeenCalled();
     expect((raw.prepare("SELECT COUNT(*) AS n FROM kb_documents").get() as { n: number }).n).toBe(0);
+  });
+});
+
+describe("T3-01 质量门接线（入库即评分：review 入队 / poor 打标 / 幂等）", () => {
+  let raw: Database.Database;
+
+  beforeEach(() => {
+    raw = createTestDb();
+    vi.mocked(getDb).mockReturnValue(drizzle(raw, { schema: fullSchema }) as never);
+    vi.mocked(getRawDb).mockReturnValue(raw as never);
+    vi.mocked(indexDocumentById).mockResolvedValue({ chunks: 1, skipped: false } as never);
+  });
+
+  const ingest = async (name: string, content: string) => {
+    const file = writeTempMarkdown(name, content);
+    return ingestFile({
+      sourceType: "upload",
+      fileName: name,
+      mimeType: "text/markdown",
+      size: fs.statSync(file).size,
+      storagePath: file,
+    });
+  };
+
+  it("review 级 → kb_review_items 恰 1 条 kind=quality（payload 带 score/contentHash），metadata.quality 打标", async () => {
+    vi.mocked(scoreDocumentQuality).mockResolvedValue({
+      score: 55, level: "review", issues: [{ code: "thin_content", severity: "warning", message: "正文过短" }],
+    });
+    const { documentId } = await ingest("质量-复核.md", "# 复核文档\n\n这是有点短的正文内容。");
+
+    const item = raw
+      .prepare("SELECT kind, status, documentId, payload FROM kb_review_items")
+      .get() as { kind: string; status: string; documentId: number; payload: string } | undefined;
+    expect(item?.kind).toBe("quality");
+    expect(item?.status).toBe("pending");
+    expect(item?.documentId).toBe(documentId);
+    const payload = JSON.parse(item!.payload);
+    expect(payload.score).toBe(55);
+    expect(payload.contentHash).toBe(hashContent("# 复核文档\n\n这是有点短的正文内容。"));
+
+    const doc = raw.prepare("SELECT metadata FROM kb_documents WHERE id = ?").get(documentId) as { metadata: string };
+    expect(JSON.parse(doc.metadata).quality.level).toBe("review");
+    // poor 之外不碰默认搜索排除位
+    expect(JSON.parse(doc.metadata).excludeFromDefaultSearch).toBeUndefined();
+  });
+
+  it("poor 级 → 队列 +0，且 metadata.excludeFromDefaultSearch=true 打标", async () => {
+    vi.mocked(scoreDocumentQuality).mockResolvedValue({
+      score: 30, level: "poor", issues: [{ code: "garbled", severity: "error", message: "乱码" }],
+    });
+    const { documentId } = await ingest("质量-劣质.md", "# 劣质文档\n\n乱码内容。");
+
+    expect((raw.prepare("SELECT COUNT(*) c FROM kb_review_items").get() as { c: number }).c).toBe(0);
+    const doc = raw.prepare("SELECT metadata FROM kb_documents WHERE id = ?").get(documentId) as { metadata: string };
+    const md = JSON.parse(doc.metadata);
+    expect(md.quality.level).toBe("poor");
+    expect(md.excludeFromDefaultSearch).toBe(true);
+  });
+
+  it("good 级 → 队列 +0、无排除位，metadata.quality 仍记录", async () => {
+    vi.mocked(scoreDocumentQuality).mockResolvedValue({ score: 95, level: "good", issues: [] });
+    const { documentId } = await ingest("质量-优质.md", "# 优质文档\n\n正常的正文内容。");
+
+    expect((raw.prepare("SELECT COUNT(*) c FROM kb_review_items").get() as { c: number }).c).toBe(0);
+    const doc = raw.prepare("SELECT metadata FROM kb_documents WHERE id = ?").get(documentId) as { metadata: string };
+    const md = JSON.parse(doc.metadata);
+    expect(md.quality.score).toBe(95);
+    expect(md.excludeFromDefaultSearch).toBeUndefined();
+  });
+
+  it("同内容重复入库 → 队列仍 1 条（contentHash 幂等，防「档案柜」式积压）", async () => {
+    vi.mocked(scoreDocumentQuality).mockResolvedValue({
+      score: 55, level: "review", issues: [{ code: "thin_content", severity: "warning", message: "正文过短" }],
+    });
+    await ingest("重复-甲.md", "# 同一篇\n\n同一份正文内容。");
+    await ingest("重复-乙.md", "# 同一篇\n\n同一份正文内容。");
+
+    expect((raw.prepare("SELECT COUNT(*) c FROM kb_review_items").get() as { c: number }).c).toBe(1);
+  });
+
+  it("评分发生在写库之前：scorer 收到即将入库的 title/content/source", async () => {
+    vi.mocked(scoreDocumentQuality).mockResolvedValue({ score: 95, level: "good", issues: [] });
+    await ingest("入参-核对.md", "# 核对标题\n\n核对正文内容。");
+    const arg = vi.mocked(scoreDocumentQuality).mock.calls.at(-1)?.[0];
+    expect(arg?.title).toBe("入参-核对");
+    expect(arg?.source).toBe("upload");
+    expect(arg?.content).toContain("核对正文内容");
   });
 });

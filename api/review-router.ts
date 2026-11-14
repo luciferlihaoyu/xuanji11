@@ -7,6 +7,8 @@
  * 审批动作按 kind 分发执行：
  * - triage approve → 应用建议的 folder/tags
  * - dedup approve → 软删除副本 + mergedIntoId 指向保留篇
+ * - quality approve → 按 payload.decision 执行真动作（T3-02：keep 清排除位 /
+ *   exclude 打标退出默认搜索 / reindex 重建索引；缺省 keep），拒绝类不动文档
  * - 其余 approve/reject 只改状态（记录人工判断，供反馈评估）
  */
 import { z } from "zod";
@@ -52,6 +54,29 @@ export const reviewRouter = createRouter({
     return generateFeedbackReport();
   }),
 
+  /**
+   * T3-02 积压透视：每类 kind 的 pending 数与**最老 pending 的秒龄**。
+   * 存在的意义就是不再让问题沉默 48 天——巡检与人工盯梢都取这里的 oldestPendingSeconds 说话。
+   */
+  backlogStats: authedQuery.query(async () => {
+    const db = getDb();
+    const rows = await db
+      .select({
+        kind: kbReviewItems.kind,
+        pending: sql<number>`count(*)`,
+        oldestCreatedAt: sql<number>`min(${kbReviewItems.createdAt})`,
+      })
+      .from(kbReviewItems)
+      .where(eq(kbReviewItems.status, "pending"))
+      .groupBy(kbReviewItems.kind);
+    const nowMs = Date.now();
+    return rows.map((r) => ({
+      kind: r.kind,
+      pending: r.pending,
+      oldestPendingSeconds: Math.max(0, Math.round((nowMs - Number(r.oldestCreatedAt)) / 1000)),
+    }));
+  }),
+
   /** 审批/驳回/忽略 */
   resolve: adminQuery
     .input(z.object({
@@ -86,6 +111,25 @@ export const reviewRouter = createRouter({
             mergedIntoId: item.documentId,
           }).where(eq(kbDocuments.id, item.relatedDocumentId));
           actionResult = { softDeleted: item.relatedDocumentId, kept: item.documentId };
+        } else if (item.kind === "quality" && item.documentId) {
+          // T3-02：处置必须产生真实副作用——否则 quality 队列就是下一个「连报 48 天的档案柜」。
+          // payload.decision 选动作（入库自动入队时不带 decision → 缺省 keep：人工点批准=放行）。
+          const p = (item.payload ?? {}) as Record<string, unknown>;
+          const decision = typeof p.decision === "string" ? p.decision : "keep";
+          if (decision === "reindex") {
+            const { tryIndexDocumentById } = await import("./lib/document-indexer");
+            const r = await tryIndexDocumentById(item.documentId);
+            actionResult = { reindexed: item.documentId, chunks: r.chunks, failed: r.failed === true };
+          } else {
+            const [doc] = await db.select().from(kbDocuments).where(eq(kbDocuments.id, item.documentId)).limit(1);
+            if (doc) {
+              const md = { ...((doc.metadata ?? {}) as Record<string, unknown>) };
+              if (decision === "exclude") md.excludeFromDefaultSearch = true;
+              else delete md.excludeFromDefaultSearch;
+              await db.update(kbDocuments).set({ metadata: md }).where(eq(kbDocuments.id, item.documentId));
+              actionResult = decision === "exclude" ? { excluded: item.documentId } : { kept: item.documentId };
+            }
+          }
         }
       }
 

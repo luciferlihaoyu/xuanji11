@@ -75,7 +75,13 @@ function createDb() {
       embedding TEXT,
       embeddingModel TEXT,
       metadata TEXT,
-      createdAt INTEGER NOT NULL DEFAULT 0
+      createdAt INTEGER NOT NULL DEFAULT 0,
+      charStart INTEGER,
+      charEnd INTEGER,
+      pageStart INTEGER,
+      pageEnd INTEGER,
+      sectionPath TEXT,
+      contentHash TEXT
     );
     CREATE TABLE knowledge_nodes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,7 +105,10 @@ function createDb() {
       weight REAL DEFAULT 1,
       createdBy INTEGER,
       createdAt INTEGER NOT NULL DEFAULT 0,
-      updatedAt INTEGER NOT NULL DEFAULT 0
+      updatedAt INTEGER NOT NULL DEFAULT 0,
+      evidence TEXT,
+      evidenceDocumentId INTEGER,
+      evidenceChunkId INTEGER
     );
   `);
   return drizzle(sqlite, { schema: { ...schema, ...relations } });
