@@ -16,6 +16,7 @@ import { embedTextsStrict, getLastEmbeddingIdentity } from "./vector-service";
 import { executeHybridSearch } from "./hybrid-search";
 import { extractKeywords } from "./keyword-extractor";
 import { chatCompletion } from "./llm-chat";
+import { insertEdge } from './edge-writer';
 
 export interface NodeExecutionContext {
   input: Record<string, unknown>;
@@ -206,13 +207,15 @@ const nodeExecutors: Record<string, NodeExecutor> = {
     if (existing.length > 0) {
       return { sourceId, targetId, edgeId: existing[0].id, deduplicated: true };
     }
-    const result = await db.insert(knowledgeEdges).values({
+    const reason = typeof config.reason === 'string' && config.reason.trim() ? `：${config.reason.trim().slice(0, 200)}` : '';
+    const { id } = await insertEdge({
       sourceId,
       targetId,
       label,
       type: 'related',
+      evidence: { text: `工作流 create-link 声明${reason || `（节点 ${sourceId}→${targetId}，配置未附理由）`}` },
     });
-    return { sourceId, targetId, edgeId: Number(result.lastInsertRowid), created: true };
+    return { sourceId, targetId, edgeId: id, created: true };
   },
 
   'call-agent': async (config) => executeCallAgent(config),

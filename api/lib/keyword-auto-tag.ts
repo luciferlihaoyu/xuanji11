@@ -5,6 +5,7 @@ import { knowledgeNodes, knowledgeEdges, kbDocuments } from "@db/schema";
 import { documentNodeMatch } from "./document-node-match";
 import { clean } from "./clean";
 import { extractKeywords } from "./keyword-extractor";
+import { insertEdge } from "./edge-writer";
 
 export const autoTagInputSchema = z.object({
   documentId: z.number().int().positive(),
@@ -66,7 +67,7 @@ async function findOrCreateTagNode(tag: string, createdBy: number | null): Promi
   return { id: Number(result.lastInsertRowid), created: true };
 }
 
-async function findOrCreateTagEdge(tagId: number, docNodeId: number, createdBy: number | null): Promise<boolean> {
+async function findOrCreateTagEdge(tagId: number, tag: string, docNodeId: number, createdBy: number | null): Promise<boolean> {
   const db = getDb();
   const [existing] = await db
     .select()
@@ -82,13 +83,14 @@ async function findOrCreateTagEdge(tagId: number, docNodeId: number, createdBy: 
 
   if (existing) return false;
 
-  await db.insert(knowledgeEdges).values(clean({
+  await insertEdge({
     sourceId: tagId,
     targetId: docNodeId,
     label: "tag",
     type: "related",
     createdBy,
-  }));
+    evidence: { text: `关键词自动打标：命中「${tag}」` },
+  });
   return true;
 }
 
@@ -114,7 +116,7 @@ export async function autoTagDocument(
   for (const tag of tags) {
     const { id: tagId, created } = await findOrCreateTagNode(tag, createdBy);
     if (created) createdCount++;
-    const edgeCreated = await findOrCreateTagEdge(tagId, docNodeId, createdBy);
+    const edgeCreated = await findOrCreateTagEdge(tagId, tag, docNodeId, createdBy);
     if (edgeCreated) edgeCount++;
   }
 

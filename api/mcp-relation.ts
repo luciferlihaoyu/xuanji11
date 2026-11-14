@@ -5,6 +5,8 @@ import { hasScope } from "./lib/auth";
 import { discoverInputSchema, discoverRelations } from "./lib/relation-analyzer";
 import { getDb } from "./queries/connection";
 import { clean } from "./lib/clean";
+import { getBacklinks } from "./lib/backlinks";
+import { insertEdge } from "./lib/edge-writer";
 
 // 工具类型统一来自 mcp-server（类型导入编译期擦除，不构成运行时循环依赖）。
 // 单一来源的好处：annotations 为必填，新增工具漏写注解会被类型门禁拦下。
@@ -34,9 +36,23 @@ async function handleRelationsCreate(args: Record<string, unknown>, user: User, 
     label: z.string().max(255).optional(),
     type: edgeTypeSchema.default("related"),
     weight: z.number().default(1),
+    // T4-01：这条边成立的依据（声明理由/原文摘录）。不给则以「操作者声明」入证——
+    // 仍可追责到 createdBy，但无据编造语义的边从此没有静默通道。
+    evidence: z.string().max(2000).optional(),
   }).parse(args);
-  const result = await getDb().insert(knowledgeEdges).values(clean({ ...input, createdBy: user.id }));
-  return textResult({ id: Number(result.lastInsertRowid) });
+  const { id } = await insertEdge(
+    {
+      sourceId: input.sourceId,
+      targetId: input.targetId,
+      label: input.label ?? null,
+      type: input.type,
+      weight: input.weight,
+      createdBy: user.id,
+      evidence: { text: input.evidence?.trim() || `人工声明（MCP relations.create by ${user.name}）：${input.label ?? input.type}` },
+    },
+    getDb(),
+  );
+  return textResult({ id });
 }
 
 async function handleRelationsDiscover(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
@@ -46,7 +62,25 @@ async function handleRelationsDiscover(args: Record<string, unknown>, auth: Auth
   return textResult(result);
 }
 
+async function handleRelationsBacklinks(args: Record<string, unknown>, auth: AuthInfo): Promise<McpToolResult> {
+  assertScope(auth, "knowledge:read");
+  const input = z.object({ nodeId: z.number().int().positive() }).parse(args);
+  const result = await getBacklinks(input.nodeId);
+  if (!result) throw new Error(`Node ${input.nodeId} not found`);
+  return textResult(result);
+}
+
 export const relationTools: readonly McpTool[] = [
+  {
+    name: "relations.backlinks",
+    description:
+      "Backlinks of a graph node, split by direction semantics: referencesIn only counts directed edge families (references/extends/contains/sequence); related/similar come back as undirectedNeighbors and NEVER as references.",
+    annotations: { title: "节点反链（按类型分流）", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: {
+      type: "object",
+      properties: { nodeId: { type: "number", description: "knowledge_nodes.id" } },
+      required: ["nodeId"],
+    },
+  },
   {
     name: "relations.discover",
     description:
@@ -91,6 +125,8 @@ export async function handleRelationTool(
   switch (name) {
     case "relations.discover":
       return handleRelationsDiscover(args, auth);
+    case "relations.backlinks":
+      return handleRelationsBacklinks(args, auth);
     case "relations.create":
       if (!user) return { content: [{ type: "text", text: "User authentication required" }], isError: true };
       return handleRelationsCreate(args, user, auth);

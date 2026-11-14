@@ -4,6 +4,7 @@ import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { knowledgeNodes, knowledgeEdges, documentChunks } from "@db/schema";
 import { clean } from "./lib/clean";
+import { insertEdge } from "./lib/edge-writer";
 import { vectorEngine } from "./lib/vector";
 import { parseDocumentIdFromMetadata } from "./lib/document-node-match";
 import { searchVectors as semanticSearchVectors } from "./lib/vector-service";
@@ -162,19 +163,24 @@ export const knowledgeRouter = createRouter({
         label: z.string().optional(),
         type: z.enum(["related", "contains", "references", "extends", "similar", "sequence"]).default("related"),
         weight: z.number().default(1),
+        evidence: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const db = getDb();
-      const result = await db.insert(knowledgeEdges).values(clean({
+      const { id } = await insertEdge({
         sourceId: input.sourceId,
         targetId: input.targetId,
-        label: input.label,
+        label: input.label ?? null,
         type: input.type,
         weight: input.weight,
         createdBy: ctx.user?.id ?? null,
-      }));
-      const id = Number(result.lastInsertRowid);
+        evidence: {
+          text:
+            typeof (input as { evidence?: string }).evidence === "string" && (input as { evidence?: string }).evidence!.trim()
+              ? (input as { evidence?: string }).evidence!.trim()
+              : `人工声明（管理界面 createEdge by ${ctx.user?.name ?? "?"}）：${input.label ?? input.type}`,
+        },
+      });
       await logAudit(ctx, "knowledge_edge", "create", id, input as Record<string, unknown>);
       return { id };
     }),

@@ -93,3 +93,128 @@ describe("pruneGraphOrphans", () => {
     expect(ids).toContain(500);
   });
 });
+
+// ============ T4-03 图谱一致性巡检（只报不修） ============
+import { auditGraphIntegrity } from "./graph-maintenance";
+
+function createAuditDb(withSettings = false) {
+  const sqlite = new Database(":memory:");
+  sqlite.exec(`
+    CREATE TABLE kb_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      folderId INTEGER, title TEXT NOT NULL, content TEXT,
+      format TEXT NOT NULL DEFAULT 'markdown', tags TEXT, metadata TEXT, createdBy INTEGER,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0,
+      deletedAt INTEGER, deletedReason TEXT, mergedIntoId INTEGER
+    );
+    CREATE TABLE knowledge_nodes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, content TEXT,
+      type TEXT NOT NULL DEFAULT 'concept', posX REAL DEFAULT 0, posY REAL DEFAULT 0,
+      style TEXT, metadata TEXT, createdBy INTEGER,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE knowledge_edges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, sourceId INTEGER NOT NULL, targetId INTEGER NOT NULL,
+      label TEXT, type TEXT NOT NULL DEFAULT 'related', weight REAL DEFAULT 1, createdBy INTEGER,
+      createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0,
+      evidence TEXT, evidenceDocumentId INTEGER, evidenceChunkId INTEGER
+    );
+    INSERT INTO kb_documents(id, title, createdAt) VALUES (10, '真实文档', 0);
+    INSERT INTO knowledge_nodes(id, title, type) VALUES (100, '甲', 'document'), (200, '乙', 'concept'), (300, '丙', 'tag');
+  `);
+  if (withSettings) {
+    sqlite.exec("CREATE TABLE system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updatedAt INTEGER NOT NULL DEFAULT 0);");
+  }
+  return sqlite;
+}
+
+function seedEdges(sqlite: Database.Database, rows: Array<[number, number, number, string, number, string | null]>) {
+  const st = sqlite.prepare("INSERT INTO knowledge_edges (id, sourceId, targetId, type, createdAt, evidence) VALUES (?,?,?,?,?,?)");
+  for (const [id, s, t, type, createdAt, evidence] of rows) st.run(id, s, t, type, createdAt ?? 0, evidence);
+}
+
+describe("auditGraphIntegrity（T4-03 五类只读判据）", () => {
+  it("干净图 → healthy:true，五类全零", () => {
+    const sqlite = createAuditDb();
+    seedEdges(sqlite, [[1, 100, 200, "references", 0, "有据"]]);
+    _setDbForTests(sqlite as never);
+    const r = auditGraphIntegrity();
+    expect(r.healthy).toBe(true);
+    expect(r.issues).toEqual([]);
+  });
+
+  it("self_loop：source=target 的边被点名", () => {
+    const sqlite = createAuditDb();
+    seedEdges(sqlite, [[1, 100, 100, "related", 0, "x"], [2, 100, 200, "related", 0, "y"]]);
+    _setDbForTests(sqlite as never);
+    const r = auditGraphIntegrity();
+    const hit = r.issues.find((i) => i.kind === "self_loop");
+    expect(hit?.count).toBe(1);
+    expect(hit?.detail).toContain("1");
+  });
+
+  it("duplicate_edge：同 source/target/type 多行 → 计冗余行数", () => {
+    const sqlite = createAuditDb();
+    seedEdges(sqlite, [
+      [1, 100, 200, "references", 0, "a"],
+      [2, 100, 200, "references", 0, "b"],
+      [3, 100, 200, "references", 0, "c"],
+      [4, 200, 100, "references", 0, "d"],
+    ]);
+    _setDbForTests(sqlite as never);
+    const hit = auditGraphIntegrity().issues.find((i) => i.kind === "duplicate_edge");
+    expect(hit?.count).toBe(2); // 三行组冗余2，第四行反向不算
+  });
+
+  it("dangling_edge：端点节点不存在（且不属文档 id 空间）→ 归 dangling 不归 namespace", () => {
+    const sqlite = createAuditDb();
+    seedEdges(sqlite, [[1, 100, 999999, "related", 0, "x"]]);
+    _setDbForTests(sqlite as never);
+    const r = auditGraphIntegrity();
+    expect(r.issues.find((i) => i.kind === "dangling_edge")?.count).toBe(1);
+    expect(r.issues.find((i) => i.kind === "namespace_mismatch")).toBeUndefined();
+  });
+
+  it("namespace_mismatch：sourceId 落在 kb_documents id 空间而非 nodes（CA-234 历史 bug 形状）", () => {
+    const sqlite = createAuditDb();
+    seedEdges(sqlite, [[1, 10, 200, "contains", 0, "x"]]); // 10=文档 id，不是节点 id
+    _setDbForTests(sqlite as never);
+    const r = auditGraphIntegrity();
+    expect(r.issues.find((i) => i.kind === "namespace_mismatch")?.count).toBe(1);
+    // 同一条不该再被计成 dangling（分类互斥）
+    expect(r.issues.find((i) => i.kind === "dangling_edge")).toBeUndefined();
+  });
+
+  it("edges_without_evidence：无 cutoff 时静默（存量不追溯 R7）；有 cutoff 只数新边", () => {
+    const sqlite = createAuditDb(true);
+    seedEdges(sqlite, [
+      [1, 100, 200, "references", 5000, null],
+      [2, 200, 300, "references", 5000, "旧有据"],
+      [3, 100, 300, "references", 5000, null],
+    ]);
+    _setDbForTests(sqlite as never);
+    expect(auditGraphIntegrity().issues.find((i) => i.kind === "edges_without_evidence")).toBeUndefined();
+    sqlite.prepare("INSERT INTO system_settings (key, value, updatedAt) VALUES (?,?,?)").run("edge_evidence_cutoff_ms", "1000", 0);
+    const r = auditGraphIntegrity();
+    expect(r.issues.find((i) => i.kind === "edges_without_evidence")?.count).toBe(2);
+    // 全旧 → 零
+    sqlite.prepare("UPDATE system_settings SET value=? WHERE key=?").run("9999", "edge_evidence_cutoff_ms");
+    expect(auditGraphIntegrity().issues.find((i) => i.kind === "edges_without_evidence")).toBeUndefined();
+  });
+
+  it("related/similar 类型不在证据必填四类：cutoff 后无据也不点名", () => {
+    const sqlite = createAuditDb(true);
+    sqlite.prepare("INSERT INTO system_settings (key, value, updatedAt) VALUES (?,?,?)").run("edge_evidence_cutoff_ms", "0", 0);
+    seedEdges(sqlite, [[1, 100, 200, "related", 5000, null], [2, 100, 300, "similar", 5000, null]]);
+    _setDbForTests(sqlite as never);
+    expect(auditGraphIntegrity().issues.find((i) => i.kind === "edges_without_evidence")).toBeUndefined();
+  });
+
+  it("无 system_settings 表（lite 库）→ 不因缺表崩溃，其余判据照常", () => {
+    const sqlite = createAuditDb(false);
+    seedEdges(sqlite, [[1, 100, 100, "related", 0, "x"]]);
+    _setDbForTests(sqlite as never);
+    const r = auditGraphIntegrity();
+    expect(r.issues.find((i) => i.kind === "self_loop")?.count).toBe(1);
+  });
+});

@@ -6,11 +6,12 @@
 import { z } from "zod";
 import { eq, like, desc, and } from "drizzle-orm";
 import { getDb } from "../queries/connection";
-import { kbDocuments, knowledgeNodes, knowledgeEdges } from "@db/schema";
+import { kbDocuments, knowledgeNodes } from "@db/schema";
 import { documentNodeMatch } from "./document-node-match";
 import { executeHybridSearch } from "./hybrid-search";
 import { tryIndexDocumentById } from "./document-indexer";
 import { createIngestionJob, type IngestionSourceType } from "./ingestion";
+import { insertEdge } from "./edge-writer";
 
 // ==================== 契约输入/输出 Schema ====================
 
@@ -232,15 +233,15 @@ export async function writeTaskMemory(input: z.infer<typeof writeTaskMemoryInput
   }
 
   // 2.4 建边：project contains document
-  const edgeResult = await db.insert(knowledgeEdges).values({
+  const { id: edgeId } = await insertEdge({
     sourceId: projectNodeId,
     targetId: docNodeId,
     label: "contains",
     type: "contains",
     weight: 1,
     createdBy: null,
+    evidence: { text: `天宫项目记忆：项目「${memory.project}」包含该文档`, documentId },
   });
-  const edgeId = Number(edgeResult.lastInsertRowid);
 
   // 2.5 向量化（失败不阻断，但**必须如实回报**：文档入库 ≠ 可检索）
   const indexed = await tryIndexDocumentById(documentId);
@@ -335,17 +336,17 @@ export async function linkArtifact(input: z.infer<typeof linkArtifactInputSchema
   const nodeId = Number(nodeResult.lastInsertRowid);
 
   // 3.2 document -> artifact references 边（sourceId = 图谱节点 id，FK 合法）
-  const edgeResult = await db.insert(knowledgeEdges).values({
+  const { id: edgeId2 } = await insertEdge({
     sourceId: docNodeId,
     targetId: nodeId,
     label: "references",
     type: "references",
     weight: 1,
     createdBy: null,
+    evidence: { text: `天宫任务产物引用：${artifact.artifactRef}${artifact.sha256 ? `（sha256:${String(artifact.sha256).slice(0, 16)}…）` : ""}`, documentId },
   });
-  const edgeId = Number(edgeResult.lastInsertRowid);
 
-  return { linked: true, nodeId, edgeId };
+  return { linked: true, nodeId, edgeId: edgeId2 };
 }
 
 /** 4. getMemoryDigest — 项目记忆摘要 */

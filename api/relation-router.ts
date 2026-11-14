@@ -5,6 +5,7 @@ import type { AuthInfo } from "./lib/auth";
 import { authenticateApiKey, hasScope, sessionAuth } from "./lib/auth";
 import { authenticateLocalRequest } from "./local-auth";
 import { discoverInputSchema, discoverRelations } from "./lib/relation-analyzer";
+import { getBacklinks } from "./lib/backlinks";
 
 declare module "hono" {
   interface ContextVariableMap {
@@ -48,6 +49,21 @@ relationRouter.use(relationAuthMiddleware);
 relationRouter.onError((err, c) => {
   console.error("[Relation] Unhandled error:", err);
   return c.json({ error: "Internal server error" }, 500);
+});
+
+relationRouter.get("/backlinks/:nodeId", requireRelationScope("knowledge:read"), async (c) => {
+  const nodeId = Number(c.req.param("nodeId"));
+  if (!Number.isInteger(nodeId) || nodeId <= 0) {
+    return c.json({ error: "Invalid nodeId" }, 400);
+  }
+  try {
+    const result = await getBacklinks(nodeId);
+    if (!result) return c.json({ error: "Node not found" }, 404);
+    return c.json(result);
+  } catch (err) {
+    console.error("[Relation] Backlinks failed:", err);
+    return c.json({ error: "Backlinks query failed" }, 500);
+  }
 });
 
 relationRouter.post("/discover", requireRelationScope("knowledge:read"), async (c) => {

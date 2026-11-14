@@ -15,7 +15,7 @@
  */
 import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { knowledgeEdges, knowledgeNodes } from "@db/schema";
-import { getDb } from "../queries/connection";
+import { getDb, getRawDb } from "../queries/connection";
 
 export interface GraphOrphanPruneResult {
   /** 命中孤儿节点数（与巡检同口径） */
@@ -72,4 +72,88 @@ export function pruneGraphOrphans(opts: { dryRun?: boolean } = {}): GraphOrphanP
   });
 
   return { orphans: nodeIds.length, edges: edgeCount, prunedNodes: result.nodes, prunedEdges: result.edges };
+}
+
+
+/**
+ * T4-03 图谱一致性巡检（只报不修，2026-11-14 碧霄）。
+ * 输出结构与 index-health 同款：issues[{kind,count,detail}] + healthy。
+ * 五类判据：self_loop / duplicate_edge（同 source/target/type 多行）/
+ * dangling_edge（端点节点不存在）/ namespace_mismatch（端点 id 属 kb_documents
+ * 而非 knowledge_nodes——CA-234 历史 bug 形状）/ edges_without_evidence
+ * （受 edge_evidence_cutoff_ms 门控，存量不追溯 R7）。
+ * 分类互斥：namespace 与 dangling 同一行只计一边。
+ */
+export interface GraphIntegrityIssue {
+  readonly kind: string;
+  readonly count: number;
+  readonly detail: string;
+}
+export interface GraphIntegrityResult {
+  readonly healthy: boolean;
+  readonly issues: GraphIntegrityIssue[];
+}
+
+export function auditGraphIntegrity(): GraphIntegrityResult {
+  const raw = getRawDb();
+  const issues: GraphIntegrityIssue[] = [];
+  const q = (text: string) => raw.prepare(text).all() as Array<Record<string, number | string | null>>;
+
+  try {
+    // 1. self_loop
+    const loops = q("SELECT COUNT(*) c FROM knowledge_edges WHERE sourceId = targetId");
+    const loopN = Number(loops[0]?.c ?? 0);
+    if (loopN > 0) {
+      const ids = q("SELECT id FROM knowledge_edges WHERE sourceId = targetId LIMIT 5").map((r) => String(r.id)).join(",");
+      issues.push({ kind: "self_loop", count: loopN, detail: `source=target 的自环边（id 例：${ids}），来源可疑，人工核查后删除` });
+    }
+
+    // 2. duplicate_edge：同三元组的冗余行数（每组 count-1 之和）
+    const dups = q("SELECT sourceId s, targetId t, type ty, COUNT(*) c FROM knowledge_edges GROUP BY sourceId, targetId, type HAVING COUNT(*) > 1");
+    if (dups.length > 0) {
+      const redundant = dups.reduce((acc, r) => acc + Number(r.c) - 1, 0);
+      issues.push({ kind: "duplicate_edge", count: redundant, detail: `${dups.length} 组重复三元组，共冗余 ${redundant} 行；保留最小 id 即可` });
+    }
+
+    // 3/4. namespace_mismatch 与 dangling_edge（互斥归类）
+    const bad = q(`SELECT e.id id, e.sourceId s, e.targetId t,
+        (SELECT COUNT(*) FROM knowledge_nodes n WHERE n.id = e.sourceId) sIsNode,
+        (SELECT COUNT(*) FROM knowledge_nodes n WHERE n.id = e.targetId) tIsNode,
+        (SELECT COUNT(*) FROM kb_documents d WHERE d.id = e.sourceId AND NOT EXISTS (SELECT 1 FROM knowledge_nodes n2 WHERE n2.id = e.sourceId)) sIsDocOnly,
+        (SELECT COUNT(*) FROM kb_documents d WHERE d.id = e.targetId AND NOT EXISTS (SELECT 1 FROM knowledge_nodes n2 WHERE n2.id = e.targetId)) tIsDocOnly
+      FROM knowledge_edges e
+      WHERE sIsNode = 0 OR tIsNode = 0`);
+    const nsRows = bad.filter((r) => Number(r.sIsDocOnly) > 0 || Number(r.tIsDocOnly) > 0);
+    const dgRows = bad.filter((r) => Number(r.sIsDocOnly) === 0 && Number(r.tIsDocOnly) === 0);
+    if (nsRows.length > 0) {
+      issues.push({ kind: "namespace_mismatch", count: nsRows.length, detail: `端点 id 落在 kb_documents 而非 knowledge_nodes（边 id 例：${nsRows.slice(0, 5).map((r) => r.id).join(",")}）——CA-234 形状，边永远连不通` });
+    }
+    if (dgRows.length > 0) {
+      issues.push({ kind: "dangling_edge", count: dgRows.length, detail: `端点节点不存在（边 id 例：${dgRows.slice(0, 5).map((r) => r.id).join(",")}），可剪` });
+    }
+
+    // 5. edges_without_evidence（cutoff 门控，与 index-health 判据 11 同口径）
+    let cutoff: number | null = null;
+    try {
+      const row = raw.prepare("SELECT value FROM system_settings WHERE key = 'edge_evidence_cutoff_ms'").get() as { value: string } | undefined;
+      const parsed = row ? Number(row.value) : NaN;
+      cutoff = Number.isFinite(parsed) ? parsed : null;
+    } catch {
+      cutoff = null; // 无 settings 表 = 从未设过，静默
+    }
+    if (cutoff !== null) {
+      const missing = q(`SELECT COUNT(*) c FROM knowledge_edges
+        WHERE createdAt > ${cutoff} AND evidence IS NULL
+          AND type IN ('references','contains','extends','sequence')`);
+      const missN = Number(missing[0]?.c ?? 0);
+      if (missN > 0) {
+        issues.push({ kind: "edges_without_evidence", count: missN, detail: `cutoff(${cutoff}) 后新写的四类边缺证据——edge-writer 之外出现了旁路，立即排查写入点` });
+      }
+    }
+  } catch (err) {
+    // 表缺失（lite 库）：图谱链路未启用，如实静默
+    console.warn("[graph-audit] 巡检降级：", (err as Error).message);
+  }
+
+  return { healthy: issues.length === 0, issues };
 }

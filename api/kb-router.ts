@@ -11,6 +11,7 @@ import { indexDocumentById, tryIndexDocumentById, startReindexAll, getReindexPro
 import { collectDescendantFolderIds } from "./lib/kb-tree";
 import { documentNodeMatch } from "./lib/document-node-match";
 import { deleteDocumentCascade, purgeDocumentsCascade } from "./lib/document-removal";
+import { insertEdge } from "./lib/edge-writer";
 
 async function deleteDocumentVectors(documentId: number): Promise<void> {
   void import("./lib/hybrid-search").then((m) => m.invalidateSearchCache());
@@ -344,14 +345,15 @@ export const kbRouter = createRouter({
             .where(sql`${knowledgeEdges.sourceId} = ${nodeId} AND ${knowledgeEdges.targetId} = ${docNodeId}`)
             .limit(1);
           if (!edgeExists[0]) {
-            await db.insert(knowledgeEdges).values(clean({
+            await insertEdge({
               sourceId: nodeId,
               targetId: docNodeId,
               label: "contains",
               type: "contains",
               weight: 1,
               createdBy: ctx.user?.id ?? null,
-            }));
+              evidence: { text: `概念抽取：「${c.title}」——${String(c.summary ?? "").slice(0, 120)}`, documentId: input.documentId },
+            });
           }
         }
       }

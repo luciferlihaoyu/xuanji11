@@ -4,6 +4,7 @@
  * 规则：全节点 embed → 全对余弦 → 每节点 top maxPerNode → 双边一致才建
  * （A 的 top 含 B 且 B 的 top 含 A）→ similar 边，label=auto。
  */
+import { insertEdgeSync } from "./edge-writer";
 import { getDb } from "../queries/connection";
 import { knowledgeNodes, knowledgeEdges } from "@db/schema";
 
@@ -112,17 +113,36 @@ export async function autoLinkEdgesCore(input: AutoLinkInput): Promise<AutoLinkR
   }
 
   // 6) 落库（同步事务——drizzle 回调禁止 async）
+  // T4-01：similar 边证据=两节点共享的关键短语（此处即打分依据）或目标节点首句（PLAN 原文口径）。
+  // 同步事务禁止 async，素材在事务外备齐，逐条走 insertEdgeSync（无据不写规矩同样生效）。
+  const nodeById = new Map(nodes.map((nd) => [nd.id, nd]));
+  const prepared = candidates.map((c) => {
+    const source = nodeById.get(c.s);
+    const target = nodeById.get(c.t);
+    // 两节点共享的关键短语：source 标题分词后命中 target 正文的第一个词
+    const shared = (source?.title ?? "")
+      .split(/[\s,，、;；.。/]+/)
+      .map((w) => w.trim())
+      .find((w) => w.length >= 2 && (target?.content ?? "").includes(w));
+    const firstSentence = (target?.content ?? "").split(/[。！？\n]/)[0]?.trim().slice(0, 60) ?? "";
+    const basis = shared ? `共享短语「${shared}」` : firstSentence ? `目标首句「${firstSentence}」` : "标题/正文向量相似";
+    return { c, text: `auto-link 相似建议：score=${Math.round(c.score * 1000) / 1000}，${basis}` };
+  });
   const created = db.transaction((tx) => {
     let n = 0;
-    for (const c of candidates) {
-      tx.insert(knowledgeEdges).values({
-        sourceId: c.s,
-        targetId: c.t,
-        label: "auto",
-        type: "similar",
-        weight: Math.round(c.score * 100) / 100,
-        createdBy: input.createdBy ?? null,
-      }).run();
+    for (const { c, text } of prepared) {
+      insertEdgeSync(
+        {
+          sourceId: c.s,
+          targetId: c.t,
+          label: "auto",
+          type: "similar",
+          weight: Math.round(c.score * 100) / 100,
+          createdBy: input.createdBy ?? null,
+          evidence: { text },
+        },
+        tx,
+      );
       n++;
     }
     return n;
