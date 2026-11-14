@@ -106,7 +106,9 @@ export async function scoreDocumentQuality(
 
   // 乱码比例（15）：统计替换字符/控制字符占比
   if (content.length > 0) {
-    const garbled = (content.match(/[\u0000-\u001f�]/g) ?? []).length;
+    // 乱码 = 真损坏字节：NUL/控制符（**排除 \t\n\r\f——文本天然存在，否则每篇
+    // 中文文档都被误判；2026-11-14 生产活测抓出**）、U+FFFD 替换符、私有区。
+    const garbled = (content.match(/[\u0000-\u0008\u000b\u000e-\u001f\uFFFD\uE000-\uF8FF]/g) ?? []).length;
     const ratio = garbled / content.length;
     if (ratio > 0.05) {
       score -= 15;
