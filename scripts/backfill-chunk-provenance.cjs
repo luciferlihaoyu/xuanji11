@@ -1,8 +1,8 @@
 // T2-05：历史块位置元数据回填（不重嵌入、不碰页码/向量/FTS/正文）
 //
 // 用法（生产容器内）：
-//   node backfill-chunk-provenance.mjs            # dry-run：只统计，不写库
-//   node backfill-chunk-provenance.mjs --apply    # 真写
+//   node backfill-chunk-provenance.cjs            # dry-run：只统计，不写库
+//   BACKFILL_APPLY=1 node backfill-chunk-provenance.cjs   # 真写（或 --apply）
 //
 // ⚠️ 本文件内联的 chunkTextWithOffsets 必须与 api/lib/document-indexer.ts 的实现保持同步
 // （dist 打包产物无具名导出，只能内联）。防漂移手段：每行回填前断言不变式
@@ -10,7 +10,7 @@
 const { createHash } = require("node:crypto");
 const Database = require("better-sqlite3");
 
-const APPLY = process.argv.includes("--apply");
+const APPLY = process.argv.includes("--apply") || process.env.BACKFILL_APPLY === "1";
 const DB_PATH = process.env.SQLITE_PATH ?? "/data/app/xuanji.db";
 
 function chunkTextWithOffsets(text, maxChars = 800, overlap = 100) {
