@@ -16,12 +16,19 @@ import { insertEdge } from "./lib/edge-writer";
 async function deleteDocumentVectors(documentId: number): Promise<void> {
   void import("./lib/hybrid-search").then((m) => m.invalidateSearchCache());
   const db = getDb();
-  // 先清 FTS（依赖 document_chunks 的 id 子查询，必须赶在删 chunks 之前）
-  try {
-    const { deleteDocumentFromFts } = await import("./lib/fts-search");
-    deleteDocumentFromFts(documentId);
-  } catch { /* FTS 清理失败不阻塞删除 */ }
-  await db.delete(documentChunks).where(eq(documentChunks.documentId, documentId));
+  // P3 根治（审查 Standards「吞错形状」渠道 1/3）：旧形 try/warn 吞 FTS 失败照删 chunks，
+  // 是 AGENTS.md 记录的 0.8/doc 永久孤儿的源头之一。改为 ids 口径、与 chunks 同事务同生共死，
+  // 失败整体回滚并上抛（同款形状已在 document-indexer.clearDocumentIndex 落地，勿再分叉）。
+  const rows = await db
+    .select({ id: documentChunks.id })
+    .from(documentChunks)
+    .where(eq(documentChunks.documentId, documentId));
+  const { deleteChunksFromFtsByIds } = await import("./lib/fts-search");
+  const { getRawDb } = await import("./queries/connection");
+  getRawDb().transaction(() => {
+    deleteChunksFromFtsByIds(rows.map((r) => r.id));
+    db.delete(documentChunks).where(eq(documentChunks.documentId, documentId)).run();
+  })();
   await vectorEngine.deleteByDocumentId(documentId);
 }
 

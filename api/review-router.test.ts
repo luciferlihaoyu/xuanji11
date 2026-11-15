@@ -209,4 +209,22 @@ describe("P2 dedup 处置护栏（碧霄 2026-11-14，43 条积压清理前的�
     const [item] = await db.select().from(schema.kbReviewItems).where(eq(schema.kbReviewItems.id, itemId));
     expect(item.status).toBe("pending");
   });
+
+  it("保留指向的行已不存在的（被硬清）：拒绝 approve，不把副本软删进虚空合并（审查 c3）", async () => {
+    const keepId = seedDoc(db, null);
+    const dupId = seedDoc(db, null);
+    db.delete(schema.kbDocuments).where(eq(schema.kbDocuments.id, keepId)).run(); // 条目插入前清除，无 FK 羁绊
+    const res = db.insert(schema.kbReviewItems)
+      .values({ kind: "dedup", documentId: keepId, relatedDocumentId: dupId, title: "疑似重复（保留方缺失）", payload: {} })
+      .run() as unknown as { lastInsertRowid: number | bigint };
+    const itemId = Number(res.lastInsertRowid);
+
+    await expect(caller().resolve({ id: itemId, action: "approved" })).rejects.toThrow(/不存在|拒绝/);
+
+    const [dup] = await db.select().from(schema.kbDocuments).where(eq(schema.kbDocuments.id, dupId));
+    expect(dup.deletedAt).toBeNull(); // 现行代码：keepDoc undefined → 护栏静默放行 → 副本被软删且 mergedIntoId 指向不存在的文档
+    expect(dup.mergedIntoId ?? null).toBeNull();
+    const [item] = await db.select().from(schema.kbReviewItems).where(eq(schema.kbReviewItems.id, itemId));
+    expect(item.status).toBe("pending");
+  });
 });

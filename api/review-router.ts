@@ -109,7 +109,15 @@ export const reviewRouter = createRouter({
           // 还在尸体上补 mergedIntoId 伪指认；保留方已死时点批准更危险：把唯一活着的删掉=净丢内容。
           const [keepDoc] = await db.select().from(kbDocuments).where(eq(kbDocuments.id, item.documentId)).limit(1);
           const [dupDoc] = await db.select().from(kbDocuments).where(eq(kbDocuments.id, item.relatedDocumentId)).limit(1);
-          if (keepDoc?.deletedAt && !dupDoc?.deletedAt) {
+          if (!keepDoc) {
+            // 审查 c3：保留指向的行被硬清过时，`keepDoc?.deletedAt` 为假会静默放行护栏，
+            // 把副本软删并把 mergedIntoId 指向不存在的文档=双向悬空。一并拒绝，留 pending 人工。
+            throw new Error(
+              `保留篇（doc ${item.documentId}）已不存在（可能被清除）——拒绝批准以免把副本合并进虚空，` +
+              `请先核实本条指向或选 rejected 留痕`
+            );
+          }
+          if (keepDoc.deletedAt && !dupDoc?.deletedAt) {
             throw new Error(
               `保留篇（doc ${item.documentId}）已删除，直接批准会把活文档一并软删、净丢内容——` +
               `请先修改本条的保留指向，或选 rejected 留痕`

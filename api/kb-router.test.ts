@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import { eq } from "drizzle-orm";
 import type { User } from "@db/schema";
 import * as schema from "@db/schema";
 import * as relations from "@db/relations";
@@ -13,7 +14,7 @@ vi.hoisted(() => {
   process.env.JWT_SECRET = "fixed-test-jwt-secret-with-32-chars";
 });
 
-vi.mock("./queries/connection", () => ({ getDb: vi.fn() }));
+vi.mock("./queries/connection", () => ({ getDb: vi.fn(), getRawDb: vi.fn() }));
 vi.mock("./lib/vector", () => ({
   vectorEngine: {
     size: 0,
@@ -23,9 +24,10 @@ vi.mock("./lib/vector", () => ({
   },
 }));
 
-import { getDb } from "./queries/connection";
+import { getDb, getRawDb } from "./queries/connection";
 import { kbRouter } from "./kb-router";
 import { vectorEngine } from "./lib/vector";
+import { ensureFts, _resetFtsReadyForTests } from "./lib/fts-search";
 
 /**
  * kb-router 的破坏性删除路径回归。
@@ -154,6 +156,8 @@ describe("kb-router 删除路径必须走级联（图谱不能漏）", () => {
   it("purgeDocument：文档行、chunks、图谱节点与边一起清掉（旧实现漏图谱）", async () => {
     const db = createDb();
     vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     const docId = seedDoc(db, null, true);
     const keep = seedDoc(db, null, true);
 
@@ -173,6 +177,8 @@ describe("kb-router 删除路径必须走级联（图谱不能漏）", () => {
   it("deleteFolder：文件夹（含子孙）内全部文档走级联，图谱不留孤儿", async () => {
     const db = createDb();
     vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     const root = db.insert(schema.kbFolders).values({ name: "root", createdAt: new Date(0), updatedAt: new Date(0) }).run() as unknown as { lastInsertRowid: number | bigint };
     const rootId = Number(root.lastInsertRowid);
     const child = db.insert(schema.kbFolders).values({ name: "child", parentId: rootId, createdAt: new Date(0), updatedAt: new Date(0) }).run() as unknown as { lastInsertRowid: number | bigint };
@@ -197,6 +203,8 @@ describe("kb-router 删除路径必须走级联（图谱不能漏）", () => {
   it("pruneGraphOrphans 路由入口：dryRun 报数不删，真删清掉孤儿", async () => {
     const db = createDb();
     vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     const ghost = db.insert(schema.knowledgeNodes)
       .values({ title: "ghost", type: "document", metadata: { documentId: "999999" }, createdAt: new Date(0), updatedAt: new Date(0) })
       .run() as unknown as { lastInsertRowid: number | bigint };
@@ -218,6 +226,8 @@ describe("deleteFolder 失败路径：purge 有失败时不能 500，且要如�
   it("某篇文档清除失败 → 不抛错、success=false、purgeFailed 带出原因、文件夹保留（FK 不炸）", async () => {
     const db = createDb();
     vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     const folder = db.insert(schema.kbFolders).values({ name: "f", createdAt: new Date(0), updatedAt: new Date(0) }).run() as unknown as { lastInsertRowid: number | bigint };
     const folderId = Number(folder.lastInsertRowid);
     const a = seedDoc(db, folderId, false);
@@ -242,6 +252,8 @@ describe("deleteFolder 失败路径：purge 有失败时不能 500，且要如�
   it("四篇全成功时照旧删掉文件夹", async () => {
     const db = createDb();
     vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     vi.mocked(vectorEngine.deleteByDocumentId).mockImplementation(async () => 2);
     const folder = db.insert(schema.kbFolders).values({ name: "f2", createdAt: new Date(0), updatedAt: new Date(0) }).run() as unknown as { lastInsertRowid: number | bigint };
     const folderId = Number(folder.lastInsertRowid);
@@ -260,6 +272,8 @@ describe("deleteFolder 多层残留（复核二轮残留边界）", () => {
   it("深层子文件夹有失败 → 祖先文件夹一并保留，不撞 kb_folders.parentId 外键", async () => {
     const db = createDb();
     vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     const root = db.insert(schema.kbFolders).values({ name: "root", createdAt: new Date(0), updatedAt: new Date(0) }).run() as unknown as { lastInsertRowid: number | bigint };
     const rootId = Number(root.lastInsertRowid);
     const child = db.insert(schema.kbFolders).values({ name: "child", parentId: rootId, createdAt: new Date(0), updatedAt: new Date(0) }).run() as unknown as { lastInsertRowid: number | bigint };
@@ -280,5 +294,47 @@ describe("deleteFolder 多层残留（复核二轮残留边界）", () => {
     expect(db.select().from(schema.kbFolders).all().map((f) => f.id).sort()).toEqual([rootId, childId].sort());
     expect(db.select().from(schema.kbDocuments).all().map((d) => d.id)).toEqual([bad]);
     expect(ok).toBeGreaterThan(0);
+  });
+});
+
+describe("FTS 原子化（审查 Standards「吞错形状」渠道 1/3：软删入口 deleteDocumentVectors）", () => {
+  function seedDocWithChunk(db: ReturnType<typeof createDb>, title: string): number {
+    const res = db
+      .insert(schema.kbDocuments)
+      .values({ title, content: "x", format: "markdown", createdAt: new Date(), updatedAt: new Date() })
+      .run() as unknown as { lastInsertRowid: number | bigint };
+    const docId = Number(res.lastInsertRowid);
+    db.insert(schema.documentChunks)
+      .values({ documentId: docId, content: `${title} 的块`, chunkIndex: 0, createdAt: new Date() })
+      .run();
+    return docId;
+  }
+
+  it("FTS 炸毁时 kb.deleteDocument 拒绝且 chunks 原样保留（旧形吞错照删=0.8/doc 孤儿源头）", async () => {
+    const db = createDb();
+    vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
+    vi.mocked(getRawDb).mockReturnValue(db.$client as never);
+
+    const docA = seedDocWithChunk(db, "健康篇");
+    ensureFts(); // 健康态：fts5 表存在且有行
+    expect(
+      (db.$client as Database.Database).prepare("SELECT COUNT(*) c FROM chunks_fts").get(),
+    ).toEqual({ c: 1 });
+
+    // 砸坏 FTS：表换成不可写视图（模拟索引库损坏——正是历史上被 catch 吞掉后静默留孤儿的那类故障）
+    (db.$client as Database.Database).exec("DROP TABLE chunks_fts; CREATE VIEW chunks_fts AS SELECT 1 AS x;");
+    _resetFtsReadyForTests();
+
+    const docB = seedDocWithChunk(db, "受害篇");
+    await expect(caller().deleteDocument({ id: docB })).rejects.toThrow();
+
+    // 原子性判据：FTS 没清成，chunks 一行都不许动（旧形会照删 → 孤儿）
+    const left = db.select().from(schema.documentChunks).where(eq(schema.documentChunks.documentId, docB)).all();
+    expect(left.length).toBe(1);
+    // 文档也没被软删（整体失败整体不进）
+    const [doc] = db.select().from(schema.kbDocuments).where(eq(schema.kbDocuments.id, docB)).all();
+    expect(doc.deletedAt).toBeFalsy();
   });
 });

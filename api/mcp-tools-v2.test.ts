@@ -7,7 +7,8 @@ import type { User } from "@db/schema";
 import type { AuthInfo } from "./lib/auth";
 import { authenticateApiKey } from "./lib/auth";
 import { authenticateLocalRequest } from "./local-auth";
-import { getDb } from "./queries/connection";
+import { getDb, getRawDb } from "./queries/connection";
+import { _resetFtsReadyForTests } from "./lib/fts-search";
 import { vectorEngine } from "./lib/vector";
 import { getVectorEngine, type VectorEngine } from "./lib/vector-engine";
 import * as vectorService from "./lib/vector-service";
@@ -31,7 +32,7 @@ vi.mock("./lib/auth", async () => {
 
 vi.mock("./local-auth", () => ({ authenticateLocalRequest: vi.fn() }));
 
-vi.mock("./queries/connection", () => ({ getDb: vi.fn() }));
+vi.mock("./queries/connection", () => ({ getDb: vi.fn(), getRawDb: vi.fn() }));
 
 vi.mock("./lib/vector", () => ({
   vectorEngine: {
@@ -363,6 +364,8 @@ describe("P0-3 cursor 分页", () => {
   it("folder_list 分页必须是 (sortOrder, id) 全序：插入序与 id 序不一致时不得乱序/漏项/重项", async () => {
     const db = createTestDb();
     vi.mocked(getDb).mockReturnValue(db);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     // sortOrder 全为默认 0（folder_create 不写 sortOrder），且**故意让 id 与插入顺序相反**：
     // 若查询没有 id 兜底，SQLite 只保证 sortOrder 有并列、不保证任何顺序，
     // 返回顺序会跟扫描/临时 B 树走 → offset 分页就可能漏项或重项。
@@ -389,6 +392,8 @@ describe("P0-3 cursor 分页", () => {
   it("folder_list 分页：nextCursor 可续页，最后一页为 null", async () => {
     const db = createTestDb();
     vi.mocked(getDb).mockReturnValue(db);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     seedFolder(db, "A");
     seedFolder(db, "B");
     seedFolder(db, "C");
@@ -411,6 +416,8 @@ describe("P0-3 cursor 分页", () => {
   it("非法 cursor → isError 且不静默返回第一页", async () => {
     const db = createTestDb();
     vi.mocked(getDb).mockReturnValue(db);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     seedFolder(db, "A");
     const res = await callTool("folder_list", { limit: 1, cursor: "not-a-real-cursor!!" });
     const r = res as { result: { content: Array<{ text: string }>; isError?: boolean } };
@@ -421,6 +428,8 @@ describe("P0-3 cursor 分页", () => {
   it("backup_list / workflow_list 同样返回分页信封", async () => {
     const db = createTestDb();
     vi.mocked(getDb).mockReturnValue(db);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     seedBackupJob(db, "alist");
     seedBackupJob(db, "s3");
     seedWorkflow(db, "wf1");
@@ -439,6 +448,8 @@ describe("P0-3 cursor 分页", () => {
   it("backup_list 的 status 过滤与分页叠加生效", async () => {
     const db = createTestDb();
     vi.mocked(getDb).mockReturnValue(db);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     seedBackupJob(db, "a");
     seedBackupJob(db, "b");
     const r = JSON.parse(resultText((await callTool("backup_list", { status: "running", limit: 10 })) as { result: unknown })) as { items: unknown[]; total: number };
@@ -461,6 +472,8 @@ describe("P0-3 破坏性操作 dryRun", () => {
   it("document_delete dryRun=true 只报影响面，绝不删数据", async () => {
     const db = createTestDb();
     vi.mocked(getDb).mockReturnValue(db);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     const docId = seedDocument(db, "待删文档", 3, true);
 
     const res = await callTool("document_delete", { id: docId, dryRun: true });
@@ -486,6 +499,8 @@ describe("P0-3 破坏性操作 dryRun", () => {
   it("dryRun 缺省仍为真删（向后兼容），删除后数据消失", async () => {
     const db = createTestDb();
     vi.mocked(getDb).mockReturnValue(db);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     const docId = seedDocument(db, "真删", 2, false);
 
     const res = await callTool("document_delete", { id: docId });
@@ -498,6 +513,8 @@ describe("P0-3 破坏性操作 dryRun", () => {
   it("dryRun 对不存在的文档返回 isError（与真删同口径）", async () => {
     const db = createTestDb();
     vi.mocked(getDb).mockReturnValue(db);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     const res = await callTool("document_delete", { id: 12345, dryRun: true });
     const r = res as { result: { content: Array<{ text: string }>; isError?: boolean } };
     expect(r.result.isError).toBe(true);
@@ -541,6 +558,8 @@ describe("zvec.addDocuments 诚实化（集合仅元数据登记）", () => {
   it("返回 added=0 / supported:false / reason，且不写向量、不自增 documentCount", async () => {
     const db = createTestDb();
     vi.mocked(getDb).mockReturnValue(db);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
     seedVectorCollection(db, "docs", 10);
 
     const res = await callTool("zvec.addDocuments", {
@@ -566,6 +585,8 @@ describe("zvec.addDocuments 诚实化（集合仅元数据登记）", () => {
   it("集合不存在时仍抛 Collection not found，且 MCP 侧表现为工具错误而非静默成功", async () => {
     const db = createTestDb();
     vi.mocked(getDb).mockReturnValue(db);
+    vi.mocked(getRawDb).mockReturnValue((db as never as { $client: Database.Database }).$client as never);
+    _resetFtsReadyForTests();
 
     // 服务层保持既有语义：不存在的集合一律抛错（创建集合才能谈写入）
     await expect(vectorService.addDocumentsToCollection("nope", [{ content: "x" }])).rejects.toThrow(/Collection not found/);

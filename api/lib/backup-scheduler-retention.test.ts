@@ -175,6 +175,23 @@ describe("② retention 故障隔离：completed 的运行不许被污染成 fai
     expect(calls).toContain("completed");
     expect(calls).not.toContain("failed");
   });
+
+  it("retryCount 清零本身失败也不得污染 completed（清零 update 曾裸在隔离区外，审查 c4）", async () => {
+    const sid = seedSchedule({ keepLastN: 5 });
+    raw.exec(`CREATE TRIGGER boom_zero BEFORE UPDATE OF retryCount ON backup_jobs
+      BEGIN SELECT RAISE(ABORT, 'injected zero-clear failure'); END;`);
+    vi.mocked(executeBackup).mockImplementation(async (jobId: number) => {
+      raw.prepare("UPDATE backup_jobs SET status='completed', completedAt=? WHERE id=?").run(Date.now(), jobId);
+    });
+
+    await runDueBackupSchedules();
+    await flush();
+
+    const calls = vi.mocked(finishTask).mock.calls.map((c) => c[1]);
+    expect(calls).toContain("completed");
+    expect(calls).not.toContain("failed"); // 现行：清零抛错逃到链尾 .catch → completed 被改判 failed
+    void sid;
+  });
 });
 
 describe("③ retryCount 语义：拾取不清零、成功才清零、穷举即停", () => {
@@ -216,5 +233,25 @@ describe("③ retryCount 语义：拾取不清零、成功才清零、穷举即�
       ? (row.nextRunAt as unknown as Date).getTime()
       : (row.nextRunAt as unknown as number);
     expect(next).toBeGreaterThan(t0 + 10 * 60_000);      // 现行：backoff ≈ t0+1min
+  });
+
+  it("partial 行状态同样计连续失败并排重试（审查 c2：partial 两分支都不落、永远静默跳过）", async () => {
+    const t0 = Date.now();
+    const sid = seedSchedule({ retryCount: 1, maxRetries: 3 });
+    vi.mocked(executeBackup).mockImplementation(async (jobId: number) => {
+      raw.prepare("UPDATE backup_jobs SET status='partial', error='部分文件失败', completedAt=? WHERE id=?")
+        .run(Date.now(), jobId);
+    });
+
+    await runDueBackupSchedules();
+    await flush();
+
+    const row = scheduleRow(sid);
+    expect(row.retryCount).toBe(2);                      // 现行：partial 不进失败分支 → 停在 1
+    const next = (row.nextRunAt as unknown as Date).getTime
+      ? (row.nextRunAt as unknown as Date).getTime()
+      : (row.nextRunAt as unknown as number);
+    expect(next).toBeGreaterThan(t0);                    // 现行：留在下个 cron（数小时后）
+    expect(next).toBeLessThan(t0 + 6 * 60_000);          // 2^1=2min backoff 窗口内
   });
 });

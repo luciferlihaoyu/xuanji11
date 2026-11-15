@@ -110,19 +110,30 @@ export const knowledgeRouter = createRouter({
       // chunks_fts 必须赶在删 chunks 之前清（删除子查询依赖 document_chunks.id）。
       const linkedDocId = parseDocumentIdFromMetadata(node?.metadata);
       if (linkedDocId !== undefined) {
-        try {
-          const { deleteDocumentFromFts } = await import("./lib/fts-search");
-          deleteDocumentFromFts(linkedDocId);
-        } catch (e) {
-          console.warn("[deleteNode] FTS 清理失败（残留孤儿由 pruneFtsOrphans 对账清理）", e);
-        }
-        await db.delete(documentChunks).where(eq(documentChunks.documentId, linkedDocId));
+        // P3 根治（审查 Standards「吞错形状」渠道 3/3）：与渠道 1/3（kb-router 软删）、
+        // 2/3（document-removal 硬删级联）同款形状——旧形 try/warn 吞 FTS 失败照删，
+        // 改为 FTS+chunks+边+节点同一事务，失败整体回滚上抛（孤儿源头拔净）。
+        const { deleteChunksFromFtsByIds } = await import("./lib/fts-search");
+        const { getRawDb } = await import("./queries/connection");
+        const chunkRows = await db
+          .select({ id: documentChunks.id })
+          .from(documentChunks)
+          .where(eq(documentChunks.documentId, linkedDocId));
+        getRawDb().transaction(() => {
+          deleteChunksFromFtsByIds(chunkRows.map((r) => r.id));
+          db.delete(documentChunks).where(eq(documentChunks.documentId, linkedDocId)).run();
+          db.delete(knowledgeEdges).where(
+            sql`${knowledgeEdges.sourceId} = ${input.id} OR ${knowledgeEdges.targetId} = ${input.id}`
+          ).run();
+          db.delete(knowledgeNodes).where(eq(knowledgeNodes.id, input.id)).run();
+        })();
         await vectorEngine.deleteByDocumentId(linkedDocId);
+      } else {
+        await db.delete(knowledgeEdges).where(
+          sql`${knowledgeEdges.sourceId} = ${input.id} OR ${knowledgeEdges.targetId} = ${input.id}`
+        );
+        await db.delete(knowledgeNodes).where(eq(knowledgeNodes.id, input.id));
       }
-      await db.delete(knowledgeEdges).where(
-        sql`${knowledgeEdges.sourceId} = ${input.id} OR ${knowledgeEdges.targetId} = ${input.id}`
-      );
-      await db.delete(knowledgeNodes).where(eq(knowledgeNodes.id, input.id));
       await logAction(ctx.user?.id ?? null, "delete", {
         entityType: "knowledge_node",
         entityId: input.id,

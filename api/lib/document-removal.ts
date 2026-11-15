@@ -193,22 +193,23 @@ export async function deleteDocumentCascade(
   // 2) 先删向量（内部事务；按 rowid 精确清，幂等）
   const deletedVectors = await vectorEngineArg.deleteByDocumentId(id);
 
-  // 2b) 清 FTS5 记录（混合检索 BM25 路；ftsReady=false 时跳过等回填）
-  try {
-    const { deleteDocumentFromFts } = await import("./fts-search");
-    deleteDocumentFromFts(id);
-  } catch (e) {
-    // T1-04：不阻塞删除主流程，但必须留痕 —— 回填只补缺行不清孤儿，吞掉即永久孤儿
-    console.warn(`[document-removal] 文档 ${id} FTS 清理失败（由 pruneFtsOrphans 对账兜底）`, e);
-  }
+  // 2b) FTS 清理不再单独吞错（审查 Standards「吞错形状」渠道 2/3）：
+  // 取 ids 口径函数引用，真正清理挪到 3) 的大事务里与 chunks 同生共死。
+  const { deleteChunksFromFtsByIds } = await import("./fts-search");
 
-  // 3) SQL 事务：chunks → 图谱边 → 图谱节点 → 文档行
+  // 3) SQL 事务：FTS → chunks → 图谱边 → 图谱节点 → 文档行
   // 注意：drizzle-orm/better-sqlite3 的 db.transaction 把回调直接传给
   // better-sqlite3 的 client.transaction()，后者要求回调【同步执行】——
   // 传 async 回调会抛 "Transaction function cannot return a promise"。
   // better-sqlite3 驱动下 tx.delete/select 均同步返回，直接写同步代码。
   const result = db.transaction((tx) => {
-    // 3a) document_chunks
+    // 3a) document_chunks（FTS 行先行同事务：炸了就整体回滚，绝不"chunks 没了 fts 还留着"）
+    const ftsRows = tx
+      .select({ id: documentChunks.id })
+      .from(documentChunks)
+      .where(eq(documentChunks.documentId, id))
+      .all();
+    deleteChunksFromFtsByIds(ftsRows.map((row) => row.id));
     const chunksResult = tx
       .delete(documentChunks)
       .where(eq(documentChunks.documentId, id))

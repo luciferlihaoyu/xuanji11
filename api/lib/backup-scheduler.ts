@@ -240,21 +240,23 @@ export async function runDueBackupSchedules(
       finishTaskFromRunRow(task.taskId, finished);
       // cancelled 也进 retention：连续取消会留下部分快照，不纳入 keepLastN 会无声堆积（审查 Q10）
       if (finished?.status === "completed" || finished?.status === "cancelled") {
-        // retryCount 是连续失败计数：成功一次才归零（取消不洗白，历史失败仍作数）
-        if (finished?.status === "completed") {
-          await db.update(backupJobs).set({ retryCount: 0 }).where(eq(backupJobs.id, schedule.id));
-        }
-        // P2 根治：retention 是善后，它炸了不许污染已经 completed 的备份
-        //（生产 run 692 实录：FK 约束失败顺着链尾 .catch 把 completed 改判 failed）
+        // P2 根治（审查 c4）：清零与 retention 整体都是"善后"，任何一步炸了都不许顺链尾
+        // .catch 把已 completed 的运行改判 failed（run 692 实录形状）。清零失败下轮成功会再清，无损。
         try {
+          // retryCount 是连续失败计数：成功一次才归零（取消不洗白，历史失败仍作数）
+          if (finished?.status === "completed") {
+            await db.update(backupJobs).set({ retryCount: 0 }).where(eq(backupJobs.id, schedule.id));
+          }
           await applyRetention(schedule.id);
         } catch (retErr) {
           console.warn(
             `[BackupScheduler] 保留清理失败（不影响备份结果，下轮巡检会再试）：${retErr instanceof Error ? retErr.message : String(retErr)}`
           );
         }
-      } else if (finished?.status === "failed") {
-        // 重试处理
+      } else if (finished?.status === "failed" || finished?.status === "partial") {
+        // 审查 c2：partial 也是失败结局（与 task-sync decideBackupOutcome 同款口径）。
+        // 旧代码只匹配 "failed"，行状态 partial 两分支都不落——既不累计 retryCount
+        // 也不排重试，"连续失败计数"对 partial 静默失效。补进失败分支。
         const [updatedSchedule] = await db.select().from(backupJobs).where(eq(backupJobs.id, schedule.id));
         const retryCount = updatedSchedule?.retryCount ?? 0;
         const maxRetries = updatedSchedule?.maxRetries ?? 3;

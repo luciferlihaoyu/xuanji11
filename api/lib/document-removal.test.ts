@@ -12,6 +12,8 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "@db/schema";
 import * as relations from "@db/relations";
 import { deleteDocumentCascade, previewDocumentDeletion, purgeDocumentsCascade } from "./document-removal";
+import { _setDbForTests } from "../queries/connection";
+import { ensureFts, _resetFtsReadyForTests } from "./fts-search";
 
 /**
  * document-removal 真实级联删除单测（内存 SQLite，真 drizzle 事务路径）。
@@ -111,6 +113,10 @@ function createDb() {
       evidenceChunkId INTEGER
     );
   `);
+  // fts-search/原子清渠道靠全局 getRawDb 连接；把它接到本测的 sqlite，
+  // 并重置模块级 ftsReady，让 ensureFts 每个新库都真正建表（审查 Standards 渠道 2/3）。
+  _setDbForTests(sqlite);
+  _resetFtsReadyForTests();
   return drizzle(sqlite, { schema: { ...schema, ...relations } });
 }
 
@@ -401,5 +407,22 @@ describe("purgeDocumentsCascade 失败语义", () => {
     expect(r.failed.map((f) => f.id)).toEqual([b]);
     expect(r.failed[0]?.error).toContain("boom");
     expect(db.select().from(schema.kbDocuments).all().map((d) => d.id)).toEqual([b]);
+  });
+});
+
+describe("FTS 原子化（审查 Standards「吞错形状」渠道 2/3：硬删级联）", () => {
+  it("FTS 炸毁时 deleteDocumentCascade 整体拒绝：chunks 与文档行都还在（旧形吞错照删=永久孤儿）", async () => {
+    const db = createDb();
+    const docId = seedDocument(db, true);
+    ensureFts(); // 先建真 fts5 表并回填，模拟健康库
+    (db.$client as Database.Database).exec(
+      "DROP TABLE chunks_fts; CREATE VIEW chunks_fts AS SELECT 1 AS x;"
+    );
+    _resetFtsReadyForTests(); // 让下一次 ensureFts 撞上坏 view
+
+    await expect(deleteDocumentCascade(db, vectorEngine, docId)).rejects.toThrow();
+
+    expect(db.select().from(schema.documentChunks).all().length).toBeGreaterThan(0);
+    expect(db.select().from(schema.kbDocuments).all().length).toBe(1); // 文档行也没删成——整体回滚
   });
 });
